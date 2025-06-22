@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "~/*": ["./src/*"]
+      "~/*": ["./src/*"],
+      "~convex/*": ["./convex/*"],
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "src/app/(app)/terms/mdx-page.mdx", "src/app/(app)/privacy/mdx-page.mdx"],

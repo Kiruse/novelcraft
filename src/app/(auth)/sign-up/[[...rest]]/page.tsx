@@ -14,7 +14,7 @@ export default function SignUpPage() {
 
       <div className="bg-gray-800 py-8 px-6 shadow-xl rounded-lg border border-gray-700">
         <SignUp
-          fallbackRedirectUrl="/dashboard"
+          forceRedirectUrl="/post-sign-up"
           signInUrl="/sign-in"
           appearance={{
             elements: {

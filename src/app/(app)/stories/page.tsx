@@ -2,6 +2,18 @@ import { Button } from '~/components/Button';
 
 // Mock data - replace with real data later
 const mockStories = {
+  resume: [
+    {
+      id: 1,
+      title: "The Last City",
+      author: "Sarah Chen",
+      description: "A cyberpunk adventure where your choices determine the fate of humanity's final refuge.",
+      coverImage: "https://images.unsplash.com/photo-1743448748313-80eb7f9eb2b7?w=400&h=300&fit=crop",
+      rating: 4.8,
+      readCount: 15420,
+      tags: ["Cyberpunk", "Adventure", "Sci-Fi"],
+    },
+  ],
   featured: [
     {
       id: 1,
@@ -163,7 +175,7 @@ function StoryCard({ story }: { story: typeof mockStories.featured[0] }) {
 
 function StorySection({ title, description, stories }: {
   title: string;
-  description: string;
+  description?: string;
   stories: typeof mockStories.featured;
 }) {
   return (
@@ -173,9 +185,11 @@ function StorySection({ title, description, stories }: {
           <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-4xl">
             {title}
           </h2>
-          <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">
-            {description}
-          </p>
+          {description && (
+            <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">
+              {description}
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -191,24 +205,11 @@ function StorySection({ title, description, stories }: {
 export default function StoriesPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-grid-pattern opacity-5"></div>
-        <div className="absolute top-0 left-1/4 w-72 h-72 bg-blue-400 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-blob"></div>
-        <div className="absolute top-0 right-1/4 w-72 h-72 bg-purple-400 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-blob animation-delay-2000"></div>
-
-        <div className="relative px-6 py-16 mx-auto max-w-7xl lg:px-8">
-          <div className="mx-auto max-w-2xl text-center">
-            <h1 className="text-4xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-6xl">
-              Discover Stories
-            </h1>
-            <p className="mt-6 text-lg leading-8 text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-              Immerse yourself in interactive narratives where every choice shapes your journey.
-              From epic adventures to intimate dramas, find your next favorite story.
-            </p>
-          </div>
-        </div>
-      </section>
+      {/* Continue Story */}
+      <StorySection
+        title="Continue where you left off"
+        stories={mockStories.resume}
+      />
 
       {/* Featured Stories */}
       <StorySection

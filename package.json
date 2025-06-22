@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbo",
-    "build": "next build --turbo",
-    "start": "next start"
+    "dev:next": "next dev --turbo",
+    "dev:convex": "convex dev",
+    "build:next": "next build --turbo",
+    "build:convex": "convex build",
+    "start:next": "next start"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.22.0",
@@ -15,8 +17,11 @@
     "@next/mdx": "^15.3.3",
     "@preact/signals-react": "^3.2.0",
     "@preact/signals-react-transform": "^0.5.2",
+    "@types/luxon": "^3.6.2",
     "classnames": "^2.5.1",
     "convex": "^1.24.8",
+    "convex-signals-client": "^0.1.6",
+    "luxon": "^3.6.1",
     "next": "15.3.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
