@@ -3,29 +3,31 @@ import { internal } from './_generated/api';
 import { internalQuery, mutation } from './_generated/server';
 import { Id } from './_generated/dataModel';
 
-export const _getByClerk = internalQuery({
+export const _getByUserId = internalQuery({
   args: {
-    clerkId: v.string(),
+    userId: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.query('users').withIndex('by_clerkId', (q) => q.eq('clerkId', args.clerkId)).first();
+    return await ctx.db.query('users').withIndex('by_userId', (q) => q.eq('userId', args.userId)).first();
   },
 });
 
 export const upsert = mutation({
-  args: {},
+  args: {
+    userId: v.string(),
+    username: v.string(),
+  },
   handler: async (ctx, args): Promise<Id<'users'>> => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId and username
 
-    const user = await ctx.runQuery(internal.users._getByClerk, { clerkId: identity.subject });
-    const username = identity.preferredUsername ?? identity.nickname ?? identity.givenName ?? identity.name ?? 'Anon';
+    const user = await ctx.runQuery(internal.users._getByUserId, { userId: args.userId });
 
     if (user) {
-      await ctx.db.patch(user._id, { username });
+      await ctx.db.patch(user._id, { username: args.username });
       return user._id;
     } else {
-      return await ctx.db.insert('users', { clerkId: identity.subject, username });
+      return await ctx.db.insert('users', { userId: args.userId, username: args.username });
     }
   },
 });

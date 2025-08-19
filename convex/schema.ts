@@ -9,16 +9,16 @@ export const storyStatus = v.union(
 
 export default defineSchema({
   users: defineTable({
-    clerkId: v.string(),
+    userId: v.string(),
     username: v.string(),
   })
-  .index('by_clerkId', ['clerkId']),
+  .index('by_userId', ['userId']),
 
   stories: defineTable({
     name: v.string(),
     authors: v.array(v.string()),
     synopsis: v.string(),
-    coverImage: v.string(),
+    coverImage: v.optional(v.id('_storage')),
     tags: v.array(v.string()),
     playCount: v.number(),
     status: storyStatus,
@@ -27,9 +27,9 @@ export default defineSchema({
 
   storySessions: defineTable({
     story: v.id('stories'),
-    /** Clerk subject */
+    /** User ID of the primary user */
     primaryUser: v.string(),
-    /** Clerk subjects that the primary user invited to the session. */
+    /** User IDs that the primary user invited to the session. */
     secondaryUsers: v.array(v.string()),
     lastActiveAt: v.int64(),
     concludedAt: v.optional(v.int64()),

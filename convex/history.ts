@@ -8,18 +8,19 @@ export const create = mutation({
   args: {
     session: v.id('storySessions'),
     content: v.string(),
+    userId: v.string(),
   },
   handler: async (ctx, args): Promise<Id<'history'> | undefined> => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     const isAuthorized = await ctx.runQuery(internal.storySessions._isAuthorized, {
-      user: identity.subject,
+      user: args.userId,
       session: args.session,
     });
     if (!isAuthorized) throw new Error('Unauthorized');
 
-    const user = await ctx.runQuery(internal.users._getByClerk, { clerkId: identity.subject });
+    const user = await ctx.runQuery(internal.users._getByUserId, { userId: args.userId });
     if (!user) throw new Error('User not found');
 
     const historyId = await ctx.db.insert('history', {
@@ -49,10 +50,11 @@ export const _create = internalMutation({
 export const get = query({
   args: {
     id: v.id('history'),
+    userId: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     const historyItem = await ctx.db.get(args.id);
     if (!historyItem) return null;
@@ -61,7 +63,7 @@ export const get = query({
     if (!session) throw new Error('Session not found');
 
     const isAuthorized = await ctx.runQuery(internal.storySessions._isAuthorized, {
-      user: identity.subject,
+      user: args.userId,
       session: historyItem.session,
     });
     if (!isAuthorized) throw new Error('Unauthorized');
@@ -74,13 +76,14 @@ export const getLatestByAuthor = query({
   args: {
     session: v.id('storySessions'),
     author: v.string(),
+    userId: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     const isAuthorized = await ctx.runQuery(internal.storySessions._isAuthorized, {
-      user: identity.subject,
+      user: args.userId,
       session: args.session,
     });
     if (!isAuthorized) throw new Error('Unauthorized');
@@ -98,14 +101,15 @@ export const getLatestByAuthor = query({
 export const list = query({
   args: {
     session: v.id('storySessions'),
+    userId: v.string(),
     paginate: v.optional(paginationOptsValidator),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     const isAuthorized = await ctx.runQuery(internal.storySessions._isAuthorized, {
-      user: identity.subject,
+      user: args.userId,
       session: args.session,
     });
     if (!isAuthorized) throw new Error('Unauthorized');

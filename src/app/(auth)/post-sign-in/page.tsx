@@ -7,33 +7,21 @@ import { convex } from '~/config';
 import { api } from '~convex/_generated/api';
 
 export default function PostSignInPage() {
-  const router = useRouter();
-
-  useSignalEffect(() => {
-    console.log('convex.authenticated.value', convex.authenticated.value);
-    if (!convex.authenticated.value) return;
-
-    let mounted = true;
-    convex.mutation(api.users.upsert).then(() => {
-      if (!mounted) return;
-      router.push('/dashboard');
-    });
-
-    return () => {
-      mounted = false;
-    };
-  });
-
   return (
     <>
       <div className="text-center">
-        <Spinner size="lg" className="mb-4" />
         <h2 className="text-xl font-semibold text-gray-200 mb-2">
-          One moment please...
+          Authentication Complete
         </h2>
-        <p className="text-gray-500">
-          We're running some final checks to set up your account.
+        <p className="text-gray-500 mb-6">
+          This page will handle post-authentication flow when the new auth system is implemented.
         </p>
+        <a
+          href="/dashboard"
+          className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+        >
+          Go to Dashboard
+        </a>
       </div>
     </>
   );

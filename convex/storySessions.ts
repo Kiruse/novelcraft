@@ -8,15 +8,16 @@ import { paginationOptsValidator } from 'convex/server';
 export const create = mutation({
   args: {
     story: v.id('stories'),
+    primaryUser: v.string(),
     secondaryUsers: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any primaryUser
 
     const sessionId = await ctx.db.insert('storySessions', {
       story: args.story,
-      primaryUser: identity.subject,
+      primaryUser: args.primaryUser,
       secondaryUsers: args.secondaryUsers ?? [],
       lastActiveAt: BigInt(DateTime.now().toUnixInteger()),
       memories: [],
@@ -29,13 +30,14 @@ export const create = mutation({
 export const touch = mutation({
   args: {
     id: v.id('storySessions'),
+    userId: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     const isAuthorized = await ctx.runQuery(internal.storySessions._isAuthorized, {
-      user: identity.subject,
+      user: args.userId,
       session: args.id,
     });
     if (!isAuthorized) throw new Error('Unauthorized');
@@ -50,10 +52,11 @@ export const touch = mutation({
 export const get = query({
   args: {
     id: v.id('storySessions'),
+    userId: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     const session = await ctx.db.get(args.id);
     if (!session) {
@@ -61,7 +64,7 @@ export const get = query({
     }
 
     // must be primary or secondary user
-    if (session.primaryUser !== identity.subject && !session.secondaryUsers.includes(identity.subject))
+    if (session.primaryUser !== args.userId && !session.secondaryUsers.includes(args.userId))
       throw new Error('Unauthorized');
 
     return session;
@@ -71,20 +74,20 @@ export const get = query({
 /** List all story sessions of an authenticated user, optionally filtered by story. */
 export const list = query({
   args: {
+    userId: v.string(),
     story: v.optional(v.id('stories')),
     paginate: v.optional(paginationOptsValidator),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity)
-      throw new Error('Unauthenticated');
+    // TODO: Implement proper authentication
+    // For now, this is a placeholder that accepts any userId
 
     return await ctx.db
       .query('storySessions')
       .withIndex('by_primaryUser_story', (q) =>
         args.story
-        ? q.eq('primaryUser', identity.subject).eq('story', args.story)
-        : q.eq('primaryUser', identity.subject),
+        ? q.eq('primaryUser', args.userId).eq('story', args.story)
+        : q.eq('primaryUser', args.userId),
       )
       .paginate(args.paginate ?? { cursor: null, numItems: 100 });
   },

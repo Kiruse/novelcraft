@@ -1,4 +1,3 @@
-import { ClerkProvider } from '@clerk/nextjs';
 import type { Metadata } from "next";
 import "./globals.sass";
 
@@ -11,12 +10,10 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <ClerkProvider>
-      <html lang="en">
-        <body className="flex flex-col max-w min-h-screen overflow-x-hidden">
-          {children}
-        </body>
-      </html>
-    </ClerkProvider>
+    <html lang="en">
+      <body className="flex flex-col max-w min-h-screen overflow-x-hidden">
+        {children}
+      </body>
+    </html>
   );
 }

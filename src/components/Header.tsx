@@ -1,4 +1,3 @@
-import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import cn from "classnames";
 import { Button } from './Button';
 import Link from 'next/link';
@@ -21,15 +20,12 @@ export default function Header({ variant = 'default', className }: HeaderProps) 
         <h1>NovelCraft</h1>
       </Link>
       <div className="flex flex-row items-center gap-4">
-        <SignedIn>
-          <Link href="/dashboard">Dashboard</Link>
-          <UserButton />
-        </SignedIn>
-        <SignedOut>
-          <Button type="anchor" href="/sign-in">
-            Sign in
-          </Button>
-        </SignedOut>
+        <Link href="/dashboard" className="text-gray-300 hover:text-white">
+          Dashboard
+        </Link>
+        <Button type="anchor" href="/sign-in">
+          Sign in
+        </Button>
       </div>
     </header>
   );

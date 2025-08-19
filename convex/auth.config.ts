@@ -1,8 +1,6 @@
+// TODO: Configure authentication providers when implementing new auth system
 export default {
   providers: [
-    {
-      domain: process.env.CLERK_ISSUER,
-      applicationID: 'convex',
-    },
+    // Authentication providers will be configured here
   ],
 };
