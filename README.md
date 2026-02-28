@@ -5,7 +5,7 @@ A Nuxt 4 application for collaborative fiction writing.
 ## Tech Stack
 
 - **Runtime**: Bun
-- **Framework**: Nuxt 4
+- **Framework**: Nuxt 4 with Vue 3
 - **Database**: Neon PostgreSQL
 - **ORM**: Drizzle ORM with node-postgres driver
 - **Authentication**: Better-Auth with Drizzle adapter
@@ -307,6 +307,93 @@ export default defineEventHandler(async (event) => {
   return session[0];
 });
 ```
+
+## Frontend Architecture
+
+The frontend is built with Nuxt 4 and Vue 3, using file-based routing and component auto-imports.
+
+### Project Structure
+
+```
+app/
+├── app.vue                    # Root Vue component with NuxtPage
+├── pages/
+│   ├── index.vue              # Discovery/home page
+│   └── stories/
+│       └── [id].vue           # Story detail page (dynamic route)
+├── components/
+│   ├── StoryCard.vue          # Story card component
+│   └── GameSessionCard.vue    # Game session card component
+└── assets/
+    └── css/
+        └── app.css            # Global CSS reset and base styles
+```
+
+### Pages
+
+#### Discovery Page (`/`)
+
+The home page displays available stories and a "Jump back in" section for recent sessions.
+
+**Features:**
+- Lists all stories ordered alphabetically by title
+- Shows "Jump back in" section with recent game sessions (when authenticated)
+- Responsive grid layout for stories
+- Empty state when no stories exist
+- Horizontal scrolling for the sessions section
+
+**API calls:**
+- `GET /api/stories` - Fetch all stories
+- `GET /api/sessions` - Fetch user's recent sessions
+
+See details in [detailed docs](./docs/api-routes.md).
+
+#### Story Detail Page (`/stories/:id`)
+
+Displays detailed information about a specific story, including modules and author details.
+
+**Dynamic route parameter:**
+- `id` - Story ID (integer)
+
+### Components
+
+Components in `app/components/` are auto-imported and can be used directly in templates.
+
+#### StoryCard
+
+Displays story information in a card format with cover art, title, description, and author.
+
+**Usage:**
+```vue
+<StoryCard :story="story" />
+```
+
+#### GameSessionCard
+
+Displays a game session with story information and last played timestamp.
+
+**Usage:**
+```vue
+<GameSessionCard :session="session" />
+```
+
+### Styling
+
+Global styles are defined in `app/assets/css/app.css` and include:
+- CSS reset for consistency
+- Base element styling
+- Typography defaults
+
+Components use scoped styles with:
+- Kebab-case class naming
+- CSS Grid and Flexbox for responsive layouts
+- Custom scrollbar styling where needed
+
+## API Routes
+
+The application uses Nuxt's file-based routing for API endpoints, with routes located in `server/api/`.
+
+For comprehensive documentation on available endpoints, conventions, and how to create new routes, see the [API Routes documentation](./docs/api-routes.md).
 
 ## Scripts and Utilities
 

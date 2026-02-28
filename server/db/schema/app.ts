@@ -17,6 +17,8 @@ export const stories = pgTable(
     version: integer("version").notNull(),
     title: text("title").notNull(),
     description: text("description"),
+    coverArt: text("cover_art"),
+    genre: text("genre"),
     modules: jsonb("modules").notNull().$type<unknown>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")

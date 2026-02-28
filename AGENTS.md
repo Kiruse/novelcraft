@@ -1,318 +1,111 @@
 # Agents Documentation
 
-## Project Structure
+High-level overview for AI agents working on the NovelCraft project. For comprehensive documentation, see the [detailed docs](./docs/).
+
+**IMPORTANT:** Whenever you make changes, assert validity by running `bun run typecheck`, then summarize & document the changes with the `@docs-writer` subagent.
+
+## Quick Reference
+
+### Project Structure
 
 ```
 novelcraft/
-├── scripts/
-│   ├── generate.ts                # Commander CLI program for running generators
-│   ├── generators/                # Generator modules (scanned recursively)
-│   │   └── better-auth/
-│   │       └── schema.ts          # Drizzle schema generator for Better Auth
-│   └── utils/
-│       ├── get-project-root.ts    # Utility to find project root directory
-│       └── index.ts               # Utilities export point
+├── app/                    # Frontend (Nuxt 4 + Vue 3)
+│   ├── pages/              # File-based routing
+│   ├── components/         # Auto-imported Vue components
+│   └── assets/css/         # Global styles
+├── scripts/                # Development scripts
+│   └── utils/              # Shared utilities for scripts
 ├── server/
+│   ├── api/                # API routes (file-based)
 │   ├── db/
-│   │   ├── index.ts               # Database connection and db instance export
-│   │   ├── schema/
-│   │   │   ├── index.ts           # Schema export point
-│   │   │   ├── auth.ts            # Better-Auth user tables
-│   │   │   ├── app.ts             # App-specific tables (stories, sessions, etc.)
-│   │   │   └── placeholder.ts     # Placeholder tables
-│   │   └── migrations/            # Generated migration files
-│   └── auth.ts                    # Better-Auth configuration
-├── package.json                   # Project dependencies and scripts
-└── README.md                      # User-facing documentation
+│   │   ├── schema/         # Drizzle schema definitions
+│   │   └── migrations/     # Database migrations
+│   └── auth.ts             # Better-Auth config
+├── docs/                   # Comprehensive documentation
+├── nuxt.config.ts          # Nuxt configuration
+└── package.json            # Dependencies & scripts
 ```
 
-## Code Styling and Conventions
+**Detailed docs:** [Project Structure](./docs/project-structure.md)
+
+---
+
+## Key Conventions Summary
 
 ### File Organization
 
-- **Generators**: Located in `scripts/generators/` - each file exports a generator function as default
-- **Utilities**: Located in `scripts/utils/` - centralized exports including helper functions
-- **CLI Entry Point**: `scripts/generate.ts` - Commander-based CLI that auto-discovers generators
-- **TypeScript**: All source files use `.ts` extension
-- **Module type**: ESM modules (`"type": "module"` in package.json)
-- **Export patterns**: Utilities use named exports; generators use default exports
+| Category | Location | Pattern |
+|----------|----------|---------|
+| Generators | `scripts/generators/` | Default export, `defineGenerator()` wrapper |
+| Utilities | `scripts/utils/` | Named exports, centralized via `index.ts` |
+| API Routes | `server/api/` | `[resource].[method].ts` |
+| Pages | `app/pages/` | `[route].vue`, `[param].vue` for dynamic |
+| Components | `app/components/` | PascalCase `.vue`, auto-imported |
+| Schema | `server/db/schema/` | Separate files: `auth.ts`, `app.ts`, `placeholder.ts` |
+
+**Detailed docs:** [Code Conventions](./docs/code-conventions.md)
 
 ### Import Patterns
 
-Use ES module imports. Local module imports must use `.js` extension for ESM compatibility:
+- **Node.js built-ins**: No extension required (`fs/promises`, `path`)
+- **Local modules**: Use `.js` extension for ESM (`'./utils/index.js'`)
+- **Auto-imports**: Components, composables, `db` instance, Drizzle tables
 
-```typescript
-import { access, constants } from "fs/promises";
-import { dirname, resolve } from "path";
-import { fileURLToPath } from "url";
+### Module Type
 
-// Local module imports from same directory
-import { getProjectRoot, defineGenerator } from './utils/index.js';
+ESM modules (`"type": "module"` in package.json)
 
-// Or use relative paths from subdirectories
-import { defineGenerator, getProjectRoot } from '../../utils';
-```
+---
 
-Note: Node.js built-in modules (e.g., `fs/promises`, `path`) do not require `.js` extensions.
+## Common Tasks
 
-### Async Functions
-
-Utility functions that perform I/O operations should be async:
-
-```typescript
-export async function getProjectRoot(startDir?: string): Promise<string> {
-  // implementation
-}
-```
-
-### Error Handling
-
-Functions should throw descriptive errors:
-
-```typescript
-throw new Error("Could not find project root (no package.json found)");
-```
-
-### Path Resolution
-
-Use Node.js path utilities for cross-platform compatibility:
-
-- `resolve()` - resolve to absolute path
-- `dirname()` - get directory name
-- `fileURLToPath()` - convert import.meta.url to file path (for ES modules)
-
-### Function Exports
-
-Export functions explicitly using `export` keyword:
-
-```typescript
-export async function getProjectRoot(startDir?: string): Promise<string>
-```
-
-## CLI Generator System
-
-### Overview
-
-The project includes a CLI generator system built with Commander that automatically discovers and runs generator functions based on file hierarchy.
-
-### Running Generators
-
-Generators are invoked via the CLI using the command hierarchy derived from the file path:
+### Running the Application
 
 ```bash
-bun run cmd:generate <generator-path>
+# Development server
+bun run dev
 
-# Example: run the Better Auth schema generator
-bun run cmd:generate better-auth schema
+# Build for production
+bun run build
 ```
 
-### Creating a New Generator
+### Database Operations
 
-1. Create a new `.ts` file in `scripts/generators/` with a default export:
+```bash
+# Generate migrations from schema changes
+bun run db:generate
+
+# Apply migrations
+bun run db:migrate
+
+# Push schema directly (development)
+bun run db:push
+
+# Open Drizzle Studio
+bun run db:studio
+```
+
+---
+
+## Database Query Patterns
+
+**Note** that the `#server` import alias is only reliably available from code in the `./server` folder. In `./shared`, use `~~/server` instead. In `./app`, neither `#server` nor `~~/server` should ever be used as this WILL BREAK THE APP.
+
+### Basic Queries
 
 ```typescript
-import { defineGenerator, getProjectRoot } from '../../utils';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import { db } from '#server/db';
+import { stories } from '#server/db/schema';
+import { eq, desc } from 'drizzle-orm';
 
-export default defineGenerator(async () => {
-  const root = await getProjectRoot();
-  const filepath = path.join(root, 'path/to/output.txt');
-  await fs.writeFile(filepath, 'Generated content');
-});
-```
+// Select all
+const allStories = await db.select().from(stories);
 
-2. The generator will be automatically available as a subcommand based on its path:
-   - `scripts/generators/mygen.ts` → `bun run cmd:generate mygen`
-   - `scripts/generators/auth/schema.ts` → `bun run cmd:generate auth schema`
+// With where clause
+const oneStory = await db.select().from(stories).where(eq(stories.id, 1));
 
-### defineGenerator<T>(fn): Generator
-
-A simple wrapper function for generator functions.
-
-**Type Parameters:**
-- `T`: The return type of the generator function (optional)
-
-**Parameters:**
-- `fn`: An async function that performs the generation logic
-
-**Returns:** The passed-through generator function
-
-**Usage:**
-
-```typescript
-import { defineGenerator } from '../../utils';
-
-export default defineGenerator(async () => {
-  // Your generator logic here
-});
-```
-
-### Generator Execution
-
-Generators are invoked with no arguments or options. Any configuration should be handled within the generator function itself, typically by reading configuration files or environment variables.
-
-## Base Components
-
-### getProjectRoot(startDir?: string): Promise<string>
-
-Utility function that traverses the file system to find the project root.
-
-**Parameters:**
-- `startDir` (optional): Starting directory path. Defaults to the directory of the calling module.
-
-**Returns:** Absolute path to the project root directory as a Promise<string>.
-
-**Throws:** Error if no `package.json` file is found in any parent directory.
-
-**Usage:**
-
-```typescript
-import { getProjectRoot } from '../../utils';
-
-// Find root from current module location
-const root = await getProjectRoot();
-
-// Find root from a specific directory
-const root = await getProjectRoot('/some/path');
-```
-
-## Code Formatting
-
-The project uses Prettier for code formatting. Prettier uses default configuration as no `.prettierrc` file exists.
-
-Generators use prettier to format output:
-
-```typescript
-const formattedCode = await prettier.format(code, {
-  parser: "typescript",
-});
-```
-
-## Package Scripts
-
-```json
-{
-  "scripts": {
-    "build": "nuxt build",
-    "dev": "nuxt dev",
-    "generate": "nuxt generate",
-    "preview": "nuxt preview",
-    "postinstall": "nuxt prepare",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio",
-    "cmd:generate": "bun run scripts/generate.ts"
-  }
-}
-```
-
-## Database Schema
-
-### Schema Organization
-
-Database schema is organized across multiple files in `server/db/schema/`:
-
-- **auth.ts**: Better-Auth user tables (user, session, account, etc.)
-- **app.ts**: Application-specific tables (stories, game sessions, etc.)
-- **placeholder.ts**: Placeholder tables for development
-- **index.ts**: Central export point for all schema definitions
-
-### Application Tables
-
-#### stories
-
-Stores story content and version history.
-
-**Columns:**
-- `id` (serial, PK) - Primary key
-- `story_id` (text, NOT NULL) - UUID for version tracking
-- `author_id` (text, FK → users.id, DELETE RESTRICT) - Story author
-- `version` (integer, NOT NULL) - Story version number
-- `title` (text, NOT NULL) - Story title
-- `description` (text) - Story description
-- `modules` (jsonb, NOT NULL) - Story module configuration
-- `created_at` (timestamp, NOT NULL, default now())
-- `updated_at` (timestamp, NOT NULL, auto-update)
-
-**Indexes:**
-- `stories_author_story_version_idx` on `(author_id, story_id, version)`
-
-**Relations:**
-- `author`: one-to-one with `user`
-- `gameSessions`: one-to-many with `game_sessions`
-
-#### game_sessions
-
-Stores player game sessions.
-
-**Columns:**
-- `id` (serial, PK) - Primary key
-- `player_id` (text, FK → users.id, DELETE CASCADE) - Player reference
-- `story_id` (integer, FK → stories.id, DELETE CASCADE) - Story reference
-- `data` (jsonb, NOT NULL) - Session game state
-- `created_at` (timestamp, NOT NULL, default now())
-- `updated_at` (timestamp, NOT NULL, auto-update)
-
-**Indexes:**
-- `game_sessions_player_updated_idx` on `(player_id, updated_at)`
-
-**Relations:**
-- `player`: one-to-one with `user`
-- `story`: one-to-one with `stories`
-- `moduleRuntime`: one-to-many with `module_runtime`
-- `messages`: one-to-many with `game_session_messages`
-
-#### module_runtime
-
-Stores runtime state of modules.
-
-**Columns:**
-- `id` (serial, PK) - Primary key
-- `game_session_id` (integer, FK → game_sessions.id, DELETE CASCADE) - Session reference
-- `module_id` (text, NOT NULL) - Module identifier (not a FK)
-- `data` (jsonb, NOT NULL) - Module runtime state
-
-**Indexes:**
-- `module_runtime_session_idx` on `(game_session_id)`
-
-**Relations:**
-- `gameSession`: one-to-one with `game_sessions`
-
-#### game_session_messages
-
-Stores conversation history for game sessions.
-
-**Columns:**
-- `id` (serial, PK) - Primary key
-- `game_session_id` (integer, FK → game_sessions.id, DELETE CASCADE) - Session reference
-- `role` (enum: 'system' | 'agent' | 'user' | 'toolcall', NOT NULL) - Message role
-- `contents` (text, NOT NULL) - Message content
-- `toolcall_data` (jsonb) - Tool call data (nullable)
-- `created_at` (timestamp, NOT NULL, default now())
-
-**Indexes:**
-- `game_session_messages_session_created_idx` on `(game_session_id, created_at)`
-
-**Relations:**
-- `gameSession`: one-to-one with `game_sessions`
-
-### Enums
-
-#### message_role
-
-Enum defining message roles: `'system'`, `'agent'`, `'user'`, `'toolcall'`
-
-### Schema Relations
-
-All foreign key relations are defined using Drizzle ORM's `relations` API for type-safe queries:
-
-```typescript
-import { db } from '~/server/db';
-import { stories, gameSessions } from '~/server/db/schema';
-
-// Query with relations
+// With relations
 const storyWithAuthor = await db.query.stories.findFirst({
   where: eq(stories.id, 1),
   with: {
@@ -322,58 +115,153 @@ const storyWithAuthor = await db.query.stories.findFirst({
 });
 ```
 
-### Runtime Validation with drizzle-zod
-
-The project uses `drizzle-zod` to generate Zod validation schemas from Drizzle table definitions for runtime validation.
-
-**Generated Insert Schemas:**
+### Runtime Validation
 
 ```typescript
-import {
-  insertStorySchema,
-  insertGameSessionSchema,
-  insertModuleRuntimeSchema,
-  insertGameSessionMessageSchema,
-} from '~/server/db/schema/app';
-import { z } from 'zod';
+import { insertStorySchema } from '#server/db/schema/app';
 
-// Validate story data before insertion
-const storyData = {
-  storyId: 'uuid-123',
-  authorId: 'user-uuid',
-  version: 1,
-  title: 'My Story',
-  description: 'A description',
-  modules: { modules: [] },
-};
-
-const validated = insertStorySchema.parse(storyData);
+const validated = insertStorySchema.parse(data);
 await db.insert(stories).values(validated);
 ```
 
-**Custom Validation:**
+**Detailed docs:** [Database Schema](./docs/database-schema.md)
 
-You can extend generated schemas with custom validation rules:
+---
 
-```typescript
-import { insertStorySchema } from '~/server/db/schema/app';
-import { z } from 'zod';
+## API Route Patterns
 
-const customStorySchema = insertStorySchema.extend({
-  title: z.string().min(1).max(200),
-  version: z.number().int().positive(),
-});
-
-const validated = customStorySchema.parse(data);
-```
-
-**API Route Validation Example:**
+### Creating a New Endpoint
 
 ```typescript
+// server/api/my-resource.get.ts
+import { db } from "../db";
+import { myTable } from "../db/schema";
+
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event);
-  const validated = insertGameSessionSchema.parse(body);
-  const session = await db.insert(gameSessions).values(validated).returning();
-  return session[0];
+  const data = await db.select().from(myTable);
+  return { data };
 });
 ```
+
+### Dynamic Routes
+
+```typescript
+// server/api/my-resource/[id].get.ts
+import { eq } from "drizzle-orm";
+
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, "id");
+  const data = await db.select().from(myTable).where(eq(myTable.id, id));
+  return { data: data[0] };
+});
+```
+
+### Available Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/stories` | GET | List all stories (with author) |
+| `/api/stories/:id` | GET | Get story by ID (with author, modules) |
+| `/api/sessions` | GET | Get current user's recent sessions |
+
+**Detailed docs:** [API Routes](./docs/api-routes.md)
+
+---
+
+## Frontend Patterns
+
+### Data Fetching
+
+```typescript
+const { data: stories } = await useFetch('/api/stories');
+const { data: sessions } = await useFetch('/api/sessions');
+```
+
+### Route Parameters
+
+```typescript
+const route = useRoute();
+const id = route.params.id;
+```
+
+### Component Props
+
+```typescript
+interface Props {
+  story: {
+    id: number;
+    title: string;
+    // ...
+  };
+}
+
+defineProps<Props>();
+```
+
+**Detailed docs:** [Frontend Architecture](./docs/frontend-architecture.md)
+
+---
+
+## Agent Guidelines
+
+### When to Modify Schema
+
+- New application features require data structures
+- Existing features need additional fields
+- Relations need to be added/modified
+
+**Process:**
+1. Update `server/db/schema/app.ts`
+2. Run `bun run db:generate` to create migration
+3. Run `bun run db:migrate` to apply changes
+
+### When to Add an API Route
+
+- Frontend needs data not currently exposed
+- New endpoints for external integrations
+- CRUD operations for new entities
+
+**Process:**
+1. Create `[resource].[method].ts` in `server/api/`
+2. Use `defineEventHandler` with `db` auto-import
+3. Use Drizzle ORM for queries
+4. Validate input with `drizzle-zod` schemas
+
+### When to Create a Component
+
+- Reusable UI patterns across multiple pages
+- Complex logic that should be isolated
+- Shared functionality (cards, modals, forms)
+
+**Process:**
+1. Create `.vue` file in `app/components/`
+2. Use `defineProps<T>()` for TypeScript props
+3. Use scoped styles to avoid conflicts
+4. Component is auto-imported (no imports needed)
+
+---
+
+## Package Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `dev` | Start development server |
+| `build` | Build for production |
+| `generate` | Generate static site |
+| `preview` | Preview production build |
+| `db:generate` | Generate Drizzle migrations |
+| `db:migrate` | Apply database migrations |
+| `db:push` | Push schema to database (dev) |
+| `db:studio` | Open Drizzle Studio |
+
+---
+
+## Detailed Documentation Links
+
+| Document | Description |
+|----------|-------------|
+| [Project Structure](./docs/project-structure.md) | Complete file organization and directory layout |
+| [Code Conventions](./docs/code-conventions.md) | Code styling, imports, patterns, and best practices |
+| [Database Schema](./docs/database-schema.md) | Table definitions, relations, and validation |
+| [API Routes](./docs/api-routes.md) | Endpoint documentation and route creation patterns |
+| [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, and styling conventions |

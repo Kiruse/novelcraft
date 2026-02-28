@@ -8,6 +8,7 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
+    "typecheck": "nuxt typecheck",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -33,6 +34,7 @@
     "@types/pg": "^8.16.0",
     "@types/prettier": "^3.0.0",
     "commander": "^14.0.3",
-    "prettier": "^3.8.1"
+    "prettier": "^3.8.1",
+    "vue-tsc": "^3.2.5"
   }
 }
