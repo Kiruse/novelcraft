@@ -48,13 +48,55 @@ novelcraft/
 
 ### Import Patterns
 
+**Always use alias imports — never relative `../` paths.**
+
+| Alias | Resolves to | Use in |
+|-------|------------|----------|
+| `~/` or `@/` | `app/` | App code (pages, components, composables) |
+| `#server/` | `server/` | Server code (API routes, plugins, gameplay) |
+| `#shared/` | `shared/` | Shared code (from both app and server) |
+| `~~/` | Project root | Escape hatch (avoid unless necessary) |
+
 - **Node.js built-ins**: No extension required (`fs/promises`, `path`)
-- **Local modules**: Use `.js` extension for ESM (`'./utils/index.js'`)
 - **Auto-imports**: Components, composables, `db` instance, Drizzle tables
+
+### AI / Model Configuration
+
+**Never use `gateway` from the `ai` package.** All models are resolved through `#server/ai/models` → `resolveModel(name)`.
+
+- Models are defined in `server/ai/models.ts` as a hard-coded `Record<string, ModelConfig>`
+- Each entry maps a model ID → `{ baseURL, apiKey? }`
+- Always uses `@ai-sdk/openai-compatible` (`createOpenAICompatible`) — no provider-specific SDKs
+- To add a new model: add an entry to the `models` map, then call `resolveModel('your-model-id')`
+- To use a model: `import { resolveModel } from '#server/ai/models'; const model = resolveModel('meta-llama/llama-3.3-70b-instruct');`
+
+### TypeScript — No `as any`
+
+**Never use `as any` casts.** If a type incompatibility arises, fix the root cause:
+
+- Widen or narrow the source/target types (e.g. `Record<string, unknown>` instead of `unknown`)
+- Fix schema types (e.g. Drizzle `.$type<>()`)
+- Remove unnecessary type wrappers (e.g. `DeepReadonly` that creates cascading `Readonly<unknown>` constraints)
+- Use targeted type assertions like `as ExpectedType` when crossing package boundaries
+- If a genuine cross-package type mismatch exists (e.g. aikit vs ai SDK versions), **inform the user** rather than silently casting to `any`
 
 ### Module Type
 
 ESM modules (`"type": "module"` in package.json)
+
+### Styling — Open Props
+
+The project uses [Open Props](https://open-props.style/) as its styling foundation. It provides CSS custom property design tokens for spacing, color, typography, shadows, radii, animations, and more.
+
+- **Global styles**: `app/assets/css/app.css` — imports `open-props` (tokens) and `normalize` (reset)
+- **Usage**: Reference tokens via `var(--size-3)`, `var(--gray-7)`, `var(--radius-2)`, `var(--shadow-2)`, `var(--font-size-4)`, etc.
+- **Semantic tokens**: `--text-1`/`--text-2`, `--surface-1`..`--surface-4` for colors that adapt to dark mode
+- **Brand**: `--brand-gradient` defined in `app.css` for the app's gradient
+- **Rules**:
+  - Never hardcode colors, spacing, radii, shadows, or font sizes — use Open Props tokens
+  - Use logical properties (`inline-size`/`block-size`, `margin-block-start`, etc.)
+  - Write scoped `<style scoped>` in Vue components
+  - No class-name frameworks (Tailwind, etc.)
 
 ---
 

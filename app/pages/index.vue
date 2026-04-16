@@ -35,52 +35,52 @@ const sessions = computed(() => sessionsData.value?.sessions ?? []);
 
 <style scoped>
 .discovery-page {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 2rem;
+  max-inline-size: var(--size-xl);
+  margin-inline: auto;
+  padding: var(--size-8);
 }
 
 .jump-back-in-section {
-  margin-bottom: 3rem;
+  margin-block-end: var(--size-10);
 }
 
 .section-title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  margin-bottom: 1.5rem;
+  font-size: var(--font-size-5);
+  font-weight: var(--font-weight-6);
+  margin-block-end: var(--size-5);
 }
 
 .sessions-scroll {
   display: flex;
-  gap: 1rem;
+  gap: var(--size-4);
   overflow-x: auto;
-  padding-bottom: 0.5rem;
+  padding-block-end: var(--size-2);
   scroll-snap-type: x mandatory;
 }
 
 .sessions-scroll::-webkit-scrollbar {
-  height: 8px;
+  block-size: var(--size-2);
 }
 
 .sessions-scroll::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
+  background: var(--gray-2);
+  border-radius: var(--radius-round);
 }
 
 .sessions-scroll::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
+  background: var(--gray-6);
+  border-radius: var(--radius-round);
 }
 
 .stories-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(var(--size-content-1), 1fr));
+  gap: var(--size-5);
 }
 
 .empty-state {
   text-align: center;
-  padding: 4rem;
-  color: #666;
+  padding: var(--size-10);
+  color: var(--text-2);
 }
 </style>

@@ -1,21 +1,10 @@
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* Open Props: design tokens */
+@import 'open-props/open-props.min.css';
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: #fafafa;
-  color: #333;
-  line-height: 1.5;
-}
+/* Open Props: normalize (replaces bare reset) */
+@import 'open-props/normalize.min.css';
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-button {
-  font-family: inherit;
+/* Brand gradient — used across buttons, placeholders, etc. */
+:root {
+  --brand-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }

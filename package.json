@@ -16,8 +16,9 @@
     "cmd:generate": "bun run scripts/generate.ts"
   },
   "dependencies": {
-    "@stegakir/aikit": "^0.2.16",
-    "ai": "^6.0.101",
+    "@ai-sdk/openai-compatible": "^2.0.41",
+    "@stegakir/aikit": "^0.3.13",
+    "ai": "^6.0.116",
     "better-auth": "^1.4.19",
     "case-anything": "^3.1.2",
     "drizzle-kit": "^0.31.9",

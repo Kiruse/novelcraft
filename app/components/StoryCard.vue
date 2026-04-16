@@ -44,60 +44,59 @@ defineProps<{
 <style scoped>
 .story-card {
   display: block;
-  background: white;
-  border-radius: 12px;
+  background: var(--surface-1);
+  border-radius: var(--radius-3);
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: transform 0.2s, box-shadow 0.2s;
+  box-shadow: var(--shadow-2);
+  transition: transform var(--animation-duration, 0.2s) var(--ease-2), box-shadow var(--animation-duration, 0.2s) var(--ease-2);
   text-decoration: none;
   color: inherit;
 }
 
 .story-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  transform: translateY(calc(var(--size-1) * -1));
+  box-shadow: var(--shadow-4);
 }
 
 .story-cover {
   aspect-ratio: 16/9;
-  width: 100%;
-  background: #f5f5f5;
+  inline-size: 100%;
+  background: var(--surface-2);
   overflow: hidden;
 }
 
 .cover-image {
-  width: 100%;
-  height: 100%;
+  inline-size: 100%;
+  block-size: 100%;
   object-fit: cover;
 }
 
 .cover-placeholder {
-  width: 100%;
-  height: 100%;
+  inline-size: 100%;
+  block-size: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  font-size: 3rem;
-  font-weight: bold;
+  background: var(--brand-gradient);
+  color: var(--gray-0);
+  font-size: var(--font-size-7);
+  font-weight: var(--font-weight-9);
 }
 
 .story-content {
-  padding: 1rem;
+  padding: var(--size-4);
 }
 
 .story-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem 0;
-  color: #333;
+  font-size: var(--font-size-3);
+  font-weight: var(--font-weight-6);
+  margin-block-end: var(--size-2);
 }
 
 .story-description {
-  font-size: 0.9rem;
-  color: #666;
-  margin: 0 0 0.75rem 0;
+  font-size: var(--font-size-2);
+  color: var(--text-2);
+  margin-block-end: var(--size-3);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -108,11 +107,11 @@ defineProps<{
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.8rem;
-  color: #888;
+  font-size: var(--font-size-1);
+  color: var(--text-2);
 }
 
 .story-author {
-  font-weight: 500;
+  font-weight: var(--font-weight-5);
 }
 </style>

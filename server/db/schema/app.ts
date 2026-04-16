@@ -19,7 +19,7 @@ export const stories = pgTable(
     description: text("description"),
     coverArt: text("cover_art"),
     genre: text("genre"),
-    modules: jsonb("modules").notNull().$type<unknown>(),
+    modules: jsonb("modules").notNull().$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -39,7 +39,7 @@ export const gameSessions = pgTable(
     storyId: integer("story_id")
       .notNull()
       .references(() => stories.id, { onDelete: "cascade" }),
-    data: jsonb("data").notNull().$type<unknown>(),
+    data: jsonb("data").notNull().$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -57,7 +57,7 @@ export const moduleRuntime = pgTable(
       .notNull()
       .references(() => gameSessions.id, { onDelete: "cascade" }),
     moduleId: text("module_id").notNull(),
-    data: jsonb("data").notNull().$type<unknown>(),
+    data: jsonb("data").notNull().$type<Record<string, unknown>>(),
   },
   (table) => [index("module_runtime_session_idx").on(table.gameSessionId)]
 );
@@ -112,15 +112,12 @@ export const gameSessionMessageRelations = relations(gameSessionMessages, ({ one
   }),
 }));
 
-// TODO: GameplayModule subsystem
-const storyModuleSchema = z.record(z.string(), z.object({}));
+export const storyModuleVal = z.record(z.string(), z.unknown());
 
-const insertStorySchema = createInsertSchema(stories);
+export const insertStorySchema = createInsertSchema(stories);
 
-const insertGameSessionSchema = createInsertSchema(gameSessions);
+export const insertGameSessionSchema = createInsertSchema(gameSessions);
 
-const insertModuleRuntimeSchema = createInsertSchema(moduleRuntime);
+export const insertModuleRuntimeSchema = createInsertSchema(moduleRuntime);
 
-const insertGameSessionMessageSchema = createInsertSchema(gameSessionMessages);
-
-export { insertStorySchema, insertGameSessionSchema, insertModuleRuntimeSchema, insertGameSessionMessageSchema };
+export const insertGameSessionMessageSchema = createInsertSchema(gameSessionMessages);

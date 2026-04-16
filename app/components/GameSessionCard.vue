@@ -53,59 +53,58 @@ function formatDate(date: Date | string): string {
 <style scoped>
 .session-card {
   flex-shrink: 0;
-  width: 200px;
-  background: white;
-  border-radius: 10px;
+  inline-size: var(--size-xl);
+  background: var(--surface-1);
+  border-radius: var(--radius-3);
   overflow: hidden;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-2);
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform var(--animation-duration, 0.2s) var(--ease-2), box-shadow var(--animation-duration, 0.2s) var(--ease-2);
   scroll-snap-align: start;
 }
 
 .session-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(calc(var(--size-1) * -1));
+  box-shadow: var(--shadow-3);
 }
 
 .session-cover {
   aspect-ratio: 16/9;
-  width: 100%;
-  background: #f5f5f5;
+  inline-size: 100%;
+  background: var(--surface-2);
   overflow: hidden;
 }
 
 .cover-image {
-  width: 100%;
-  height: 100%;
+  inline-size: 100%;
+  block-size: 100%;
   object-fit: cover;
 }
 
 .cover-placeholder {
-  width: 100%;
-  height: 100%;
+  inline-size: 100%;
+  block-size: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  font-size: 2rem;
-  font-weight: bold;
+  background: var(--brand-gradient);
+  color: var(--gray-0);
+  font-size: var(--font-size-5);
+  font-weight: var(--font-weight-9);
 }
 
 .session-content {
-  padding: 0.75rem;
+  padding: var(--size-3);
 }
 
 .session-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  margin: 0 0 0.25rem 0;
-  color: #333;
+  font-size: var(--font-size-2);
+  font-weight: var(--font-weight-6);
+  margin-block-end: var(--size-1);
 }
 
 .session-date {
-  font-size: 0.75rem;
-  color: #888;
+  font-size: var(--font-size-0);
+  color: var(--text-2);
 }
 </style>

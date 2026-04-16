@@ -5,6 +5,12 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/app.css'],
 
+  runtimeConfig: {
+    public: {
+      storyBuilder: process.env.NODE_ENV === 'development',
+    },
+  },
+
   nitro: {
     typescript: {
       tsConfig: {
