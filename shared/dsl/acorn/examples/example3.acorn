@@ -1,0 +1,38 @@
+# `find` statement is a SQL-like query subset of the grammar
+# `first N` limits the number of results
+# `npcs` is the variable that will be assigned
+# `modules` is a built-in variable referencing available modules
+# `strength` is a field to compare
+# `(...)` for grouping, `and` & `or` for chaining
+# each module maintains a collection of runtime resources
+# module ID must not contain whitespaces but may contain (regex) `[\.:\/_]`
+find first 3 npcs
+  from modules[npcs]
+  where
+    strength < 3.
+
+# Indentation should not matter within a statement.
+# Indentation matters only after the terminating `.`
+
+for each npc in npcs:
+  set npc->strength += 1.
+
+# `exactly 1` is a special syntax that ensures `relationship`
+# is a single value, not an array
+find exactly 1 relationship
+  from relation::player
+  where npc = "Daniel".
+set relationship->amity += 1.
+
+# of course if > 1, exactly returns an array too
+find exactly 3 members
+  from npcs
+  where
+    faction = player->faction and
+    gullible = true.
+
+for each member in members:
+  find exactly 1 relationship
+    from relation::player
+    where npc = member->name.
+  set relationship->admiration += 1.
