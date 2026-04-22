@@ -31,6 +31,9 @@
     <div v-else class="game-view">
       <div class="game-header">
         <h1 class="game-title">{{ story.title }}</h1>
+        <button v-if="isTestMode" type="button" class="debug-toggle" @click="debugOpen = !debugOpen">
+          {{ debugOpen ? '✕ Close Debug' : '🐛 Debug' }}
+        </button>
       </div>
       <div class="chat-area" ref="chatArea">
         <div
@@ -57,6 +60,13 @@
           Send
         </button>
       </form>
+
+      <!-- Debug panel -->
+      <GameDebugPanel
+        v-if="isTestMode"
+        v-model:open="debugOpen"
+        :session-id="gameSession.id"
+      />
     </div>
   </div>
   <div v-else class="loading">
@@ -84,6 +94,8 @@ interface ChatMessage {
 }
 
 const route = useRoute();
+const isTestMode = computed(() => route.query.test === '1');
+const debugOpen = ref(false);
 const { data } = await useFetch<{
   story: {
     id: number;
@@ -102,6 +114,14 @@ const input = ref('');
 const loading = ref(false);
 const starting = ref(false);
 const chatArea = ref<HTMLElement | null>(null);
+
+// Auto-start in test mode
+onMounted(() => {
+  if (isTestMode.value && story.value) {
+    debugOpen.value = true;
+    startGame();
+  }
+});
 
 async function startGame() {
   starting.value = true;
@@ -248,9 +268,17 @@ function scrollToBottom() {
   border-radius: var(--radius-4);
   overflow: hidden;
   box-shadow: var(--shadow-2);
+  transition: margin-inline-end var(--animation-duration, 0.2s) var(--ease-2);
+}
+
+.game-view:has(+ .debug-open-placeholder) {
+  margin-inline-end: var(--size-content-2);
 }
 
 .game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: var(--size-4) var(--size-6);
   border-block-end: var(--border-size-1) solid var(--surface-3);
 }
@@ -313,6 +341,22 @@ function scrollToBottom() {
 
 .chat-input-field:focus {
   border-color: var(--indigo-6);
+}
+
+.debug-toggle {
+  padding: var(--size-2) var(--size-4);
+  background: var(--surface-3);
+  border: var(--border-size-1) solid var(--surface-4);
+  border-radius: var(--radius-2);
+  font-size: var(--font-size-0);
+  font-weight: var(--font-weight-5);
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.debug-toggle:hover {
+  background: var(--surface-4);
+  color: var(--text-1);
 }
 
 .chat-input-field:disabled {

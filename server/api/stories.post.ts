@@ -1,6 +1,8 @@
 import { db } from '#server/db';
 import { stories } from '#server/db/schema';
+import { user } from '#server/db/schema';
 import { auth } from '#server/auth/config';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 const bodySchema = z.object({
@@ -21,6 +23,11 @@ export default defineEventHandler(async (event) => {
   const authSession = await auth.api.getSession({ headers: event.headers });
   if (!authSession?.user) {
     throw createError({ statusCode: 401, statusMessage: 'Not authenticated' });
+  }
+
+  const [dbUser] = await db.select({ isAuthor: user.isAuthor }).from(user).where(eq(user.id, authSession.user.id)).limit(1);
+  if (!dbUser?.isAuthor) {
+    throw createError({ statusCode: 403, statusMessage: 'Author access required' });
   }
 
   const body = await readBody(event);

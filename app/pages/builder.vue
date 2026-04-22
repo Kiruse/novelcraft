@@ -1,5 +1,5 @@
 <template>
-  <div v-if="enabled" class="builder-page">
+  <div v-if="canBuild" class="builder-page">
     <BuilderForm>
       <template #header>
         <h1 class="builder-title">Story Builder</h1>
@@ -7,12 +7,14 @@
     </BuilderForm>
   </div>
   <div v-else class="disabled">
-    <p>Story Builder is not enabled.</p>
+    <p>Story Builder requires author access. <NuxtLink to="/settings">Enable it in Settings</NuxtLink></p>
   </div>
 </template>
 
 <script setup lang="ts">
 const { storyBuilder: enabled } = useRuntimeConfig().public;
+const { currentUser } = useCurrentUser();
+const canBuild = computed(() => enabled && currentUser.value?.isAuthor === true);
 </script>
 
 <style scoped>

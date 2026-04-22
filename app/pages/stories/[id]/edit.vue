@@ -1,5 +1,5 @@
 <template>
-  <div v-if="enabled" class="builder-page">
+  <div v-if="canBuild" class="builder-page">
     <BuilderForm
       ref="formRef"
       story-id-disabled
@@ -19,20 +19,23 @@
     </BuilderForm>
   </div>
   <div v-else class="disabled">
-    <p>Story Builder is not enabled.</p>
+    <p>Story Builder requires author access. <NuxtLink to="/settings">Enable it in Settings</NuxtLink></p>
   </div>
 </template>
 
 <script setup lang="ts">
 const { storyBuilder: enabled } = useRuntimeConfig().public;
+const { currentUser } = useCurrentUser();
+const canBuild = computed(() => enabled && (currentUser.value?.isAuthor ?? false));
 const route = useRoute();
 const id = route.params.id as string;
 
-const formRef = ref<{ populateFrom: (s: any) => void; form: any } | null>(null);
+const formRef = ref<{ populateFrom: (s: any) => void; form: any; isDirty: boolean; hasDraft: boolean; result: any } | null>(null);
 
 // Load draft (or create one from latest version)
 const { data: draftData } = await useFetch<{
   story: {
+    id: number;
     storyId: string;
     title: string;
     genre: string | null;

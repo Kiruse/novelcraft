@@ -13,462 +13,50 @@ A Nuxt 4 application for collaborative fiction writing.
 
 ## Setup
 
-Make sure to install dependencies:
+Install dependencies:
 
 ```bash
-# npm
-npm install
-
-# pnpm
-pnpm install
-
-# yarn
-yarn install
-
-# bun
 bun install
 ```
 
-## Development Server
+For local development, ensure you have [podman](https://podman.io/) installed — it's used to start local backend services such as Mailtrap.
 
-Start the development server on `http://localhost:3000`:
+## Development
+
+Start the development server on `http://localhost:3000` and Mailtrap on `http://localhost:8025`:
 
 ```bash
-# npm
-npm run dev
-
-# pnpm
-pnpm dev
-
-# yarn
-yarn dev
-
-# bun
-bun run dev
+bun dev
 ```
 
 ## Production
 
-Build the application for production:
-
 ```bash
-# npm
-npm run build
-
-# pnpm
-pnpm build
-
-# yarn
-yarn build
-
-# bun
-bun run build
+bun run build    # Build for production
+bun run preview  # Preview production build
 ```
 
-Locally preview production build:
-
-```bash
-# npm
-npm run preview
-
-# pnpm
-pnpm preview
-
-# yarn
-yarn preview
-
-# bun
-bun run preview
-```
-
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+See the [Nuxt deployment docs](https://nuxt.com/docs/getting-started/deployment) for more information.
 
 ## Database
 
-NovelCraft uses Drizzle ORM with Bun's built-in SQL driver for database operations.
-
-### Project Structure
-
-```
-server/
-├── db/
-│   ├── index.ts           # Database connection and db instance export
-│   ├── schema/
-│   │   ├── index.ts       # Schema export point
-│   │   ├── auth.ts        # Better-Auth user tables
-│   │   ├── app.ts         # App-specific tables (stories, sessions, etc.)
-│   │   └── placeholder.ts # Placeholder tables
-│   └── migrations/        # Generated migration files
-```
-
-### Configuration
-
-- **Schema location**: `./server/db/schema/index.ts`
-- **Migrations location**: `./server/db/migrations/`
-- **Database driver**: `pg` (node-postgres) with `drizzle-orm/node-postgres`
-
-The database connection reads `DATABASE_URL` from the `.env` file (Neon PostgreSQL).
-
-### Available Scripts
+NovelCraft uses Drizzle ORM with Neon PostgreSQL.
 
 ```bash
-# Generate migrations from schema changes
-bun run db:generate
-
-# Apply pending migrations to the database
-bun run db:migrate
-
-# Push schema directly to database (alternative to migrations)
-bun run db:push
-
-# Launch Drizzle Studio for database inspection
-bun run db:studio
+bun run db:generate  # Generate migrations from schema changes
+bun run db:migrate   # Apply pending migrations
+bun run db:push      # Push schema directly (dev alternative)
+bun run db:studio    # Launch Drizzle Studio for inspection
 ```
 
-### Adding New Tables
-
-1. Define your table in the appropriate schema file:
-
-   - `server/db/schema/auth.ts` for Better-Auth tables
-   - `server/db/schema/app.ts` for application tables
-   - `server/db/schema/placeholder.ts` for temporary tables
-
-```typescript
-import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
-
-export const users = pgTable('users', {
-  id: serial('id').primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-});
-```
-
-2. Export from `server/db/schema/index.ts`:
-
-```typescript
-export * from './app';
-export * from './auth';
-export * from './placeholder';
-```
-
-3. Generate the migration:
-
-```bash
-bun run db:generate
-```
-
-4. Apply the migration:
-
-```bash
-bun run db:migrate
-```
-
-5. If using drizzle-zod for validation, the insert schema is automatically generated:
-
-```typescript
-import { createInsertSchema } from 'drizzle-zod';
-import { users } from './schema/app';
-
-export const insertUserSchema = createInsertSchema(users);
-```
-
-### Using the Database Instance
-
-Import the `db` instance from `server/db`:
-
-```typescript
-import { db } from '~/server/db';
-import { users } from '~/server/db/schema';
-import { eq } from 'drizzle-orm';
-
-// Query
-const allUsers = await db.select().from(users);
-
-// Filter
-const user = await db.select().from(users).where(eq(users.id, 1));
-
-// Insert
-await db.insert(users).values({ name: 'John', email: 'john@example.com' });
-
-// Update
-await db.update(users).set({ name: 'Jane' }).where(eq(users.id, 1));
-
-// Delete
-await db.delete(users).where(eq(users.id, 1));
-```
-
-### Integration with Better-Auth
-
-Better-Auth uses the Drizzle adapter for authentication:
-
-```typescript
-import { betterAuth } from 'better-auth';
-import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { db } from './server/db';
-```
-
-The adapter is configured in `auth.ts` and automatically handles user sessions and authentication state.
-
-### Application Schema Tables
-
-The application schema is defined in `server/db/schema/app.ts` and includes four main tables:
-
-**stories** - Stores story content and version tracking
-- Links to users via `author_id` (text, FK → users.id, DELETE RESTRICT)
-- Includes version tracking with `story_id` (UUID) and `version` (integer)
-- Stores story configuration in `modules` (jsonb)
-
-**game_sessions** - Stores player game sessions
-- Links to users via `player_id` (text, FK → users.id, DELETE CASCADE)
-- Links to stories via `story_id` (integer, FK → stories.id, DELETE CASCADE)
-- Stores game state in `data` (jsonb)
-
-**module_runtime** - Stores runtime state of modules
-- Links to game_sessions via `game_session_id` (DELETE CASCADE)
-- `module_id` is a text field (not a foreign key)
-- Stores module-specific data in `data` (jsonb)
-
-**game_session_messages** - Stores conversation history
-- Links to game_sessions via `game_session_id` (DELETE CASCADE)
-- Uses `message_role` enum for message roles
-- Stores tool call data in `toolcall_data` (jsonb)
-
-### Using Schema Relations
-
-Drizzle relations enable type-safe queries with related data:
-
-```typescript
-import { db } from '~/server/db';
-import { stories, gameSessions } from '~/server/db/schema';
-
-// Query story with author and game sessions
-const storyWithDetails = await db.query.stories.findFirst({
-  where: eq(stories.id, 1),
-  with: {
-    author: true,
-    gameSessions: {
-      with: {
-        player: true,
-        messages: true,
-      },
-    },
-  },
-});
-```
-
-### Runtime Validation with drizzle-zod
-
-The project uses `drizzle-zod` to generate Zod validation schemas from Drizzle table definitions:
-
-```typescript
-import {
-  insertStorySchema,
-  insertGameSessionSchema,
-  insertModuleRuntimeSchema,
-  insertGameSessionMessageSchema,
-} from '~/server/db/schema/app';
-
-// Validate data before insertion
-const storyData = {
-  storyId: 'uuid-123',
-  authorId: 'user-uuid',
-  version: 1,
-  title: 'My Story',
-  description: 'A description',
-  modules: { modules: [] },
-};
-
-const validated = insertStorySchema.parse(storyData);
-await db.insert(stories).values(validated);
-```
-
-**Extending with custom validation:**
-
-```typescript
-import { insertStorySchema } from '~/server/db/schema/app';
-import { z } from 'zod';
-
-const customStorySchema = insertStorySchema.extend({
-  title: z.string().min(1).max(200),
-  version: z.number().int().positive(),
-});
-
-const validated = customStorySchema.parse(data);
-```
-
-**API route validation example:**
-
-```typescript
-export default defineEventHandler(async (event) => {
-  const body = await readBody(event);
-  const validated = insertGameSessionSchema.parse(body);
-  const session = await db.insert(gameSessions).values(validated).returning();
-  return session[0];
-});
-```
-
-## Frontend Architecture
-
-The frontend is built with Nuxt 4 and Vue 3, using file-based routing and component auto-imports.
-
-### Project Structure
-
-```
-app/
-├── app.vue                    # Root Vue component with NuxtPage
-├── pages/
-│   ├── index.vue              # Discovery/home page
-│   └── stories/
-│       └── [id].vue           # Story detail page (dynamic route)
-├── components/
-│   ├── StoryCard.vue          # Story card component
-│   └── GameSessionCard.vue    # Game session card component
-└── assets/
-    └── css/
-        └── app.css            # Global CSS reset and base styles
-```
-
-### Pages
-
-#### Discovery Page (`/`)
-
-The home page displays available stories and a "Jump back in" section for recent sessions.
-
-**Features:**
-- Lists all stories ordered alphabetically by title
-- Shows "Jump back in" section with recent game sessions (when authenticated)
-- Responsive grid layout for stories
-- Empty state when no stories exist
-- Horizontal scrolling for the sessions section
-
-**API calls:**
-- `GET /api/stories` - Fetch all stories
-- `GET /api/sessions` - Fetch user's recent sessions
-
-See details in [detailed docs](./docs/api-routes.md).
-
-#### Story Detail Page (`/stories/:id`)
-
-Displays detailed information about a specific story, including modules and author details.
-
-**Dynamic route parameter:**
-- `id` - Story ID (integer)
-
-### Components
-
-Components in `app/components/` are auto-imported and can be used directly in templates.
-
-#### StoryCard
-
-Displays story information in a card format with cover art, title, description, and author.
-
-**Usage:**
-```vue
-<StoryCard :story="story" />
-```
-
-#### GameSessionCard
-
-Displays a game session with story information and last played timestamp.
-
-**Usage:**
-```vue
-<GameSessionCard :session="session" />
-```
-
-### Styling
-
-Global styles are defined in `app/assets/css/app.css` and include:
-- CSS reset for consistency
-- Base element styling
-- Typography defaults
-
-Components use scoped styles with:
-- Kebab-case class naming
-- CSS Grid and Flexbox for responsive layouts
-- Custom scrollbar styling where needed
-
-## API Routes
-
-The application uses Nuxt's file-based routing for API endpoints, with routes located in `server/api/`.
-
-For comprehensive documentation on available endpoints, conventions, and how to create new routes, see the [API Routes documentation](./docs/api-routes.md).
-
-## Scripts and Utilities
-
-### Project Root Utility
-
-The project includes a utility function to locate the project root directory:
-
-```typescript
-import { getProjectRoot } from '~/scripts/utils/index.js';
-
-// Get absolute path to project root
-const rootPath = await getProjectRoot();
-// Or specify a starting directory
-const rootPath = await getProjectRoot('/some/starting/path');
-```
-
-The utility traverses up the file system from a starting directory (or the module's location) until it finds a `package.json` file, which indicates the project root. This is useful for:
-
-- Locating configuration files
-- Reading project-relative paths
-- Ensuring consistent path resolution across different execution contexts
-
-If no `package.json` is found, the function throws an error.
-
-## CLI Generator System
-
-The project includes a CLI generator system built with Commander that automatically discovers and runs generator functions based on file hierarchy.
-
-### Available Scripts
-
-```bash
-# Run a generator based on file path hierarchy
-bun run cmd:generate <generator-path>
-```
-
-### Creating Generators
-
-Generators are TypeScript files located in `scripts/generators/` that export a default async function. The CLI automatically discovers these files and creates subcommands based on their path.
-
-**Example generator file structure:**
-
-```
-scripts/
-└── generators/
-    ├── mygen.ts              # Available as: bun run cmd:generate mygen
-    └── auth/
-        └── schema.ts          # Available as: bun run cmd:generate auth schema
-```
-
-**Creating a new generator:**
-
-```typescript
-// scripts/generators/mygen.ts
-import { defineGenerator, getProjectRoot } from '~/scripts/utils/index.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-
-export default defineGenerator(async () => {
-  const root = await getProjectRoot();
-  const filepath = path.join(root, 'path/to/output.txt');
-  await fs.writeFile(filepath, 'Generated content');
-  console.log('Generator completed successfully');
-});
-```
-
-### Example: Better Auth Schema Generator
-
-The Better Auth schema generator is located at `scripts/generators/better-auth/schema.ts`:
-
-```bash
-# Generate the Better Auth Drizzle schema
-bun run cmd:generate better-auth schema
-```
-
-This generator:
-- Reads the Better Auth configuration from `server/auth/config`
-- Generates Drizzle ORM schema definitions
-- Outputs the formatted TypeScript code to `server/db/schema/auth-schema.ts`
+See [Database Schema](./docs/database-schema.md) for table definitions, relations, and query patterns.
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Project Structure](./docs/project-structure.md) | File organization and directory layout |
+| [Code Conventions](./docs/code-conventions.md) | Styling, imports, patterns, and best practices |
+| [Database Schema](./docs/database-schema.md) | Table definitions, relations, and validation |
+| [API Routes](./docs/api-routes.md) | Endpoint documentation and route patterns |
+| [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, and styling conventions |

@@ -92,8 +92,8 @@
     <pre class="json-preview">{{ modulesJson }}</pre>
 
     <div class="form-actions">
-      <button type="button" class="btn-draft" :disabled="saving || !canSaveDraft" @click.prevent="saveDraft">
-        {{ saving ? 'Saving...' : 'Save Draft' }}
+      <button type="button" class="btn-draft" :class="{ 'is-test': !isDirty && hasDraft }" :disabled="saving || !canSaveDraft" @click.prevent="onSaveOrTest">
+        {{ saving ? 'Saving...' : (!isDirty && hasDraft) ? '▶ Test' : 'Save Draft' }}
       </button>
       <button type="submit" class="btn-publish" :disabled="submitting || !canPublish">
         {{ submitting ? 'Publishing...' : 'Publish' }}
@@ -129,6 +129,8 @@ const {
   submitting,
   saving,
   result,
+  isDirty,
+  hasDraft,
   publishErrors,
   canSaveDraft,
   canPublish,
@@ -156,7 +158,22 @@ function applySuggestion(s: { storyId: string; title: string; genre: string; des
   form.description = s.description;
 }
 
-defineExpose({ populateFrom, form, saveDraft, publish });
+async function onSaveOrTest() {
+  if (isDirty.value) {
+    // Save draft first
+    const saved = await saveDraft();
+    if (!saved) return;
+  }
+  // Launch test session
+  await navigateToTest();
+}
+
+async function navigateToTest() {
+  if (!result.value?.id) return;
+  await navigateTo(`/stories/${result.value.id}?test=1`);
+}
+
+defineExpose({ populateFrom, form, saveDraft, publish, isDirty, hasDraft, result });
 </script>
 
 <style scoped>
@@ -348,6 +365,17 @@ label {
 .btn-draft:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* When button shows "▶ Test" — clean draft ready to playtest */
+.btn-draft.is-test {
+  background: var(--green-9);
+  color: var(--green-2);
+  border-color: var(--green-6);
+}
+
+.btn-draft.is-test:hover:not(:disabled) {
+  background: var(--green-8);
 }
 
 .btn-publish {

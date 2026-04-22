@@ -7,7 +7,7 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     public: {
-      storyBuilder: process.env.NODE_ENV === 'development',
+      storyBuilder: process.env.ENABLE_STORY_BUILDER === 'true' || process.env.NODE_ENV === 'development',
     },
   },
 

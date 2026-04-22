@@ -27,11 +27,42 @@ export function useStoryBuilder() {
   const activeModuleTypes = ref<Set<string>>(new Set());
   const modulesConfig = ref<Record<string, unknown>>({});
   const initialModulesConfig = ref<Record<string, unknown>>({});
+  const initialForm = ref<StoryForm>({
+    storyId: '',
+    title: '',
+    genre: '',
+    coverArt: '',
+    description: '',
+  });
   const moduleDialogEl = ref<HTMLDialogElement | null>(null);
 
   const submitting = ref(false);
   const saving = ref(false);
   const result = ref<{ id: number; title: string } | null>(null);
+
+  // --- Dirty tracking ---
+
+  const isDirty = computed(() => {
+    // Form fields
+    if (
+      form.storyId !== (initialForm.value.storyId ?? '') ||
+      form.title !== (initialForm.value.title ?? '') ||
+      form.genre !== (initialForm.value.genre ?? '') ||
+      form.coverArt !== (initialForm.value.coverArt ?? '') ||
+      form.description !== (initialForm.value.description ?? '')
+    ) return true;
+
+    // Module config changes
+    const initialKeys = Object.keys(initialModulesConfig.value).sort();
+    const currentKeys = Object.keys(modulesConfig.value).sort();
+    if (initialKeys.length !== currentKeys.length) return true;
+    if (initialKeys.some((k, i) => k !== currentKeys[i])) return true;
+    return initialKeys.some(
+      (k) => JSON.stringify(modulesConfig.value[k]) !== JSON.stringify(initialModulesConfig.value[k]),
+    );
+  });
+
+  const hasDraft = ref(false);
 
   // --- Validation ---
 
@@ -115,6 +146,7 @@ export function useStoryBuilder() {
   // --- Populate from draft/published data ---
 
   function populateFrom(story: {
+    id?: number;
     storyId: string;
     title: string;
     genre: string | null;
@@ -128,10 +160,19 @@ export function useStoryBuilder() {
     form.coverArt = story.coverArt ?? '';
     form.description = story.description ?? '';
 
+    // Track initial form state for dirty detection
+    initialForm.value = { ...form };
+
     const mods = (story.modules ?? {}) as Record<string, unknown>;
     initialModulesConfig.value = { ...mods };
-    modulesConfig.value = { ...mods };
+    modulesConfig.value = JSON.parse(JSON.stringify(mods));
     activeModuleTypes.value = new Set(Object.keys(mods));
+    hasDraft.value = true;
+
+    // Set result so Test button can navigate
+    if (story.id) {
+      result.value = { id: story.id, title: story.title };
+    }
   }
 
   // --- Actions ---
@@ -156,6 +197,10 @@ export function useStoryBuilder() {
         body: buildPayload(),
       });
       result.value = res.story;
+      hasDraft.value = true;
+      // Update initial state so dirty resets
+      initialForm.value = { ...form };
+      initialModulesConfig.value = JSON.parse(JSON.stringify(modulesConfig.value));
       return res.story;
     } catch (e: any) {
       alert(e?.data?.statusMessage ?? e?.message ?? 'Failed to save draft');
@@ -191,6 +236,8 @@ export function useStoryBuilder() {
     submitting,
     saving,
     result,
+    isDirty,
+    hasDraft,
     draftErrors,
     publishErrors,
     canSaveDraft,

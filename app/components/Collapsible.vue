@@ -5,7 +5,7 @@
       :aria-expanded="modelValue"
       @click.prevent="modelValue = !modelValue"
     >
-      <span class="collapsible-arrow" :class="{ 'collapsible-arrow--open': modelValue }">▸</span>
+      <Chevron :open="modelValue" />
       <span class="collapsible-label"><slot name="header" /></span>
       <slot name="header-actions" />
     </button>
@@ -82,18 +82,6 @@ onMounted(() => {
   color: inherit;
   font: inherit;
   text-align: start;
-}
-
-.collapsible-arrow {
-  display: inline-block;
-  font-size: var(--font-size-1);
-  color: var(--text-2);
-  transition: transform var(--animation-duration, 0.2s) var(--ease-2);
-  flex-shrink: 0;
-}
-
-.collapsible-arrow--open {
-  transform: rotate(90deg);
 }
 
 .collapsible-label {
