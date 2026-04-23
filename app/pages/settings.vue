@@ -5,6 +5,7 @@
     <section class="card">
       <h2 class="card-title">Profile</h2>
       <table class="profile-table">
+      <tbody>
         <tr class="profile-row">
           <th class="profile-label">Name</th>
           <td class="profile-value">{{ currentUser?.name }}</td>
@@ -29,6 +30,7 @@
             </span>
           </td>
         </tr>
+      </tbody>
       </table>
     </section>
 

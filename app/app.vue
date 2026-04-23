@@ -6,6 +6,7 @@
         ref="sidebarRef"
         :user="currentUser"
         :sessions="sessions"
+        :author-stories="authorStories"
       />
       <main class="app-main">
         <NuxtPage />
@@ -17,16 +18,17 @@
 <script setup lang="ts">
 import { useCurrentUser } from '~/composables/useCurrentUser';
 
-const { currentUser, sessions } = useCurrentUser();
+const { currentUser, sessions, authorStories } = useCurrentUser();
 
 const sidebarRef = ref<{ toggle: () => void } | null>(null);
 </script>
 
 <style scoped>
 .app-shell {
-  min-block-size: 100dvh;
+  block-size: 100dvh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .app-body {

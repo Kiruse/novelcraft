@@ -52,9 +52,9 @@
         <h3 class="sidebar-section-title">Recent sessions</h3>
         <div v-if="sessions.length > 0" class="sidebar-sessions">
           <NuxtLink
-            v-for="s in sessions"
+            v-for="s in regularSessions"
             :key="s.id"
-            :to="`/stories/${s.story.id}`"
+            :to="`/stories/${s.story.author.name}/${s.story.storyId}?session=${s.id}`"
             class="sidebar-session"
             @click="closeDrawer"
           >
@@ -63,6 +63,37 @@
           </NuxtLink>
         </div>
         <p v-else class="sidebar-empty">No sessions yet</p>
+
+        <div v-if="testSessions.length > 0" class="sidebar-sessions">
+          <h4 class="sidebar-section-subtitle">Test Sessions</h4>
+          <NuxtLink
+            v-for="s in testSessions"
+            :key="s.id"
+            :to="`/stories/${s.story.author.name}/${s.story.storyId}?session=${s.id}&test=1`"
+            class="sidebar-session"
+            @click="closeDrawer"
+          >
+            <span class="session-dot session-dot--test" />
+            <span class="session-title">{{ s.story.title }}</span>
+          </NuxtLink>
+        </div>
+      </div>
+
+      <!-- Author's stories -->
+      <div v-if="(expanded || isMobile) && user?.isAuthor && authorStories.length > 0" class="sidebar-section">
+        <h3 class="sidebar-section-title">Your stories</h3>
+        <div class="sidebar-sessions">
+          <NuxtLink
+            v-for="s in authorStories"
+            :key="s.id"
+            :to="`/stories/${user.name}/${s.storyId}`"
+            class="sidebar-session"
+            @click="closeDrawer"
+          >
+            <span class="session-dot session-dot--story" />
+            <span class="session-title">{{ s.title }}</span>
+          </NuxtLink>
+        </div>
       </div>
     </div>
 
@@ -122,7 +153,13 @@ const props = defineProps<{
   user: UserShape | null;
   sessions: Array<{
     id: number;
-    story: { id: number; title: string };
+    story: { id: number; storyId: string; title: string; version: number; author: { name: string } };
+  }>;
+  authorStories: Array<{
+    id: number;
+    storyId: string;
+    title: string;
+    version: number;
   }>;
 }>();
 
@@ -132,6 +169,9 @@ const expanded = ref(true);
 const drawerOpen = ref(false);
 const accountOpen = ref(false);
 const isMobile = ref(false);
+
+const regularSessions = computed(() => props.sessions.filter(s => s.story.version > 0));
+const testSessions = computed(() => props.sessions.filter(s => s.story.version === 0));
 
 function toggle() {
   if (isMobile.value) {
@@ -183,11 +223,12 @@ onUnmounted(() => {
 .sidebar {
   --sidebar-width: var(--size-13);
   --sidebar-collapsed: 3.5rem;
-  position: relative;
+  position: sticky;
+  inset-block-start: 0;
   display: flex;
   flex-direction: column;
   inline-size: var(--sidebar-width);
-  min-block-size: 100dvh;
+  block-size: 100dvh;
   background: var(--surface-2);
   border-inline-end: var(--border-size-1) solid var(--surface-3);
   transition: inline-size var(--animation-duration, 0.2s) var(--ease-2);
@@ -334,6 +375,16 @@ onUnmounted(() => {
   margin-block-end: var(--size-1);
 }
 
+.sidebar-section-subtitle {
+  font-size: var(--font-size-0);
+  font-weight: var(--font-weight-5);
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+  padding: var(--size-2) var(--size-2) var(--size-1);
+  margin-block-start: var(--size-2);
+  border-block-start: var(--border-size-1) solid var(--surface-3);
+}
+
 .sidebar-sessions {
   display: flex;
   flex-direction: column;
@@ -363,6 +414,14 @@ onUnmounted(() => {
   block-size: var(--size-2);
   border-radius: var(--radius-round);
   background: var(--indigo-5);
+}
+
+.session-dot--test {
+  background: var(--amber-5);
+}
+
+.session-dot--story {
+  background: var(--green-5);
 }
 
 .session-title {

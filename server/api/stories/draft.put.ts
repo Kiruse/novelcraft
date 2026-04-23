@@ -9,17 +9,12 @@ const bodySchema = z.object({
   storyId: z.string().min(1),
   title: z.string().max(200).optional(),
   description: z.string().max(2000).optional(),
-  coverArt: z.string().url().optional(),
+  coverArt: z.url().optional(),
   genre: z.string().max(100).optional(),
   modules: z.record(z.string(), z.unknown()).default({}),
 });
 
 export default defineEventHandler(async (event) => {
-  const { public: { storyBuilder } } = useRuntimeConfig();
-  if (!storyBuilder) {
-    throw createError({ statusCode: 404, statusMessage: 'Not found' });
-  }
-
   const authSession = await auth.api.getSession({ headers: event.headers });
   if (!authSession?.user) {
     throw createError({ statusCode: 401, statusMessage: 'Not authenticated' });
@@ -71,7 +66,7 @@ export default defineEventHandler(async (event) => {
       .where(eq(stories.id, existing.id))
       .returning();
 
-    return { story: updated };
+    return { story: { ...updated, authorName: authSession.user.name } };
   }
 
   // New draft — storyId is the only required field
@@ -96,5 +91,5 @@ export default defineEventHandler(async (event) => {
     })
     .returning();
 
-  return { story };
+  return { story: { ...story, authorName: authSession.user.name } };
 });

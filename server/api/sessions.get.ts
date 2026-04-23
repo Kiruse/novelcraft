@@ -19,13 +19,22 @@ export default defineEventHandler(async (event) => {
       story: {
         columns: {
           id: true,
+          storyId: true,
           title: true,
           coverArt: true,
           genre: true,
+          version: true,
+        },
+        with: {
+          author: {
+            columns: {
+              name: true,
+            },
+          },
         },
       },
     },
-    limit: 5,
+    limit: 10,
   });
 
   return { sessions: userSessions };

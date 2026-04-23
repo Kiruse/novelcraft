@@ -15,11 +15,6 @@ const bodySchema = z.object({
 });
 
 export default defineEventHandler(async (event) => {
-  const { public: { storyBuilder } } = useRuntimeConfig();
-  if (!storyBuilder) {
-    throw createError({ statusCode: 404, statusMessage: 'Not found' });
-  }
-
   const authSession = await auth.api.getSession({ headers: event.headers });
   if (!authSession?.user) {
     throw createError({ statusCode: 401, statusMessage: 'Not authenticated' });
@@ -55,5 +50,5 @@ export default defineEventHandler(async (event) => {
     })
     .returning();
 
-  return { story };
+  return { story: { ...story, authorName: authSession.user.name } };
 });

@@ -109,7 +109,7 @@
 
     <div v-if="result" class="result">
       <slot name="result" :result="result">
-        <p>✅ <NuxtLink :to="`/stories/${result.id}`">{{ result.title }}</NuxtLink></p>
+        <p>✅ <NuxtLink :to="`/stories/${result.authorName}/${result.storyId}`">{{ result.title }}</NuxtLink></p>
       </slot>
     </div>
   </form>
@@ -170,7 +170,7 @@ async function onSaveOrTest() {
 
 async function navigateToTest() {
   if (!result.value?.id) return;
-  await navigateTo(`/stories/${result.value.id}?test=1`);
+  await navigateTo(`/stories/${result.value.authorName}/${result.value.storyId}?test=1`);
 }
 
 defineExpose({ populateFrom, form, saveDraft, publish, isDirty, hasDraft, result });
@@ -430,9 +430,9 @@ label {
 .result {
   margin-block-start: var(--size-4);
   padding: var(--size-4);
-  background: var(--green-9);
-  color: var(--green-2);
-  border: var(--border-size-1) solid var(--green-6);
+  background: var(--surface-2);
+  color: var(--text-2);
+  border: var(--border-size-1) solid var(--surface-4);
   border-radius: var(--radius-2);
 }
 
@@ -441,7 +441,7 @@ label {
 }
 
 .result :deep(a) {
-  color: var(--green-1);
+  color: var(--indigo-6);
   font-weight: var(--font-weight-6);
 }
 

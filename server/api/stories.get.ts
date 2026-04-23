@@ -1,9 +1,12 @@
 import { db } from "../db";
 import { stories } from "../db/schema";
+import { eq, sql } from "drizzle-orm";
 
 export default defineEventHandler(async (event) => {
+  // Get latest published version of each story
   const allStories = await db.query.stories.findMany({
-    orderBy: (stories, { asc }) => [asc(stories.title)],
+    where: sql`${stories.version} > 0`,
+    orderBy: (stories, { desc }) => [desc(stories.createdAt)],
     with: {
       author: {
         columns: {
@@ -14,5 +17,14 @@ export default defineEventHandler(async (event) => {
     },
   });
 
-  return { stories: allStories };
+  // Deduplicate: keep only the latest version per (authorId, storyId)
+  const seen = new Set<string>();
+  const latest = allStories.filter((s) => {
+    const key = `${s.authorId}/${s.storyId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return { stories: latest };
 });

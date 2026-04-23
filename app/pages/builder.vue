@@ -12,9 +12,8 @@
 </template>
 
 <script setup lang="ts">
-const { storyBuilder: enabled } = useRuntimeConfig().public;
 const { currentUser } = useCurrentUser();
-const canBuild = computed(() => enabled && currentUser.value?.isAuthor === true);
+const canBuild = computed(() => currentUser.value?.isAuthor === true);
 </script>
 
 <style scoped>

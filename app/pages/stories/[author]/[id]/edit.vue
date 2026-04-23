@@ -1,5 +1,10 @@
 <template>
-  <div v-if="canBuild" class="builder-page">
+  <div v-if="error" class="not-found">
+    <h1>Story not found</h1>
+    <p>{{ error.statusMessage }}</p>
+    <NuxtLink to="/builder" class="back-link">Back to Builder</NuxtLink>
+  </div>
+  <div v-else-if="canBuild" class="builder-page">
     <BuilderForm
       ref="formRef"
       story-id-disabled
@@ -14,7 +19,7 @@
       </template>
 
       <template #result="{ result }">
-        <p>✅ Published as <NuxtLink :to="`/stories/${result.id}`">{{ result.title }}</NuxtLink></p>
+        <p>✅ Published as <NuxtLink :to="`/stories/${result.authorName}/${result.storyId}`">{{ result.title }}</NuxtLink></p>
       </template>
     </BuilderForm>
   </div>
@@ -24,16 +29,16 @@
 </template>
 
 <script setup lang="ts">
-const { storyBuilder: enabled } = useRuntimeConfig().public;
 const { currentUser } = useCurrentUser();
-const canBuild = computed(() => enabled && (currentUser.value?.isAuthor ?? false));
+const canBuild = computed(() => currentUser.value?.isAuthor === true);
 const route = useRoute();
-const id = route.params.id as string;
+const author = route.params.author as string;
+const storyId = route.params.id as string;
 
 const formRef = ref<{ populateFrom: (s: any) => void; form: any; isDirty: boolean; hasDraft: boolean; result: any } | null>(null);
 
 // Load draft (or create one from latest version)
-const { data: draftData } = await useFetch<{
+const { data: draftData, error } = await useFetch<{
   story: {
     id: number;
     storyId: string;
@@ -43,7 +48,7 @@ const { data: draftData } = await useFetch<{
     description: string | null;
     modules: unknown;
   };
-}>(`/api/stories/${id}/draft`);
+}>(`/api/stories/${author}/${storyId}/draft`);
 
 // Extract initial modules config to pass as prop (needed before component mounts)
 const initialModulesConfig = computed(() => {
@@ -96,5 +101,30 @@ onMounted(() => {
   text-align: center;
   padding: var(--size-10);
   color: var(--text-2);
+}
+
+.not-found {
+  text-align: center;
+  padding: var(--size-10);
+  color: var(--text-2);
+}
+
+.not-found h1 {
+  font-size: var(--font-size-5);
+  font-weight: var(--font-weight-6);
+  margin-block-end: var(--size-3);
+}
+
+.not-found p {
+  margin-block-end: var(--size-4);
+}
+
+.back-link {
+  color: var(--indigo-6);
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
 }
 </style>

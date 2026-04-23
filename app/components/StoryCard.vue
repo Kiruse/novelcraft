@@ -1,5 +1,5 @@
 <template>
-  <NuxtLink :to="`/stories/${story.id}`" class="story-card">
+  <NuxtLink :to="`/stories/${story.author.name}/${story.storyId}`" class="story-card">
     <div class="story-cover">
       <img
         v-if="story.coverArt"
@@ -26,6 +26,7 @@
 <script setup lang="ts">
 interface Story {
   id: number;
+  storyId: string;
   title: string;
   description: string | null;
   coverArt: string | null;

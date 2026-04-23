@@ -22,6 +22,20 @@
       "when": 1776872188550,
       "tag": "0002_cloudy_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776941973788,
+      "tag": "0003_jazzy_paladin",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776943181744,
+      "tag": "0004_parched_next_avengers",
+      "breakpoints": true
     }
   ]
 }

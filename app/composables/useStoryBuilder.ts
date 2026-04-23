@@ -1,6 +1,7 @@
 import MapGraphConfig from '~/components/builder/MapGraphConfig.vue';
 import NpcConfig from '~/components/builder/NpcConfig.vue';
 import EventConfig from '~/components/builder/EventConfig.vue';
+import SystemPromptConfig from '~/components/builder/SystemPromptConfig.vue';
 
 export interface StoryForm {
   storyId: string;
@@ -11,6 +12,8 @@ export interface StoryForm {
 }
 
 export function useStoryBuilder() {
+  const DEFAULT_MODULE_TYPES = ['system_prompt', 'event', 'npc'];
+
   const { data: modulesData } = useFetch('/api/modules');
   const registryModules = computed(() => modulesData.value?.modules ?? []);
 
@@ -24,7 +27,7 @@ export function useStoryBuilder() {
     description: '',
   });
 
-  const activeModuleTypes = ref<Set<string>>(new Set());
+  const activeModuleTypes = ref<Set<string>>(new Set(DEFAULT_MODULE_TYPES));
   const modulesConfig = ref<Record<string, unknown>>({});
   const initialModulesConfig = ref<Record<string, unknown>>({});
   const initialForm = ref<StoryForm>({
@@ -38,7 +41,7 @@ export function useStoryBuilder() {
 
   const submitting = ref(false);
   const saving = ref(false);
-  const result = ref<{ id: number; title: string } | null>(null);
+  const result = ref<{ id: number; authorName: string; storyId: string; title: string } | null>(null);
 
   // --- Dirty tracking ---
 
@@ -93,9 +96,10 @@ export function useStoryBuilder() {
   // --- Module management ---
 
   const moduleComponents: Record<string, unknown> = {
-    'map::graph': MapGraphConfig,
-    'npc': NpcConfig,
+    'system_prompt': SystemPromptConfig,
     'event': EventConfig,
+    'npc': NpcConfig,
+    'map::graph': MapGraphConfig,
   };
 
   const availableModules = computed(() =>
@@ -147,6 +151,7 @@ export function useStoryBuilder() {
 
   function populateFrom(story: {
     id?: number;
+    authorName?: string;
     storyId: string;
     title: string;
     genre: string | null;
@@ -171,7 +176,7 @@ export function useStoryBuilder() {
 
     // Set result so Test button can navigate
     if (story.id) {
-      result.value = { id: story.id, title: story.title };
+      result.value = { id: story.id!, authorName: story.authorName ?? useCurrentUser().currentUser.value?.name ?? '', storyId: story.storyId, title: story.title };
     }
   }
 

@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { pgTable, serial, text, integer, timestamp, jsonb, index, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, jsonb, index, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -26,7 +26,8 @@ export const stories = pgTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index("stories_author_story_version_idx").on(table.authorId, table.storyId, table.version)]
+  (table) => [uniqueIndex("stories_author_story_version_idx").on(table.authorId, table.storyId, table.version)],
+
 );
 
 export const gameSessions = pgTable(

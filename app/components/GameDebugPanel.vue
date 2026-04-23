@@ -1,8 +1,7 @@
 <template>
-  <aside v-if="open" class="debug-panel">
+  <aside class="debug-panel">
     <div class="debug-header">
       <span class="debug-title">Debug</span>
-      <button type="button" class="debug-close" @click="$emit('update:open', false)">✕</button>
     </div>
 
     <div class="debug-body">
@@ -61,11 +60,8 @@
 
 <script setup lang="ts">
 const props = defineProps<{
-  open: boolean;
   sessionId: number;
 }>();
-
-defineEmits<{ 'update:open': [value: boolean] }>();
 
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -86,8 +82,8 @@ const data = ref<{
   modules: Record<string, DebugModule>;
 } | null>(null);
 
-watch(() => props.open, (isOpen) => {
-  if (isOpen && !data.value) fetchDebug();
+onMounted(() => {
+  fetchDebug();
 });
 
 async function fetchDebug() {
@@ -184,17 +180,13 @@ async function patchState(moduleId: string, mod: DebugModule) {
 
 <style scoped>
 .debug-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  block-size: 100dvh;
   inline-size: var(--size-content-2);
-  background: var(--surface-1);
-  border-inline-start: var(--border-size-2) solid var(--surface-4);
-  box-shadow: var(--shadow-6);
+  block-size: 100%;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  border-inline-start: var(--border-size-1) solid var(--surface-3);
   display: flex;
   flex-direction: column;
-  z-index: 100;
   font-size: var(--font-size-0);
 }
 
@@ -213,19 +205,6 @@ async function patchState(moduleId: string, mod: DebugModule) {
   text-transform: uppercase;
   letter-spacing: var(--font-letterspacing-3);
   color: var(--text-2);
-}
-
-.debug-close {
-  background: none;
-  border: none;
-  font-size: var(--font-size-2);
-  cursor: pointer;
-  color: var(--text-2);
-  padding: var(--size-1);
-}
-
-.debug-close:hover {
-  color: var(--text-1);
 }
 
 .debug-body {

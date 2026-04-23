@@ -46,11 +46,6 @@ const SYSTEM_KEYWORDS = unindent(`
 `);
 
 export default defineEventHandler(async (event) => {
-  const { public: { storyBuilder } } = useRuntimeConfig();
-  if (!storyBuilder) {
-    throw createError({ statusCode: 404, statusMessage: 'Not found' });
-  }
-
   const body = await readBody(event);
   const prompt = body?.prompt as string | undefined;
   const hasPrompt = typeof prompt === 'string' && prompt.trim().length > 0;

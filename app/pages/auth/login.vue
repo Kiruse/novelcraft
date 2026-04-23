@@ -140,7 +140,8 @@ async function submit() {
           callbackURL: '/',
         });
         if (res.error) {
-          error.value = res.error.message ?? 'Sign up failed';
+          const msg = res.error.message ?? 'Sign up failed';
+          error.value = msg.includes('unique') || msg.includes('already') ? 'That name is already taken' : msg;
         } else {
           magicLinkSent.value = true;
         }
@@ -163,7 +164,8 @@ async function submit() {
         callbackURL: '/',
       });
       if (res.error) {
-        error.value = res.error.message ?? 'Magic link failed';
+        const msg = res.error.message ?? 'Magic link failed';
+        error.value = msg.includes('unique') || msg.includes('already') ? 'That name is already taken' : msg;
       } else {
         magicLinkSent.value = true;
       }
