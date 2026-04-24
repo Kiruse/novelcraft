@@ -46,10 +46,12 @@ import Collapsible from '~/components/Collapsible.vue';
 export interface SuggestionPickerSuggestion extends ParsedSuggestion {}
 
 const props = defineProps<{
-  /** URL to POST to for SSE stream */
-  endpoint: string;
-  /** Request body sent as JSON */
-  body?: Record<string, unknown>;
+  /** Persona (system prompt) to send to the LLM. */
+  persona: string;
+  /** Model identifier resolvable by the server. */
+  model?: string;
+  /** User message content sent as the conversation seed. */
+  prompt: string;
   /** Tag names to parse inside <suggestion>. Defaults to title, genre, description. */
   knownTags?: string[];
   /** Whether a generation request is currently in-flight. */
@@ -110,10 +112,14 @@ async function generate() {
   });
 
   try {
-    const response = await fetch(props.endpoint, {
+    const response = await fetch('/api/llm/prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: props.body ? JSON.stringify(props.body) : undefined,
+      body: JSON.stringify({
+        model: props.model ?? 'zai-org/glm-4.6v-flash',
+        messages: [{ author: 'user', content: props.prompt }],
+        persona: props.persona,
+      }),
     });
 
     if (!response.ok) {

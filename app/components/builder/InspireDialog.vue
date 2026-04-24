@@ -51,6 +51,35 @@
 <script setup lang="ts">
 import { SuggestionParser } from '~/utils/suggestionParser';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
+import { unindent } from '@stegakir/aikit/utils';
+
+const STORY_SUGGEST_RANDOM_PERSONA = unindent(`
+  You are a creative story idea generator.
+  Generate exactly 5 diverse, creative story suggestions spanning different genres
+  (e.g. fantasy, sci-fi, mystery, horror, romance, adventure, thriller).
+
+  For each suggestion, output a <suggestion> block with these tags inside:
+    <storyId> — a URL-safe slug, lowercase, hyphens (e.g. "the-lost-dungeon")</storyId>
+    <title> — a catchy story title</title>
+    <genre> — the genre</genre>
+    <description> — a compelling premise, 2-3 sentences</description>
+
+  Output ONLY the <suggestion> blocks with no other text.
+`);
+
+const STORY_SUGGEST_KEYWORDS_PERSONA = unindent(`
+  You are a creative story idea generator.
+  The user will provide keywords or a theme. Generate exactly 3 diverse story suggestions
+  inspired by their input. Each suggestion must have a unique genre and tone.
+
+  For each suggestion, output a <suggestion> block with these tags inside:
+    <storyId> — a URL-safe slug, lowercase, hyphens (e.g. "the-lost-dungeon")</storyId>
+    <title> — a catchy story title</title>
+    <genre> — the genre</genre>
+    <description> — a compelling premise, 2-3 sentences</description>
+
+  Output ONLY the <suggestion> blocks with no other text.
+`);
 
 const emit = defineEmits<{
   use: [suggestion: ParsedSuggestion];
@@ -103,10 +132,18 @@ async function generate() {
   });
 
   try {
-    const response = await fetch('/api/stories/suggest', {
+    const hasPrompt = keywords.value.trim().length > 0;
+    const response = await fetch('/api/llm/prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: keywords.value || undefined }),
+      body: JSON.stringify({
+        model: 'zai-org/glm-4.6v-flash',
+        messages: [{
+          author: 'user',
+          content: hasPrompt ? `Keywords/theme: ${keywords.value.trim()}` : 'Generate random story ideas.',
+        }],
+        persona: hasPrompt ? STORY_SUGGEST_KEYWORDS_PERSONA : STORY_SUGGEST_RANDOM_PERSONA,
+      }),
     });
 
     if (!response.ok) {

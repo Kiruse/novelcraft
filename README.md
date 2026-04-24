@@ -51,6 +51,33 @@ bun run db:studio    # Launch Drizzle Studio for inspection
 
 See [Database Schema](./docs/database-schema.md) for table definitions, relations, and query patterns.
 
+## LLM Passthrough Endpoint
+
+`POST /api/llm/prompt` — a generic, authenticated SSE endpoint that forwards a conversation to any configured model via `archetype.prompt`.
+
+**Why it exists.** Several features (story suggestions, vignette premises, etc.) previously had their own dedicated endpoints with nearly identical streaming logic. This single endpoint replaces them with a thin, reusable pass-through. It also enables **outsourcing** these calls to a third-party NovelCraft server for users who prefer to bring their own models — the request shape is stable and intentionally model-agnostic.
+
+**Authentication.** Requires a valid session (Better-Auth). Unauthenticated requests receive `401`.
+
+**Request body:**
+
+```jsonc
+{
+  // Model identifier resolvable by the server (see server/ai/models.ts)
+  "model": "zai-org/glm-4.6v-flash",
+
+  // Conversation history (at least one message required)
+  "messages": [
+    { "author": "user", "content": "Generate 3 story ideas about space exploration." }
+  ],
+
+  // System prompt / persona applied to the model
+  "persona": "You are a creative story idea generator…"
+}
+```
+
+**Response:** Server-Sent Events stream with `text`, `reasoning`, `done`, and `error` events.
+
 ## Documentation
 
 | Document | Description |

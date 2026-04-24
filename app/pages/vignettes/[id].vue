@@ -45,8 +45,8 @@
         <SuggestionPicker
           v-if="showPicker"
           ref="pickerRef"
-          endpoint="/api/vignettes/suggest"
-          :body="{ prompt: disposition }"
+          :persona="VIGNETTE_SUGGEST_PERSONA"
+          :prompt="suggestionPrompt"
           :known-tags="['title', 'genre', 'description']"
           :loading="suggesting"
           :suggestions="suggestions"
@@ -78,21 +78,12 @@
           />
         </div>
 
-        <div class="chat-area" ref="chatArea">
-          <div
-            v-for="msg in messages"
-            :key="msg.id"
-            :class="['chat-message', `chat-message--${msg.role}`]"
-          >
-            <div class="chat-message-content">{{ msg.contents }}</div>
-          </div>
-          <div v-if="streaming" class="chat-message chat-message--agent">
-            <div class="chat-message-content">
-              <span v-if="streamText">{{ streamText }}</span>
-              <span v-else class="typing">Thinking...</span>
-            </div>
-          </div>
-        </div>
+        <StoryArea
+          ref="storyArea"
+          :messages="storyMessages"
+          :streaming="streaming"
+          :stream-text="streamText"
+        />
 
         <form class="chat-input" @submit.prevent="sendMessage">
           <input
@@ -114,7 +105,10 @@
 
 <script setup lang="ts">
 import type { VignetteShape } from '~/composables/useCurrentUser';
+import type { StoryMessage } from '~/components/StoryArea.vue';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
+import { toStoryMessages } from '~/utils/chatMessages';
+import { unindent } from '@stegakir/aikit/utils';
 
 interface VignetteMessageShape {
   id: number;
@@ -125,6 +119,22 @@ interface VignetteMessageShape {
 }
 
 const route = useRoute();
+
+const VIGNETTE_SUGGEST_PERSONA = unindent(`
+  You are a creative story premise generator for quick interactive vignettes.
+  The user will provide a disposition — either a few keywords, a theme, or a full paragraph
+  describing the kind of story they want to experience.
+
+  Generate exactly 3 diverse story suggestions. Each must have a unique genre and tone.
+  For each suggestion, output a <suggestion> block with these tags inside:
+    <title> — a short, catchy title (3-6 words)</title>
+    <genre> — the genre</genre>
+    <description> — a vivid 2-3 sentence premise that sets the scene and ends with a hook.
+    Write descriptions in second person ("You..."). Make them evocative and specific.</description>
+
+  Output ONLY the <suggestion> blocks with no other text.
+`);
+
 const id = computed(() => route.params.id as string);
 
 const { data, refresh: refreshVignette } = await useFetch<{
@@ -136,6 +146,16 @@ const { data, refresh: refreshVignette } = await useFetch<{
 const vignette = computed(() => data.value?.vignette);
 const activeSessionId = computed(() => data.value?.session?.id ?? null);
 const messages = ref<VignetteMessageShape[]>([]);
+
+// Map internal messages to StoryMessage format for StoryArea
+const storyMessages = computed<StoryMessage[]>(() => toStoryMessages(messages.value));
+
+/** User prompt text for the suggestion picker. */
+const suggestionPrompt = computed(() =>
+  disposition.value.trim()
+    ? `Here is my disposition:\n\n${disposition.value.trim()}\n\nGenerate 3 story suggestions based on this.`
+    : 'Generate 3 random creative story suggestions for interactive vignettes. Surprise me with variety.',
+);
 
 // Initialize messages from server data
 watch(() => data.value?.messages, (msgs) => {
@@ -268,7 +288,8 @@ async function lockIn() {
 const streaming = ref(false);
 const streamText = ref('');
 const input = ref('');
-const chatArea = ref<HTMLElement | null>(null);
+const chatArea = ref<{ scrollToBottom: () => void } | null>(null);
+const storyArea = ref<{ scrollToBottom: () => void } | null>(null);
 
 /** Consume an SSE stream, only accumulating 'text' events into streamText. */
 async function consumeTextStream(response: Response): Promise<string> {
@@ -365,9 +386,7 @@ async function sendMessage() {
 }
 
 function scrollToBottom() {
-  if (chatArea.value) {
-    chatArea.value.scrollTop = chatArea.value.scrollHeight;
-  }
+  storyArea.value?.scrollToBottom();
 }
 </script>
 
@@ -573,44 +592,6 @@ function scrollToBottom() {
 .game-title--input::placeholder {
   color: var(--text-2);
   opacity: 0.5;
-}
-
-.chat-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--size-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--size-3);
-}
-
-.chat-message {
-  max-inline-size: 80%;
-  border-radius: var(--radius-3);
-  padding: var(--size-3) var(--size-4);
-  line-height: var(--font-lineheight-4);
-  white-space: pre-wrap;
-}
-
-.chat-message--user {
-  align-self: flex-end;
-  background: var(--brand-gradient);
-  color: var(--gray-0);
-}
-
-.chat-message--agent {
-  align-self: flex-start;
-  background: var(--surface-2);
-  color: var(--text-1);
-}
-
-.chat-message-content {
-  font-size: var(--font-size-2);
-}
-
-.typing {
-  font-style: italic;
-  opacity: 0.7;
 }
 
 .chat-input {
