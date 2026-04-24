@@ -1,10 +1,12 @@
 import { relations } from "drizzle-orm";
-import { pgTable, serial, text, integer, timestamp, jsonb, index, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, jsonb, index, pgEnum, uniqueIndex, boolean } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const messageRoleEnum = pgEnum("message_role", ["system", "agent", "user", "toolcall"]);
+
+// ─── Table definitions (must come before relations) ───
 
 export const stories = pgTable(
   "stories",
@@ -19,6 +21,7 @@ export const stories = pgTable(
     description: text("description"),
     coverArt: text("cover_art"),
     genre: text("genre"),
+    isVignette: boolean("is_vignette").notNull().default(false),
     modules: jsonb("modules").notNull().$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -27,7 +30,6 @@ export const stories = pgTable(
       .notNull(),
   },
   (table) => [uniqueIndex("stories_author_story_version_idx").on(table.authorId, table.storyId, table.version)],
-
 );
 
 export const gameSessions = pgTable(
@@ -78,6 +80,8 @@ export const gameSessionMessages = pgTable(
   (table) => [index("game_session_messages_session_created_idx").on(table.gameSessionId, table.createdAt)]
 );
 
+// ─── Relations ───
+
 export const storyRelations = relations(stories, ({ one, many }) => ({
   author: one(user, {
     fields: [stories.authorId],
@@ -113,12 +117,11 @@ export const gameSessionMessageRelations = relations(gameSessionMessages, ({ one
   }),
 }));
 
+// ─── Validation schemas ───
+
 export const storyModuleVal = z.record(z.string(), z.unknown());
 
 export const insertStorySchema = createInsertSchema(stories);
-
 export const insertGameSessionSchema = createInsertSchema(gameSessions);
-
 export const insertModuleRuntimeSchema = createInsertSchema(moduleRuntime);
-
 export const insertGameSessionMessageSchema = createInsertSchema(gameSessionMessages);

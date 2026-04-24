@@ -47,6 +47,29 @@
         </NuxtLink>
       </nav>
 
+      <!-- Vignettes -->
+      <div v-if="(expanded || isMobile) && user" class="sidebar-section">
+        <h3 class="sidebar-section-title">Vignettes</h3>
+        <button class="sidebar-new-btn" @click="createVignette">
+          New
+        </button>
+        <div v-if="recentVignettes.length > 0" class="sidebar-sessions">
+          <NuxtLink
+            v-for="v in recentVignettes"
+            :key="v.id"
+            :to="`/vignettes/${v.id}`"
+            class="sidebar-session"
+            @click="closeDrawer"
+          >
+            <span class="session-dot session-dot--vignette" />
+            <span class="session-title">{{ v.title ?? 'Untitled Vignette' }}</span>
+          </NuxtLink>
+        </div>
+        <NuxtLink to="/vignettes" class="sidebar-more" @click="closeDrawer">
+          All vignettes →
+        </NuxtLink>
+      </div>
+
       <!-- Sessions -->
       <div v-if="(expanded || isMobile) && user" class="sidebar-section">
         <h3 class="sidebar-section-title">Recent sessions</h3>
@@ -147,13 +170,14 @@
 import { authClient } from '~/composables/useAuthClient';
 import type { UserShape } from '~/composables/useCurrentUser';
 import { useCurrentUser } from '~/composables/useCurrentUser';
+import type { VignetteShape } from '~/composables/useCurrentUser';
 import { HomeOutlined, BuildOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons-vue';
 
 const props = defineProps<{
   user: UserShape | null;
   sessions: Array<{
     id: number;
-    story: { id: number; storyId: string; title: string; version: number; author: { name: string } };
+    story: { id: number; storyId: string; title: string; version: number; isVignette: boolean; author: { name: string } };
   }>;
   authorStories: Array<{
     id: number;
@@ -163,6 +187,21 @@ const props = defineProps<{
   }>;
 }>();
 
+const { recentVignettes } = useCurrentUser();
+
+async function createVignette() {
+  try {
+    const res = await $fetch<{ vignette: { id: number } }>('/api/vignettes', {
+      method: 'POST',
+      body: { disposition: '' },
+    });
+    closeDrawer();
+    await navigateTo(`/vignettes/${res.vignette.id}`);
+  } catch (e) {
+    console.error('Failed to create vignette', e);
+  }
+}
+
 const MOBILE_BREAKPOINT = 768;
 
 const expanded = ref(true);
@@ -170,8 +209,9 @@ const drawerOpen = ref(false);
 const accountOpen = ref(false);
 const isMobile = ref(false);
 
-const regularSessions = computed(() => props.sessions.filter(s => s.story.version > 0));
-const testSessions = computed(() => props.sessions.filter(s => s.story.version === 0));
+const nonVignetteSessions = computed(() => props.sessions.filter(s => !s.story.isVignette));
+const regularSessions = computed(() => nonVignetteSessions.value.filter(s => s.story.version > 0));
+const testSessions = computed(() => nonVignetteSessions.value.filter(s => s.story.version === 0));
 
 function toggle() {
   if (isMobile.value) {
@@ -422,6 +462,41 @@ onUnmounted(() => {
 
 .session-dot--story {
   background: var(--green-5);
+}
+
+.session-dot--vignette {
+  background: var(--violet-5);
+}
+
+.sidebar-more {
+  display: block;
+  font-size: var(--font-size-0);
+  color: var(--indigo-6);
+  text-decoration: none;
+  padding: var(--size-2) var(--size-3);
+  font-weight: var(--font-weight-5);
+}
+
+.sidebar-more:hover {
+  text-decoration: underline;
+}
+
+.sidebar-new-btn {
+  margin-block-start: var(--size-2);
+  inline-size: 100%;
+  padding: var(--size-2) var(--size-3);
+  border-radius: var(--radius-2);
+  background: var(--surface-3);
+  color: var(--text-1);
+  border: var(--border-size-1) solid var(--surface-4);
+  font-size: var(--font-size-1);
+  font-weight: var(--font-weight-5);
+  cursor: pointer;
+  transition: background var(--animation-duration, 0.15s) var(--ease-2);
+}
+
+.sidebar-new-btn:hover {
+  background: var(--surface-4);
 }
 
 .session-title {

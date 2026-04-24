@@ -149,13 +149,13 @@ const {
 
 const inspireRef = ref<{ open: () => void } | null>(null);
 
-function applySuggestion(s: { storyId: string; title: string; genre: string; description: string }) {
-  if (!props.storyIdDisabled) {
+function applySuggestion(s: Record<string, string>) {
+  if (!props.storyIdDisabled && s.storyId) {
     form.storyId = s.storyId;
   }
-  form.title = s.title;
-  form.genre = s.genre;
-  form.description = s.description;
+  if (s.title) form.title = s.title;
+  if (s.genre) form.genre = s.genre;
+  if (s.description) form.description = s.description;
 }
 
 async function onSaveOrTest() {

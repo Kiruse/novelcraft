@@ -9,42 +9,45 @@
  * - `onComplete` fires on `</suggestion>` — card is done
  */
 
+export type TagName = string;
+
 export interface ParsedSuggestion {
-  storyId: string;
-  title: string;
-  genre: string;
-  description: string;
+  [field: string]: string;
 }
-
-type TagName = 'storyId' | 'title' | 'genre' | 'description';
-
-const KNOWN_TAGS: ReadonlySet<string> = new Set(['storyId', 'title', 'genre', 'description']);
 
 /** Match an opening tag like `< tagName >`, capturing the tag name. */
 const OPEN_TAG_RE = /^<\s*(\w+)\s*>/;
 /** Match a closing tag like `</ tagName >`, capturing the tag name. */
 const CLOSE_TAG_RE = /^<\/\s*(\w+)\s*>/;
 
+const DEFAULT_KNOWN_TAGS: ReadonlySet<string> = new Set(['storyId', 'title', 'genre', 'description']);
+
+export interface SuggestionParserOptions {
+  /** Set of tag names to parse inside <suggestion>. Defaults to storyId, title, genre, description. */
+  knownTags?: ReadonlySet<string>;
+  onOpen: (index: number) => void;
+  onField: (index: number, field: string, value: string) => void;
+  onComplete: (index: number, suggestion: ParsedSuggestion) => void;
+}
+
 export class SuggestionParser {
   private buf = '';
   private current: Partial<ParsedSuggestion> | null = null;
-  private activeTag: TagName | null = null;
+  private activeTag: string | null = null;
   /** Accumulated content for the currently active tag. */
   private activeAccumulated = '';
   private index = 0;
+  private knownTags: ReadonlySet<string>;
 
   readonly onOpen: (index: number) => void;
-  readonly onField: (index: number, field: TagName, value: string) => void;
+  readonly onField: (index: number, field: string, value: string) => void;
   readonly onComplete: (index: number, suggestion: ParsedSuggestion) => void;
 
-  constructor(callbacks: {
-    onOpen: (index: number) => void;
-    onField: (index: number, field: TagName, value: string) => void;
-    onComplete: (index: number, suggestion: ParsedSuggestion) => void;
-  }) {
-    this.onOpen = callbacks.onOpen;
-    this.onField = callbacks.onField;
-    this.onComplete = callbacks.onComplete;
+  constructor(options: SuggestionParserOptions) {
+    this.knownTags = options.knownTags ?? DEFAULT_KNOWN_TAGS;
+    this.onOpen = options.onOpen;
+    this.onField = options.onField;
+    this.onComplete = options.onComplete;
   }
 
   push(text: string): void {
@@ -116,7 +119,7 @@ export class SuggestionParser {
       // Try closing tag first (e.g. </ suggestion >)
       const closeMatch = this.buf.match(CLOSE_TAG_RE);
       if (closeMatch && closeMatch[1] && closeMatch[1].trim().toLowerCase() === 'suggestion') {
-        if (this.current && this.current.storyId && this.current.title && this.current.genre && this.current.description) {
+        if (this.current) {
           this.onComplete(this.index, this.current as ParsedSuggestion);
         }
         this.current = null;
@@ -135,8 +138,8 @@ export class SuggestionParser {
       }
 
       // Known content tag
-      if (openMatch && openMatch[1] && KNOWN_TAGS.has(openMatch[1].trim())) {
-        this.activeTag = openMatch[1].trim() as TagName;
+      if (openMatch && openMatch[1] && this.knownTags.has(openMatch[1].trim())) {
+        this.activeTag = openMatch[1].trim();
         this.activeAccumulated = '';
         this.buf = this.buf.slice(openMatch[0].length);
         continue;

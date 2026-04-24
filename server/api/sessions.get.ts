@@ -24,6 +24,7 @@ export default defineEventHandler(async (event) => {
           coverArt: true,
           genre: true,
           version: true,
+          isVignette: true,
         },
         with: {
           author: {

@@ -1,0 +1,1 @@
+- [ ] `/remind` & `/steer` chat commands (which do the same thing) to allow the user/player to inject a custom system reminder into their prompt, allowing them to remind the agent of a certain past event that they would like the agent to consider, effectively steering the direction. `/steer` should thus just be an alias for `/remind`.
