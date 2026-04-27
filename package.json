@@ -26,6 +26,7 @@
     "drizzle-kit": "^0.31.9",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "^0.8.3",
+    "marked": "^18.0.2",
     "nodemailer": "^8.0.5",
     "nuxt": "^4.3.1",
     "open-props": "^1.7.23",

@@ -70,6 +70,24 @@ novelcraft/
 - To add a new model: add an entry to the `models` map, then call `resolveModel('your-model-id')`
 - To use a model: `import { resolveModel } from '#server/ai/models'; const model = resolveModel('meta-llama/llama-3.3-70b-instruct');`
 
+### Agent / LLM Integration — Separation of Concerns
+
+**All agent/LLM calls must be isolated from endpoint logic.**
+
+- **LLM calls** go through `POST /api/llm/prompt` — a single, generic streaming endpoint that takes `{ model, messages[], persona }` and returns SSE events
+- **CRUD endpoints** (vignettes, pages, sessions) handle only data persistence — no LLM calls
+- **Frontend orchestrates**: calls the CRUD endpoint to create/prepare data, then calls `/api/llm/prompt` to generate text, then calls the CRUD endpoint again to persist the result
+
+This separation enables:
+- **Bring-your-own-agent**: swap the LLM endpoint for a third-party server without touching CRUD logic
+- **Premium agent servers**: route requests to different backends based on plan/feature
+- **Testability**: mock the LLM endpoint independently of data logic
+
+**Prompts and personas** are defined in `shared/prompts.ts` so both frontend and server can access them.
+Always import from `#shared/prompts` & maintain them there as a single source of truth.
+
+**Important terminology:** A "persona" is ONLY the system prompt passed as the `persona` parameter to the LLM call — it defines who the agent *is*. The sole persona used throughout the app is `PERSONA_PLATFORM`. Everything else — scene instructions (`SYSTEM_VIGNETTE_OPEN`), steering notes (`SYSTEM_STEER`), editor requests (`SYSTEM_INSTRUCT`), page-level `system` fields — are **NOT** personas. They are regular messages with `author: 'system'` injected into the conversation history to guide the agent's behavior.
+
 ### TypeScript — No `as any`
 
 **Never use `as any` casts.** If a type incompatibility arises, fix the root cause:

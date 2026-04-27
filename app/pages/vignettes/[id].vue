@@ -5,10 +5,10 @@
     <template v-if="!activeSessionId">
       <div class="vignette-compose">
         <input
-          v-model="vignetteTitle"
+          v-model="title"
           class="vignette-title-input"
           placeholder="Untitled Vignette"
-          @blur="saveTitle"
+          @blur="updateTitle(($event.target as HTMLInputElement).value)"
           @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
         />
         <p class="vignette-hint">
@@ -52,13 +52,9 @@
           :suggestions="suggestions"
           :completed="completedSet"
           :selected-index="selectedIndex"
-          :reasoning="reasoning"
-          :error="suggestionError"
           @select="useSuggestion"
           @update:suggestions="suggestions = $event"
           @update:completed="completedSet = $event"
-          @update:reasoning="reasoning = $event"
-          @update:error="suggestionError = $event"
           @done="suggesting = false"
         />
       </div>
@@ -66,59 +62,59 @@
 
     <!-- Playing mode (session active) -->
     <template v-else>
-      <div class="vignette-game">
-        <div class="game-header">
-          <NuxtLink to="/" class="game-back">← Back</NuxtLink>
-          <input
-            v-model="vignetteTitle"
-            class="game-title game-title--input"
-            placeholder="Untitled Vignette"
-            @blur="saveTitle"
-            @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
-          />
-        </div>
-
-        <StoryArea
-          ref="storyArea"
-          :messages="storyMessages"
-          :streaming="streaming"
-          :stream-text="streamText"
-        />
-
-        <form class="chat-input" @submit.prevent="sendMessage">
-          <input
-            v-model="input"
-            type="text"
-            placeholder="What do you do?"
-            :disabled="streaming"
-            class="chat-input-field"
-            autofocus
-          />
-          <button type="submit" :disabled="streaming || !input.trim()" class="chat-input-send">
-            Send
-          </button>
-        </form>
-      </div>
+      <Game
+        :pages="pages"
+        :title="title"
+        title-placeholder="Untitled Vignette"
+        :streaming="streaming"
+        :stream-text="streamText"
+        @prompt="onPrompt"
+        @update-title="updateTitle"
+        @update-page="onUpdatePage"
+      />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import type { VignetteShape } from '~/composables/useCurrentUser';
-import type { StoryMessage } from '~/components/StoryArea.vue';
+import type { GamePage } from '~/utils/msgUtils';
+import type { InputMode } from '~/components/Game.vue';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
-import { toStoryMessages } from '~/utils/chatMessages';
 import { unindent } from '@stegakir/aikit/utils';
+import {
+  PERSONA_PLATFORM,
+  SYSTEM_VIGNETTE_OPEN,
+  SYSTEM_STEER,
+  SYSTEM_INSTRUCT,
+} from '#shared/prompts';
+import { buildMessages, streamLlm } from '~/utils/llmHelpers';
 
-interface VignetteMessageShape {
+interface VignettePageShape {
   id: number;
   gameSessionId: number;
-  role: 'user' | 'agent' | 'system';
-  contents: string;
+  system: string | null;
+  prompt: string | null;
+  response: string | null;
   createdAt: string;
 }
 
+// IMPORTANT: DO NOT TOUCH THIS PAGE
+// Human is currently completely refactoring this page
+
 const route = useRoute();
+const id = computed(() => route.params.id as string);
+
+const disposition = ref('');
+const suggesting = ref(false);
+const showPicker = ref(false);
+const pickerRef = ref<{ generate: () => void } | null>(null);
+const suggestions = ref<Partial<ParsedSuggestion>[]>([]);
+const completedSet = ref<Set<number>>(new Set());
+const selectedSuggestion = ref<ParsedSuggestion | null>(null);
+const selectedIndex = ref<number | null>(null);
+const streaming = ref(false);
+const streamText = ref('');
 
 const VIGNETTE_SUGGEST_PERSONA = unindent(`
   You are a creative story premise generator for quick interactive vignettes.
@@ -135,56 +131,54 @@ const VIGNETTE_SUGGEST_PERSONA = unindent(`
   Output ONLY the <suggestion> blocks with no other text.
 `);
 
-const id = computed(() => route.params.id as string);
+const { refresh: refreshUserData } = useCurrentUser();
 
-const { data, refresh: refreshVignette } = await useFetch<{
+const { data, refresh: refreshData } = await useFetch<{
   vignette: VignetteShape;
   session: { id: number } | null;
-  messages: VignetteMessageShape[];
+  pages: VignettePageShape[];
 }>(`/api/vignettes/${id.value}`);
 
 const vignette = computed(() => data.value?.vignette);
+const title = ref(data.value?.vignette?.title ?? 'Untitled Vignette');
 const activeSessionId = computed(() => data.value?.session?.id ?? null);
-const messages = ref<VignetteMessageShape[]>([]);
+const pages = ref<GamePage[]>(
+  (data.value?.pages ?? []).map(p => ({
+    id: p.id,
+    system: p.system,
+    prompt: p.prompt,
+    response: p.response,
+  })),
+);
 
-// Map internal messages to StoryMessage format for StoryArea
-const storyMessages = computed<StoryMessage[]>(() => toStoryMessages(messages.value));
-
-/** User prompt text for the suggestion picker. */
 const suggestionPrompt = computed(() =>
   disposition.value.trim()
     ? `Here is my disposition:\n\n${disposition.value.trim()}\n\nGenerate 3 story suggestions based on this.`
     : 'Generate 3 random creative story suggestions for interactive vignettes. Surprise me with variety.',
 );
 
-// Initialize messages from server data
-watch(() => data.value?.messages, (msgs) => {
-  if (msgs) messages.value = [...msgs];
-}, { immediate: true });
-
-// --- Draft mode ---
-const disposition = ref('');
-const vignetteTitle = ref('');
-const suggesting = ref(false);
-const showPicker = ref(false);
-const pickerRef = ref<{ generate: () => void } | null>(null);
-const suggestions = ref<Partial<ParsedSuggestion>[]>([]);
-const completedSet = ref<Set<number>>(new Set());
-const reasoning = ref('');
-const suggestionError = ref('');
-const selectedSuggestion = ref<ParsedSuggestion | null>(null);
-const selectedIndex = ref<number | null>(null);
-
-// Initialize disposition and title from story
-watch(() => data.value?.vignette, (v) => {
-  if (v) {
-    disposition.value = v.description ?? '';
-    vignetteTitle.value = v.title ?? '';
-  }
-}, { immediate: true });
+// Whether the "Lock In" (disposition) button is enabled.
+const canLockIn = computed(() => {
+  return disposition.value.trim().length > 0 || selectedIndex.value !== null;
+});
 
 // Clear suggestion selection when user edits the textarea
 let programmaticDisposition = false;
+
+async function updateTitle(newTitle: string) {
+  newTitle = newTitle.trim() || 'Untitled Vignette';
+  title.value = newTitle;
+
+  try {
+    await $fetch(`/api/vignettes/${id.value}`, {
+      method: 'PATCH',
+      body: { title: newTitle },
+    });
+    await refreshUserData();
+  } catch (e) {
+    console.error('Failed to save title', e);
+  }
+}
 
 function onDispositionInput() {
   if (!programmaticDisposition && selectedIndex.value !== null) {
@@ -192,27 +186,6 @@ function onDispositionInput() {
     selectedIndex.value = null;
   }
 }
-
-const { refresh: refreshUserData } = useCurrentUser();
-
-async function saveTitle() {
-  const newTitle = vignetteTitle.value.trim() || 'Untitled Vignette';
-  vignetteTitle.value = newTitle;
-  try {
-    await $fetch(`/api/vignettes/${id.value}`, {
-      method: 'PATCH',
-      body: { title: newTitle },
-    });
-    await refreshVignette();
-    await refreshUserData();
-  } catch (e) {
-    console.error('Failed to save title', e);
-  }
-}
-
-const canLockIn = computed(() => {
-  return disposition.value.trim().length > 0 || selectedIndex.value !== null;
-});
 
 function requestSuggestion() {
   if (!showPicker.value) {
@@ -226,12 +199,10 @@ function requestSuggestion() {
 }
 
 function useSuggestion(suggestion: ParsedSuggestion) {
-  // Find the index of this suggestion in the array
   const idx = suggestions.value.findIndex(
     s => s.title === suggestion.title && s.description === suggestion.description,
   );
   if (selectedIndex.value === idx) {
-    // Deselect
     selectedSuggestion.value = null;
     selectedIndex.value = null;
   } else {
@@ -260,133 +231,279 @@ async function lockIn() {
     });
   }
 
-  // Start the game via SSE — creates a session and streams opening narration
   streaming.value = true;
   streamText.value = '';
 
+  // Optimistically add an empty page for the opening
+  const tempId = `temp-${Date.now()}`;
+  pages.value.push({ id: tempId, system: null, prompt: null, response: null });
+
   try {
-    const response = await fetch(`/api/vignettes/${id.value}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    // 1. Create session + page on server (no sessionId = creates new session)
+    const { sessionId, pageId } = await $fetch<{ sessionId: number; pageId: number }>(
+      `/api/vignettes/${id.value}/message`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+
+    await refreshData();
+
+    // 2. Generate opening via LLM
+    const context = vignette.value?.description
+      ? `Title: ${title.value}\n\nPremise:\n${vignette.value.description}`
+      : `Setup:\n${vignette.value?.description ?? ''}`;
+
+    const messages = [
+      { author: 'system', content: SYSTEM_VIGNETTE_OPEN },
+      { author: 'user', content: `Start the vignette based on this setup:\n\n${context}` },
+    ];
+
+    let fullText = '';
+    const streamGen = streamLlm({
+      persona: PERSONA_PLATFORM,
+      messages,
     });
+    for await (const chunk of streamGen) {
+      fullText += chunk;
+      streamText.value += chunk;
+    }
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // 3. Update local state
+    const idx = pages.value.findIndex(p => p.id === tempId);
+    if (idx !== -1) {
+      pages.value[idx] = {
+        id: pageId,
+        system: null,
+        prompt: null,
+        response: fullText,
+      };
+    }
 
-    const fullText = await consumeTextStream(response);
-    void fullText;
-
-    await refreshVignette();
+    // 4. Persist response
+    await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
+      method: 'PATCH',
+      body: { response: fullText },
+    });
   } catch (err) {
     console.error('Start failed:', err);
+    const idx = pages.value.findIndex(p => p.id === tempId);
+    if (idx !== -1) pages.value.splice(idx, 1);
   } finally {
     streaming.value = false;
     streamText.value = '';
   }
 }
 
-// --- Play mode ---
-const streaming = ref(false);
-const streamText = ref('');
-const input = ref('');
-const chatArea = ref<{ scrollToBottom: () => void } | null>(null);
-const storyArea = ref<{ scrollToBottom: () => void } | null>(null);
-
-/** Consume an SSE stream, only accumulating 'text' events into streamText. */
-async function consumeTextStream(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullText = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop()!;
-
-    for (const part of parts) {
-      const lines = part.split('\n');
-      const eventType = lines.find(l => l.startsWith('event: '))?.slice(7).trim();
-      const dataLine = lines.find(l => l.startsWith('data: '))?.slice(6) ?? '';
-      let data = '';
-      if (dataLine) {
-        try { data = JSON.parse(dataLine) as string; } catch { data = dataLine; }
-      }
-
-      if (eventType === 'text') {
-        fullText += data;
-        streamText.value += data;
-      }
-    }
+/** Dispatch prompt based on input mode. */
+function onPrompt(payload: { text: string; mode: InputMode; pageId: number | string | null }) {
+  switch (payload.mode) {
+    case 'steer':
+      return regeneratePage(payload.pageId, payload.text, 'steer');
+    case 'instruct':
+      return regeneratePage(payload.pageId, payload.text, 'instruct');
+    case 'write':
+    default:
+      return sendWrite(payload.text);
   }
-
-  return fullText;
 }
 
-async function sendMessage() {
-  const text = input.value.trim();
-  if (!text || streaming.value || !activeSessionId.value) return;
+/** /write — create a new page, generate via LLM, save. */
+async function sendWrite(text: string) {
+  if (streaming.value || !activeSessionId.value) return;
 
-  // Optimistically add user message
-  messages.value.push({
-    id: Date.now(),
-    gameSessionId: activeSessionId.value,
-    role: 'user',
-    contents: text,
-    createdAt: new Date().toISOString(),
+  const isWriteMore = !text;
+  const systemNote = isWriteMore ? 'Continue the story — write more.' : null;
+
+  // Optimistically add a new page
+  const tempId = `temp-${Date.now()}`;
+  pages.value.push({
+    id: tempId,
+    system: systemNote,
+    prompt: text || null,
+    response: null,
   });
-  input.value = '';
-
-  await nextTick();
-  scrollToBottom();
 
   streaming.value = true;
   streamText.value = '';
 
   try {
-    const response = await fetch(`/api/vignettes/${id.value}/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text, sessionId: activeSessionId.value }),
+    // 1. Create page on server
+    const { pageId } = await $fetch<{ pageId: number }>(
+      `/api/vignettes/${id.value}/message`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          content: text || null,
+          system: systemNote,
+          sessionId: activeSessionId.value,
+        }),
+      },
+    );
+
+    // 2. Generate response via LLM
+    const messages = buildMessages({
+      title: title.value,
+      description: vignette.value?.description,
+      pages: pages.value,
+      lastPageOverride: { response: null },
+    });
+    let fullText = '';
+    const streamGen = streamLlm({
+      persona: PERSONA_PLATFORM,
+      messages,
+    });
+    for await (const chunk of streamGen) {
+      fullText += chunk;
+      streamText.value += chunk;
+    }
+
+    // 3. Update local state
+    const idx = pages.value.findIndex(p => p.id === tempId);
+    if (idx !== -1) {
+      pages.value[idx] = {
+        id: pageId,
+        system: systemNote,
+        prompt: text || null,
+        response: fullText,
+      };
+    }
+
+    // 4. Persist response
+    await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
+      method: 'PATCH',
+      body: { response: fullText },
+    });
+  } catch (err) {
+    console.error('Message failed:', err);
+    const idx = pages.value.findIndex(p => p.id === tempId);
+    if (idx !== -1) {
+      pages.value[idx] = {
+        ...pages.value[idx]!,
+        response: 'Something went wrong. Please try again.',
+      };
+    }
+  } finally {
+    streaming.value = false;
+    streamText.value = '';
+  }
+}
+
+/** /steer or /instruct — regenerate the current page via LLM. */
+async function regeneratePage(
+  pageId: number | string | null,
+  instruction: string,
+  mode: 'steer' | 'instruct',
+) {
+  if (!instruction || streaming.value || !activeSessionId.value || !pageId) return;
+
+  const pageIdx = pages.value.findIndex(p => p.id === pageId);
+  if (pageIdx === -1) return;
+
+  const oldPage = pages.value[pageIdx]!;
+
+  // For steer, optimistically append the instruction to the system field
+  if (mode === 'steer') {
+    const updatedSystem = oldPage.system
+      ? `${oldPage.system}\n${instruction}`
+      : instruction;
+    pages.value[pageIdx] = { ...oldPage, system: updatedSystem };
+  }
+
+  streaming.value = true;
+  streamText.value = '';
+
+  try {
+    const currentPage = pages.value[pageIdx]!;
+    const systemPage = currentPage.system;
+
+    // For steer, persist the updated system
+    if (mode === 'steer' && typeof pageId === 'number') {
+      await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
+        method: 'PATCH',
+        body: { system: systemPage },
+      });
+    }
+
+    // Build editor instruction message
+    const modeReminder = mode === 'steer' ? SYSTEM_STEER : SYSTEM_INSTRUCT;
+
+    const systemParts = [modeReminder];
+    if (systemPage) systemParts.push(systemPage);
+
+    const messages = buildMessages({
+      title: title.value,
+      description: vignette.value?.description,
+      pages: pages.value,
+      lastPageOverride: { response: null },
     });
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    messages.push({
+      author: 'system',
+      content: systemParts.join('\n\n'),
+    });
 
-    const fullText = await consumeTextStream(response);
+    let fullText = '';
+    const streamGen = streamLlm({
+      persona: PERSONA_PLATFORM,
+      messages,
+    });
+    for await (const chunk of streamGen) {
+      fullText += chunk;
+      streamText.value += chunk;
+    }
 
-    if (fullText.trim()) {
-      messages.value.push({
-        id: Date.now() + 1,
-        gameSessionId: activeSessionId.value,
-        role: 'agent',
-        contents: fullText,
-        createdAt: new Date().toISOString(),
+    // Update the page with the regenerated response
+    const currentIdx = pages.value.findIndex(p => p.id === pageId);
+    if (currentIdx !== -1) {
+      pages.value[currentIdx] = {
+        ...pages.value[currentIdx]!,
+        response: fullText || pages.value[currentIdx]!.response,
+      };
+    }
+
+    // Persist response
+    if (typeof pageId === 'number') {
+      await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
+        method: 'PATCH',
+        body: { response: fullText },
       });
     }
   } catch (err) {
-    console.error('Message failed:', err);
-    messages.value.push({
-      id: Date.now() + 1,
-      gameSessionId: activeSessionId.value,
-      role: 'agent',
-      contents: 'Something went wrong. Please try again.',
-      createdAt: new Date().toISOString(),
-    });
+    console.error('Regenerate failed:', err);
+    if (mode === 'steer') {
+      pages.value[pageIdx] = oldPage;
+    }
   } finally {
     streaming.value = false;
     streamText.value = '';
-    await nextTick();
-    scrollToBottom();
   }
 }
 
-function scrollToBottom() {
-  storyArea.value?.scrollToBottom();
+/** Handle page edits from the Game component. */
+async function onUpdatePage(payload: { pageId: number | string; response?: string; system?: string | null }) {
+  const idx = pages.value.findIndex(p => p.id === payload.pageId);
+  if (idx !== -1) {
+    const current = pages.value[idx]!;
+    pages.value[idx] = {
+      ...current,
+      ...(payload.response !== undefined ? { response: payload.response } : {}),
+      ...(payload.system !== undefined ? { system: payload.system } : {}),
+    };
+  }
+
+  if (typeof payload.pageId === 'number') {
+    const body: Record<string, string | null> = {};
+    if (payload.response !== undefined) body.response = payload.response;
+    if (payload.system !== undefined) body.system = payload.system;
+
+    try {
+      await $fetch(`/api/vignettes/${id.value}/pages/${payload.pageId}`, {
+        method: 'PATCH',
+        body,
+      });
+    } catch (e) {
+      console.error('Failed to save page edit', e);
+    }
+  }
 }
 </script>
 
@@ -534,116 +651,5 @@ function scrollToBottom() {
 .btn--sm {
   padding: var(--size-2) var(--size-5);
   font-size: var(--font-size-1);
-}
-
-/* --- Game mode --- */
-
-.vignette-game {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  block-size: 100%;
-}
-
-.game-header {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4);
-  padding: var(--size-4) var(--size-6);
-  border-block-end: var(--border-size-1) solid var(--surface-3);
-}
-
-.game-back {
-  font-size: var(--font-size-2);
-  color: var(--text-2);
-  text-decoration: none;
-}
-
-.game-back:hover {
-  color: var(--text-1);
-}
-
-.game-title {
-  font-size: var(--font-size-4);
-  font-weight: var(--font-weight-6);
-}
-
-.game-title--input {
-  background: none;
-  border: var(--border-size-1) solid transparent;
-  border-radius: var(--radius-2);
-  padding: var(--size-1) var(--size-2);
-  color: var(--text-1);
-  transition: border-color var(--animation-duration, 0.15s) var(--ease-2),
-    background var(--animation-duration, 0.15s) var(--ease-2);
-}
-
-.game-title--input:hover {
-  border-color: var(--surface-4);
-}
-
-.game-title--input:focus {
-  outline: none;
-  border-color: var(--indigo-6);
-  background: var(--surface-2);
-}
-
-.game-title--input::placeholder {
-  color: var(--text-2);
-  opacity: 0.5;
-}
-
-.chat-input {
-  display: flex;
-  gap: var(--size-2);
-  padding: var(--size-4) var(--size-6);
-  border-block-start: var(--border-size-1) solid var(--surface-3);
-}
-
-.chat-input-field {
-  flex: 1;
-  border-color: var(--surface-4);
-  border-radius: var(--radius-2);
-}
-
-.chat-input-field:focus {
-  border-color: var(--indigo-6);
-}
-
-.chat-input-field:disabled {
-  opacity: 0.6;
-}
-
-.chat-input-send {
-  padding: var(--size-3) var(--size-6);
-  background: var(--brand-gradient);
-  color: var(--gray-0);
-  border: none;
-  border-radius: var(--radius-2);
-  font-size: var(--font-size-2);
-  font-weight: var(--font-weight-6);
-  cursor: pointer;
-}
-
-.chat-input-send:hover:not(:disabled) {
-  transform: translateY(calc(var(--size-px-1) * -1));
-}
-
-.chat-input-send:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/* --- Transitions --- */
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity var(--animation-duration, 0.2s) var(--ease-2);
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
 }
 </style>

@@ -60,12 +60,8 @@ const props = defineProps<{
   suggestions: Partial<ParsedSuggestion>[];
   /** Set of completed suggestion indices. */
   completed: Set<number>;
-  /** Accumulated reasoning text. */
-  reasoning: string;
   /** Index of the currently selected suggestion, or null. */
   selectedIndex: number | null;
-  /** Error message, if any. */
-  error: string;
 }>();
 
 const emit = defineEmits<{
@@ -77,14 +73,16 @@ const emit = defineEmits<{
   done: [];
 }>();
 
+const reasoning = ref('');
 const showReasoning = ref(false);
+const error = ref('');
 
 function clear() {
   emit('update:suggestions', []);
   emit('update:completed', new Set());
   emit('update:reasoning', '');
-  emit('update:error', '');
   showReasoning.value = false;
+  error.value = '';
 }
 
 async function generate() {
@@ -123,19 +121,19 @@ async function generate() {
     });
 
     if (!response.ok) {
-      emit('update:error', `Failed to generate suggestions (${response.status})`);
+      emit('update:error', error.value = `Failed to generate suggestions (${response.status})`);
       return;
     }
 
     const reader = response.body?.getReader();
     if (!reader) {
-      emit('update:error', 'No response stream');
+      emit('update:error', error.value = 'No response stream');
       return;
     }
 
     const decoder = new TextDecoder();
     let buffer = '';
-    let localReasoning = '';
+    reasoning.value = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -156,22 +154,22 @@ async function generate() {
         }
 
         if (eventType === 'error') {
-          emit('update:error', data);
+          emit('update:error', error.value = data);
           break;
         }
         if (eventType === 'done') break;
         if (eventType === 'text') {
           parser.push(data);
         } else if (eventType === 'reasoning') {
-          localReasoning += data;
-          emit('update:reasoning', localReasoning);
+          reasoning.value += data;
+          emit('update:reasoning', reasoning.value);
         }
       }
     }
 
     parser.finish();
   } catch (e: unknown) {
-    emit('update:error', e instanceof Error ? e.message : 'Failed to generate suggestions');
+    emit('update:error', error.value = e instanceof Error ? e.message : 'Failed to generate suggestions');
   } finally {
     emit('done');
   }

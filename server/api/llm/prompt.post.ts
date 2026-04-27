@@ -30,7 +30,11 @@ export default defineEventHandler(async (event) => {
   const body = await readBody(event);
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid request body', data: parsed.error.flatten() });
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Invalid request body',
+      data: z.treeifyError(parsed.error),
+    });
   }
 
   const { model: modelId, messages: history, persona } = parsed.data;

@@ -28,13 +28,13 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 403, statusMessage: 'Not your vignette' });
   }
 
-  // Load latest game session (if any) with its messages
+  // Load latest game session (if any) with its pages
   const gameSession = await db.query.gameSessions.findFirst({
     where: eq(gameSessions.storyId, story.id),
     orderBy: desc(gameSessions.updatedAt),
     with: {
-      messages: {
-        orderBy: (msg, { asc }) => [asc(msg.createdAt)],
+      pages: {
+        orderBy: (p, { asc }) => [asc(p.createdAt)],
       },
     },
   });
@@ -42,6 +42,6 @@ export default defineEventHandler(async (event) => {
   return {
     vignette: story,
     session: gameSession ?? null,
-    messages: gameSession?.messages ?? [],
+    pages: gameSession?.pages ?? [],
   };
 });

@@ -7,4 +7,8 @@
 /* Brand gradient — used across buttons, placeholders, etc. */
 :root {
   --brand-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+
+  /* Extra muted text tiers (dimmer than Open Props --text-1 / --text-2) */
+  --text-3: oklch(from var(--text-2) l c h / 0.6);
+  --text-4: oklch(from var(--text-2) l c h / 0.35);
 }

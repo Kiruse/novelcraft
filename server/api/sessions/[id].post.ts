@@ -20,7 +20,6 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Session ID is required' });
   }
 
-  // Verify the session belongs to this user
   const session = await db.query.gameSessions.findFirst({
     where: eq(gameSessions.id, parseInt(sessionId)),
   });
@@ -39,6 +38,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Invalid message content' });
   }
 
+  // TODO: Reimplement using POST /api/llm/prompt — see AGENTS.md
   const response = await promptGameAgent(session.id, parsed.data.content);
 
   return { response };

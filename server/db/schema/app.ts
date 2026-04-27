@@ -65,6 +65,8 @@ export const moduleRuntime = pgTable(
   (table) => [index("module_runtime_session_idx").on(table.gameSessionId)]
 );
 
+// TODO: This was used in an older version of the app and is only here in case
+// this experiment fails and we have to revert back to messages. Remove once locked in.
 export const gameSessionMessages = pgTable(
   "game_session_messages",
   {
@@ -78,6 +80,21 @@ export const gameSessionMessages = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [index("game_session_messages_session_created_idx").on(table.gameSessionId, table.createdAt)]
+);
+
+export const gameSessionPages = pgTable(
+  "game_session_pages",
+  {
+    id: serial("id").primaryKey(),
+    gameSessionId: integer("game_session_id")
+      .notNull()
+      .references(() => gameSessions.id, { onDelete: "cascade" }),
+    system: text("system"),
+    prompt: text("prompt"),
+    response: text("response"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("game_session_pages_session_idx").on(table.gameSessionId, table.createdAt)]
 );
 
 // ─── Relations ───
@@ -101,11 +118,19 @@ export const gameSessionRelations = relations(gameSessions, ({ one, many }) => (
   }),
   moduleRuntime: many(moduleRuntime),
   messages: many(gameSessionMessages),
+  pages: many(gameSessionPages),
 }));
 
 export const moduleRuntimeRelations = relations(moduleRuntime, ({ one }) => ({
   gameSession: one(gameSessions, {
     fields: [moduleRuntime.gameSessionId],
+    references: [gameSessions.id],
+  }),
+}));
+
+export const gameSessionPageRelations = relations(gameSessionPages, ({ one }) => ({
+  gameSession: one(gameSessions, {
+    fields: [gameSessionPages.gameSessionId],
     references: [gameSessions.id],
   }),
 }));
@@ -125,3 +150,4 @@ export const insertStorySchema = createInsertSchema(stories);
 export const insertGameSessionSchema = createInsertSchema(gameSessions);
 export const insertModuleRuntimeSchema = createInsertSchema(moduleRuntime);
 export const insertGameSessionMessageSchema = createInsertSchema(gameSessionMessages);
+export const insertGameSessionPageSchema = createInsertSchema(gameSessionPages);
