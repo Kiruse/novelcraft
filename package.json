@@ -19,6 +19,9 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^2.0.41",
     "@ant-design/icons-vue": "^7.0.1",
+    "@journeyapps/wa-sqlite": "^1.7.0",
+    "@powersync/drizzle-driver": "^0.7.3",
+    "@powersync/web": "^1.37.2",
     "@stegakir/aikit": "^0.3.13",
     "ai": "^6.0.116",
     "better-auth": "^1.4.19",

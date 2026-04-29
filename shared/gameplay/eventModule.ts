@@ -1,52 +1,33 @@
 import z from 'zod';
 import { defineGameplayModule, toolOk, toolErr } from './gameplayModule';
 
-// --- Shared DSL rule schema (used by both conditions and triggers) ---
-
 const rule = z.object({
-  /** Natural language description of this rule. */
   description: z.string(),
-  /** Domain-specific script (dummy for now, later parsed by Langium DSL). */
   script: z.string(),
 });
 
-// --- Event schema ---
-
 const storyEvent = z.object({
-  /** Unique identifier for this event. */
   id: z.string(),
-  /** Human-readable name. */
   name: z.string(),
-  /** Description of what happens when this event fires. */
   description: z.string(),
-  /** Conditions under which this event can fire. All must be satisfied (AND). */
   conditions: z.array(rule),
-  /** Triggers that execute when this event fires. */
   triggers: z.array(rule),
 });
-
-// --- Config & State ---
 
 const configV1 = z.object({
   version: z.literal(1),
   events: z.array(storyEvent),
-  /** Boolean variables that can be referenced by conditions and updated by triggers. */
   variables: z.array(z.object({
     name: z.string(),
-    /** Default value. */
     defaultValue: z.boolean(),
   })),
 });
 
 const stateV1 = z.object({
   version: z.literal(1),
-  /** Current story day (1-indexed). */
   currentDay: z.number().int().min(1),
-  /** Current time within the day as "HH:MM", or null if not tracked. */
   currentTime: z.string().nullable(),
-  /** Current values of all variables. */
   variables: z.record(z.string(), z.boolean()),
-  /** IDs of events that have already fired (to prevent re-firing one-shot events). */
   firedEvents: z.array(z.string()),
 });
 
@@ -56,8 +37,6 @@ export const EventModule = defineGameplayModule({
   state: stateV1,
 
   getKnowledge: ({ config, state }) => {
-    // TODO: evaluate conditions via DSL interpreter
-    // For now, report all unfired events as potentially eligible
     const unfired = config.events.filter((e) => !state.firedEvents.includes(e.id));
 
     const trueVariables = Object.entries(state.variables)
@@ -119,7 +98,6 @@ export const EventModule = defineGameplayModule({
       const event = config.events.find((e) => e.id === eventId);
       if (!event) return toolErr(`Event "${eventId}" not found`);
 
-      // Apply trigger effects (dummy: just log, later will execute DSL)
       let newState = { ...state };
       for (const trigger of event.triggers) {
         const setMatch = trigger.script.match(/set\s+(\w+)\s+to\s+(true|false)/i);

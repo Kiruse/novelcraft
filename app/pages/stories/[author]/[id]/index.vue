@@ -190,12 +190,7 @@ watch(sessionParam, (id) => {
 async function startGame() {
   starting.value = true;
   try {
-    const res: any = await $fetch('/api/sessions', {
-      method: 'POST',
-      body: { storyId: story.value!.id },
-    });
-    activeSession.value = res.session;
-    navigateTo(`/stories/${author}/${storySlug}?session=${res.session.id}${isTestMode.value ? '&test=1' : ''}`);
+    console.warn('Story play mode is temporarily disabled (migrating to local-first architecture)');
   } catch (e) {
     console.error('Failed to start game', e);
   } finally {
@@ -215,11 +210,8 @@ async function sendMessage() {
   scrollToBottom();
 
   try {
-    const res: any = await $fetch(`/api/sessions/${activeSession.value.id}`, {
-      method: 'POST',
-      body: { content: text },
-    });
-    messages.value.push({ role: 'agent', content: res.response });
+    console.warn('Story play mode is temporarily disabled (migrating to local-first architecture)');
+    messages.value.push({ role: 'agent', content: 'Story play mode is temporarily disabled while we migrate to local-first architecture.' });
   } catch (e) {
     console.error('Failed to send message', e);
     messages.value.push({ role: 'agent', content: 'Something went wrong. Please try again.' });

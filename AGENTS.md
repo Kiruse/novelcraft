@@ -4,6 +4,15 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 **IMPORTANT:** Whenever you make changes, assert validity by running `bun run typecheck`, then summarize & document the changes with the `@docs-writer` subagent.
 
+## Architecture Overview
+
+NovelCraft uses a **client-side gameplay** architecture:
+
+- **Server API** is pure CRUD — auth, user data, and shareable story metadata only
+- **Gameplay is entirely client-side** — modules, LLM prompting, state management via PowerSync local SQLite
+- **Vignettes are purely client-side** — no server persistence, no shareable metadata
+- **LLM proxy** — `POST /api/llm/prompt` is the only server-side AI endpoint; it streams SSE events to the client
+
 ## Quick Reference
 
 ### Project Structure
@@ -13,14 +22,22 @@ novelcraft/
 ├── app/                    # Frontend (Nuxt 4 + Vue 3)
 │   ├── pages/              # File-based routing
 │   ├── components/         # Auto-imported Vue components
+│   ├── composables/        # Auto-imported Vue composables
+│   ├── plugins/            # Nuxt plugins (client-only: powersync)
 │   └── assets/css/         # Global styles
+├── shared/                 # Code shared between app and server
+│   ├── gameplay/           # Game modules (moved from server/gameplay/)
+│   ├── db/                 # Client-side SQLite schema (localSchema.ts)
+│   └── prompts.ts          # Prompts & personas (single source of truth)
 ├── scripts/                # Development scripts
 │   └── utils/              # Shared utilities for scripts
 ├── server/
 │   ├── api/                # API routes (file-based)
 │   ├── db/
-│   │   ├── schema/         # Drizzle schema definitions
+│   │   ├── schema/         # Drizzle schema definitions (PostgreSQL)
 │   │   └── migrations/     # Database migrations
+│   ├── ai/
+│   │   └── models.ts       # Model registry & resolveModel()
 │   └── auth.ts             # Better-Auth config
 ├── docs/                   # Comprehensive documentation
 ├── nuxt.config.ts          # Nuxt configuration
@@ -42,7 +59,10 @@ novelcraft/
 | API Routes | `server/api/` | `[resource].[method].ts` |
 | Pages | `app/pages/` | `[route].vue`, `[param].vue` for dynamic |
 | Components | `app/components/` | PascalCase `.vue`, auto-imported |
-| Schema | `server/db/schema/` | Separate files: `auth.ts`, `app.ts`, `placeholder.ts` |
+| Composables | `app/composables/` | `use*.ts`, auto-imported |
+| Gameplay Modules | `shared/gameplay/` | Named exports, barrel via `index.ts` |
+| Local DB Schema | `shared/db/` | Drizzle SQLite tables in `localSchema.ts` |
+| Server Schema | `server/db/schema/` | Separate files: `auth.ts`, `app.ts` |
 
 **Detailed docs:** [Code Conventions](./docs/code-conventions.md)
 
@@ -53,12 +73,14 @@ novelcraft/
 | Alias | Resolves to | Use in |
 |-------|------------|----------|
 | `~/` or `@/` | `app/` | App code (pages, components, composables) |
-| `#server/` | `server/` | Server code (API routes, plugins, gameplay) |
+| `#server/` | `server/` | Server code (API routes, plugins) |
 | `#shared/` | `shared/` | Shared code (from both app and server) |
 | `~~/` | Project root | Escape hatch (avoid unless necessary) |
 
 - **Node.js built-ins**: No extension required (`fs/promises`, `path`)
-- **Auto-imports**: Components, composables, `db` instance, Drizzle tables
+- **Auto-imports**: Components, composables, `db` instance (server), Drizzle tables
+
+**Important:** The `#server` import alias is only reliably available from code in `./server`. In `./shared`, use `~~/server` instead. In `./app`, neither `#server` nor `~~/server` should ever be used — this WILL BREAK THE APP.
 
 ### AI / Model Configuration
 
@@ -75,8 +97,9 @@ novelcraft/
 **All agent/LLM calls must be isolated from endpoint logic.**
 
 - **LLM calls** go through `POST /api/llm/prompt` — a single, generic streaming endpoint that takes `{ model, messages[], persona }` and returns SSE events
-- **CRUD endpoints** (vignettes, pages, sessions) handle only data persistence — no LLM calls
-- **Frontend orchestrates**: calls the CRUD endpoint to create/prepare data, then calls `/api/llm/prompt` to generate text, then calls the CRUD endpoint again to persist the result
+- **Server CRUD endpoints** handle only data persistence for shareable entities (stories, users) — no LLM calls
+- **Frontend orchestrates**: manages local SQLite state via PowerSync, calls `/api/llm/prompt` for text generation, persists results locally
+- **Vignette/gameplay state** lives entirely in client-side SQLite — never hits server API
 
 This separation enables:
 - **Bring-your-own-agent**: swap the LLM endpoint for a third-party server without touching CRUD logic
@@ -87,6 +110,39 @@ This separation enables:
 Always import from `#shared/prompts` & maintain them there as a single source of truth.
 
 **Important terminology:** A "persona" is ONLY the system prompt passed as the `persona` parameter to the LLM call — it defines who the agent *is*. The sole persona used throughout the app is `PERSONA_PLATFORM`. Everything else — scene instructions (`SYSTEM_VIGNETTE_OPEN`), steering notes (`SYSTEM_STEER`), editor requests (`SYSTEM_INSTRUCT`), page-level `system` fields — are **NOT** personas. They are regular messages with `author: 'system'` injected into the conversation history to guide the agent's behavior.
+
+### Client-Side Data — PowerSync + Drizzle SQLite
+
+Gameplay state (vignettes, pages, module runtime) is stored in **local SQLite** via PowerSync.
+
+- **Schema**: `shared/db/localSchema.ts` — defines `local_sessions`, `local_pages`, `local_module_runtime`
+- **Composable**: `app/composables/useLocalDb.ts` — wraps PowerSync client with Drizzle ORM, provides `db` instance
+- **Plugin**: `app/plugins/powersync.client.ts` — initializes PowerSync on client-side only
+- **Mode**: Local-only (no sync service yet)
+- **Dependencies**: `@powersync/web`, `@journeyapps/wa-sqlite`, `@powersync/drizzle-driver`
+
+```typescript
+// Access local database in any composable/component
+const db = useLocalDb();
+const sessions = await db.select().from(localSessions);
+```
+
+### LLM Streaming — useLlmStream
+
+All SSE streaming to `/api/llm/prompt` goes through `app/composables/useLlmStream.ts`.
+
+- `streamLlm(options)` — async generator yielding text chunks only
+- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`)
+- Replaces any inline SSE parsing — never duplicate SSE logic in components
+
+```typescript
+import { streamLlmFull } from '~/composables/useLlmStream';
+
+for await (const event of streamLlmFull({ persona, messages })) {
+  if (event.type === 'text') { /* append text */ }
+  if (event.type === 'error') { /* handle error */ }
+}
+```
 
 ### TypeScript — No `as any`
 
@@ -130,7 +186,7 @@ bun run dev
 bun run build
 ```
 
-### Database Operations
+### Database Operations (Server — PostgreSQL)
 
 ```bash
 # Generate migrations from schema changes
@@ -150,14 +206,12 @@ bun run db:studio
 
 ## Database Query Patterns
 
-**Note** that the `#server` import alias is only reliably available from code in the `./server` folder. In `./shared`, use `~~/server` instead. In `./app`, neither `#server` nor `~~/server` should ever be used as this WILL BREAK THE APP.
-
-### Basic Queries
+### Server Database (PostgreSQL)
 
 ```typescript
 import { db } from '#server/db';
 import { stories } from '#server/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 // Select all
 const allStories = await db.select().from(stories);
@@ -170,12 +224,34 @@ const storyWithAuthor = await db.query.stories.findFirst({
   where: eq(stories.id, 1),
   with: {
     author: true,
-    gameSessions: true,
   },
 });
 ```
 
-### Runtime Validation
+### Local Database (SQLite — Client-side)
+
+```typescript
+import { useLocalDb } from '~/composables/useLocalDb';
+import { localSessions, localPages } from '#shared/db/localSchema';
+import { eq } from 'drizzle-orm';
+
+const db = useLocalDb();
+
+// Query local sessions
+const sessions = await db.select().from(localSessions);
+
+// Insert a new local page
+await db.insert(localPages).values({
+  id: 'uuid',
+  sessionId: 'session-uuid',
+  system: 'system prompt',
+  prompt: 'user input',
+  response: 'AI response',
+  createdAt: new Date().toISOString(),
+});
+```
+
+### Runtime Validation (Server)
 
 ```typescript
 import { insertStorySchema } from '#server/db/schema/app';
@@ -218,11 +294,30 @@ export default defineEventHandler(async (event) => {
 
 ### Available Endpoints
 
+**Story CRUD:**
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/stories` | GET | List all stories (with author) |
-| `/api/stories/:id` | GET | Get story by ID (with author, modules) |
-| `/api/sessions` | GET | Get current user's recent sessions |
+| `/api/stories` | POST | Create a new story |
+| `/api/stories/[author]/[id]` | GET | Get story by author and ID |
+| `/api/stories/draft` | PUT | Update story draft |
+| `/api/stories/publish` | POST | Publish a story version |
+
+**LLM Proxy:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/llm/prompt` | POST | Stream LLM response via SSE |
+
+**Auth & User:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/[...all]` | ALL | Better-Auth handler (login, signup, etc.) |
+| `/api/user/me` | GET | Get current authenticated user |
+| `/api/user/redeem-author` | POST | Redeem author role |
+| `/api/user/stories` | GET | Get current user's stories |
 
 **Detailed docs:** [API Routes](./docs/api-routes.md)
 
@@ -230,11 +325,28 @@ export default defineEventHandler(async (event) => {
 
 ## Frontend Patterns
 
-### Data Fetching
+### Data Fetching (Server API)
 
 ```typescript
 const { data: stories } = await useFetch('/api/stories');
-const { data: sessions } = await useFetch('/api/sessions');
+const { data: user } = await useFetch('/api/user/me');
+```
+
+### Local Data Access (PowerSync SQLite)
+
+```typescript
+const db = useLocalDb();
+const { data: sessions } = await db.select().from(localSessions);
+```
+
+### LLM Streaming
+
+```typescript
+import { streamLlmFull } from '~/composables/useLlmStream';
+
+for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
+  // handle events
+}
 ```
 
 ### Route Parameters
@@ -264,22 +376,31 @@ defineProps<Props>();
 
 ## Agent Guidelines
 
-### When to Modify Schema
+### When to Modify Server Schema
 
-- New application features require data structures
-- Existing features need additional fields
-- Relations need to be added/modified
+- New shareable entities require server-side tables
+- Existing entities need additional persisted fields
+- Relations between shareable entities need to change
 
 **Process:**
 1. Update `server/db/schema/app.ts`
 2. Run `bun run db:generate` to create migration
 3. Run `bun run db:migrate` to apply changes
 
+### When to Modify Local Schema
+
+- Client-side gameplay state needs new tables or columns
+- Vignette or session data structures change
+
+**Process:**
+1. Update `shared/db/localSchema.ts`
+2. PowerSync will handle schema migration on next client initialization (local-only mode)
+
 ### When to Add an API Route
 
-- Frontend needs data not currently exposed
+- Frontend needs shareable data not currently exposed
 - New endpoints for external integrations
-- CRUD operations for new entities
+- CRUD operations for shareable entities
 
 **Process:**
 1. Create `[resource].[method].ts` in `server/api/`
@@ -299,16 +420,28 @@ defineProps<Props>();
 3. Use scoped styles to avoid conflicts
 4. Component is auto-imported (no imports needed)
 
+### When to Add a Composable
+
+- Shared reactive state or logic across components/pages
+- Wrapping external libraries (PowerSync, LLM streaming)
+- Data access patterns (local DB queries)
+
+**Process:**
+1. Create `use*.ts` file in `app/composables/`
+2. Export a composable function using Vue's `ref`/`computed`/`onMounted` etc.
+3. Composable is auto-imported (no imports needed)
+
 ---
 
 ## Package Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `dev` | Start development server |
+| `dev` | Start development server (with local mailpit) |
 | `build` | Build for production |
 | `generate` | Generate static site |
 | `preview` | Preview production build |
+| `typecheck` | Run TypeScript type checking |
 | `db:generate` | Generate Drizzle migrations |
 | `db:migrate` | Apply database migrations |
 | `db:push` | Push schema to database (dev) |
@@ -322,6 +455,6 @@ defineProps<Props>();
 |----------|-------------|
 | [Project Structure](./docs/project-structure.md) | Complete file organization and directory layout |
 | [Code Conventions](./docs/code-conventions.md) | Code styling, imports, patterns, and best practices |
-| [Database Schema](./docs/database-schema.md) | Table definitions, relations, and validation |
+| [Database Schema](./docs/database-schema.md) | Table definitions (server + local), relations, and validation |
 | [API Routes](./docs/api-routes.md) | Endpoint documentation and route creation patterns |
-| [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, and styling conventions |
+| [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, composables, and styling conventions |

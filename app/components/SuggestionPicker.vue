@@ -42,6 +42,8 @@
 import { SuggestionParser } from '~/utils/suggestionParser';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
 import Collapsible from '~/components/Collapsible.vue';
+import { DEFAULT_MODEL } from '#shared/prompts';
+import { streamLlmFull } from '~/composables/useLlmStream';
 
 export interface SuggestionPickerSuggestion extends ParsedSuggestion {}
 
@@ -110,60 +112,23 @@ async function generate() {
   });
 
   try {
-    const response = await fetch('/api/llm/prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: props.model ?? 'zai-org/glm-4.6v-flash',
-        messages: [{ author: 'user', content: props.prompt }],
-        persona: props.persona,
-      }),
+    const stream = streamLlmFull({
+      persona: props.persona,
+      messages: [{ author: 'user', content: props.prompt }],
+      model: props.model ?? DEFAULT_MODEL,
     });
 
-    if (!response.ok) {
-      emit('update:error', error.value = `Failed to generate suggestions (${response.status})`);
-      return;
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      emit('update:error', error.value = 'No response stream');
-      return;
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-    reasoning.value = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop()!;
-
-      for (const part of parts) {
-        const lines = part.split('\n');
-        const eventType = lines.find(l => l.startsWith('event: '))?.slice(7).trim();
-        const dataLine = lines.find(l => l.startsWith('data: '))?.slice(6) ?? '';
-        let data = '';
-        if (dataLine) {
-          try { data = JSON.parse(dataLine) as string; } catch { data = dataLine; }
-        }
-
-        if (eventType === 'error') {
-          emit('update:error', error.value = data);
-          break;
-        }
-        if (eventType === 'done') break;
-        if (eventType === 'text') {
-          parser.push(data);
-        } else if (eventType === 'reasoning') {
-          reasoning.value += data;
-          emit('update:reasoning', reasoning.value);
-        }
+    for await (const event of stream) {
+      if (event.type === 'error') {
+        emit('update:error', error.value = event.data);
+        break;
+      }
+      if (event.type === 'done') break;
+      if (event.type === 'text') {
+        parser.push(event.data);
+      } else if (event.type === 'reasoning') {
+        reasoning.value += event.data;
+        emit('update:reasoning', reasoning.value);
       }
     }
 

@@ -2,6 +2,7 @@ import MapGraphConfig from '~/components/builder/MapGraphConfig.vue';
 import NpcConfig from '~/components/builder/NpcConfig.vue';
 import EventConfig from '~/components/builder/EventConfig.vue';
 import SystemPromptConfig from '~/components/builder/SystemPromptConfig.vue';
+import { registerStandardModules, getAllModules } from '#shared/gameplay';
 
 export interface StoryForm {
   storyId: string;
@@ -14,8 +15,10 @@ export interface StoryForm {
 export function useStoryBuilder() {
   const DEFAULT_MODULE_TYPES = ['system_prompt', 'event', 'npc'];
 
-  const { data: modulesData } = useFetch('/api/modules');
-  const registryModules = computed(() => modulesData.value?.modules ?? []);
+  registerStandardModules();
+  const registryModules = computed(() =>
+    [...getAllModules().values()].map(m => ({ type: m.type })),
+  );
 
   // --- Form state ---
 

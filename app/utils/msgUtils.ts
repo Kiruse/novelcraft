@@ -11,16 +11,6 @@ export interface GamePage {
   response: string | null;
 }
 
-/** Raw page shape coming from the API. */
-export interface RawPage {
-  id: number;
-  gameSessionId: number;
-  system: string | null;
-  prompt: string | null;
-  response: string | null;
-  createdAt: string;
-}
-
 /** Replace em dashes (and surrounding whitespace) with ` - `. */
 export function normalizeContent(text: string): string {
   return text.replace(/\s*—\s*/g, ' - ');

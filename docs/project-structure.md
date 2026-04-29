@@ -10,14 +10,51 @@ novelcraft/
 │   ├── app.vue                   # Root Vue component with NuxtPage
 │   ├── pages/                    # File-based routing
 │   │   ├── index.vue             # Discovery/home page
-│   │   └── stories/
-│   │       └── [id].vue          # Story detail page (dynamic route)
+│   │   ├── builder.vue           # Story builder page
+│   │   ├── settings.vue          # Settings page
+│   │   ├── stories/              # Published story pages
+│   │   │   └── [author]/
+│   │   │       └── [id].vue      # Story play page
+│   │   ├── vignettes/            # Client-side vignette pages
+│   │   │   ├── index.vue         # Vignette list (reads from local SQLite)
+│   │   │   └── [id].vue          # Vignette play page (local SQLite)
+│   │   ├── auth/                 # Auth pages
+│   │   └── builder/              # Story builder sub-pages
 │   ├── components/               # Reusable Vue components (auto-imported)
-│   │   ├── StoryCard.vue         # Story card component for display
-│   │   └── GameSessionCard.vue   # Game session card component
+│   │   ├── StoryCard.vue         # Story card component
+│   │   ├── AppSidebar.vue        # Navigation sidebar
+│   │   ├── Game.vue              # Main gameplay component
+│   │   ├── ChatArea.vue          # Chat/conversation display
+│   │   ├── GameDebugPanel.vue    # Gameplay debug panel
+│   │   ├── SuggestionPicker.vue  # AI suggestion picker (uses useLlmStream)
+│   │   ├── builder/              # Story builder components
+│   │   │   └── InspireDialog.vue # Inspiration dialog (uses useLlmStream)
+│   │   └── ...                   # Other UI components
+│   ├── composables/              # Vue composables (auto-imported)
+│   │   ├── useLocalDb.ts         # PowerSync + Drizzle SQLite wrapper
+│   │   ├── useLlmStream.ts       # Centralized SSE streaming client
+│   │   ├── useStoryBuilder.ts    # Story builder logic
+│   │   ├── useCurrentUser.ts     # Current user state
+│   │   ├── useAuthClient.ts      # Auth client wrapper
+│   │   └── useToast.ts           # Toast notification system
+│   ├── plugins/                  # Nuxt plugins
+│   │   └── powersync.client.ts   # PowerSync initialization (client-only)
 │   └── assets/
 │       └── css/
-│           └── app.css           # Global CSS reset and base styles
+│           └── app.css           # Global CSS (Open Props + normalize)
+├── shared/                       # Code shared between app and server
+│   ├── gameplay/                 # Game modules (moved from server/gameplay/)
+│   │   ├── index.ts              # Barrel export
+│   │   ├── gameplayModule.ts     # Core gameplay logic
+│   │   ├── systemPromptModule.ts # System prompt handling
+│   │   ├── eventModule.ts        # Event system
+│   │   ├── npcModule.ts          # NPC management
+│   │   └── graphMapModule.ts     # Graph/map module
+│   ├── db/                       # Client-side SQLite schema
+│   │   ├── index.ts              # Barrel export
+│   │   └── localSchema.ts        # Drizzle SQLite tables
+│   ├── dsl/                      # Domain-specific language definitions
+│   └── prompts.ts                # Prompts & personas (single source of truth)
 ├── scripts/                      # CLI tools and utilities
 │   ├── generate.ts               # Commander CLI program for running generators
 │   ├── generators/               # Generator modules (scanned recursively)
@@ -29,25 +66,37 @@ novelcraft/
 ├── server/                       # Backend API and database
 │   ├── api/                      # API routes (file-based routing)
 │   │   ├── stories.get.ts        # GET /api/stories - List all stories
-│   │   ├── sessions.get.ts       # GET /api/sessions - Get current user's sessions
-│   │   └── stories/
-│   │       └── [id].get.ts       # GET /api/stories/:id - Get story by ID
+│   │   ├── stories.post.ts       # POST /api/stories - Create story
+│   │   ├── stories/
+│   │   │   ├── [author]/
+│   │   │   │   └── [id].get.ts   # GET /api/stories/:author/:id
+│   │   │   ├── draft.put.ts      # PUT /api/stories/draft
+│   │   │   └── publish.post.ts   # POST /api/stories/publish
+│   │   ├── llm/
+│   │   │   └── prompt.post.ts    # POST /api/llm/prompt - LLM proxy (SSE)
+│   │   ├── auth/
+│   │   │   └── [...all].ts       # Better-Auth catch-all handler
+│   │   └── user/
+│   │       ├── me.get.ts         # GET /api/user/me
+│   │       ├── redeem-author.post.ts
+│   │       └── stories.get.ts    # GET /api/user/stories
+│   ├── ai/
+│   │   └── models.ts             # Model registry & resolveModel()
 │   ├── db/                       # Database configuration and schema
 │   │   ├── index.ts              # Database connection and db instance export
 │   │   ├── schema/
 │   │   │   ├── index.ts          # Schema export point
 │   │   │   ├── auth.ts           # Better-Auth user tables
-│   │   │   ├── app.ts            # App-specific tables (stories, sessions, etc.)
+│   │   │   ├── app.ts            # App-specific tables (stories)
 │   │   │   └── placeholder.ts    # Placeholder tables
 │   │   └── migrations/           # Generated migration files
 │   └── auth.ts                   # Better-Auth configuration
 ├── docs/                         # Project documentation
-│   ├── project-structure.md     # This file
+│   ├── project-structure.md      # This file
 │   ├── code-conventions.md       # Code styling and conventions
-│   ├── generator-system.md       # CLI generator system documentation
-│   ├── database-schema.md        # Database tables and relations
+│   ├── database-schema.md        # Database tables and relations (server + local)
 │   ├── api-routes.md             # API endpoints documentation
-│   └── frontend-architecture.md  # Frontend pages and components
+│   └── frontend-architecture.md  # Frontend pages, components, and composables
 ├── nuxt.config.ts                # Nuxt configuration
 ├── package.json                  # Project dependencies and scripts
 ├── README.md                     # User-facing documentation
@@ -68,15 +117,49 @@ Contains the Nuxt 4 frontend application built with Vue 3.
 - File-based routing system
 - Each `.vue` file becomes a route
 - Dynamic routes use `[param].vue` syntax
+- Vignette pages use local SQLite instead of server API
 
 **`components/`**
 - Reusable Vue components
 - Auto-imported throughout the application
 - No manual imports required
+- Components using LLM streaming use `useLlmStream` composable
+
+**`composables/`**
+- Shared reactive logic wrapped in `use*.ts` functions
+- Auto-imported throughout the application
+- Key composables:
+  - `useLocalDb` — PowerSync + Drizzle SQLite wrapper
+  - `useLlmStream` — Centralized SSE streaming (never duplicate SSE parsing)
+  - `useStoryBuilder` — Story builder logic (imports modules from `#shared/gameplay`)
+
+**`plugins/`**
+- Nuxt plugins
+- `powersync.client.ts` — Client-only plugin that initializes PowerSync for local SQLite
 
 **`assets/css/`**
 - Global stylesheets
-- `app.css` includes CSS reset and base styles
+- `app.css` includes Open Props tokens and normalize reset
+
+### `shared/` - Shared Code
+
+Code shared between the frontend app and server.
+
+**`gameplay/`**
+- Game modules moved from `server/gameplay/`
+- Contains: `gameplayModule.ts`, `systemPromptModule.ts`, `eventModule.ts`, `npcModule.ts`, `graphMapModule.ts`
+- Barrel export via `index.ts`
+- Consumed by frontend composables (e.g., `useStoryBuilder` uses `getAllModules()`)
+
+**`db/`**
+- Client-side SQLite schema for PowerSync
+- `localSchema.ts` defines: `local_sessions`, `local_pages`, `local_module_runtime`
+- Barrel export via `index.ts`
+- Consumed by `useLocalDb` composable
+
+**`prompts.ts`**
+- Prompts and personas — single source of truth
+- Both frontend and server import from here
 
 ### `scripts/` - CLI Tools
 
@@ -104,15 +187,23 @@ Contains the server-side code, API routes, and database configuration.
 - File-based API routing
 - Pattern: `[resource]/[method].ts`
 - Dynamic routes use `[param].ts`
+- **Pure CRUD only** — auth, user data, shareable story metadata
+- No gameplay or session endpoints (those are client-side now)
+- `POST /api/llm/prompt` is the sole AI endpoint (LLM proxy)
+
+**`ai/`**
+- `models.ts` — Model registry with `resolveModel(name)` function
+- All models use `@ai-sdk/openai-compatible`
 
 **`db/`**
 - Database connection setup
 - Drizzle ORM schema definitions
 - Migration files
+- Server schema is minimal: auth tables + stories only
 
 **`schema/`**
 - `auth.ts` - Better-Auth tables (user, session, account)
-- `app.ts` - Application tables (stories, game_sessions, etc.)
+- `app.ts` - Application tables (stories only; gameplay tables removed)
 - `placeholder.ts` - Development placeholder tables
 - `index.ts` - Central schema export
 
@@ -124,14 +215,18 @@ Comprehensive project documentation for developers and contributors.
 
 ### API Routes
 - Pattern: `[resource].[method].ts` (e.g., `stories.get.ts`)
-- Dynamic routes: `[resource]/[param].[method].ts` (e.g., `stories/[id].get.ts`)
+- Dynamic routes: `[resource]/[param].[method].ts` (e.g., `stories/[author]/[id].get.ts`)
 
 ### Pages
 - Pattern: `[route].vue` (e.g., `index.vue`)
-- Dynamic routes: `[route]/[param].vue` (e.g., `stories/[id].vue`)
+- Dynamic routes: `[route]/[param].vue` (e.g., `vignettes/[id].vue`)
 
 ### Components
-- PascalCase: `StoryCard.vue`, `GameSessionCard.vue`
+- PascalCase: `StoryCard.vue`, `SuggestionPicker.vue`
+- Auto-imported, no manual imports needed
+
+### Composables
+- PascalCase with `use` prefix: `useLocalDb.ts`, `useLlmStream.ts`
 - Auto-imported, no manual imports needed
 
 ### Generators
@@ -141,7 +236,6 @@ Comprehensive project documentation for developers and contributors.
 ## Related Documentation
 
 - [Code Conventions](./code-conventions.md) - Styling guidelines and import patterns
-- [Generator System](./generator-system.md) - CLI tool usage and generator creation
-- [Database Schema](./database-schema.md) - Table definitions and relations
+- [Database Schema](./database-schema.md) - Table definitions and relations (server + local)
 - [API Routes](./api-routes.md) - Endpoint documentation and patterns
-- [Frontend Architecture](./frontend-architecture.md) - Pages, components, and styling
+- [Frontend Architecture](./frontend-architecture.md) - Pages, components, composables, and styling

@@ -28,10 +28,26 @@
 </template>
 
 <script setup lang="ts">
-import type { VignetteShape } from '~/composables/useCurrentUser';
+const db = useLocalDb();
+const { localSessions } = await import('#shared/db/localSchema');
+const { desc } = await import('drizzle-orm');
 
-const { data } = await useFetch<{ vignettes: VignetteShape[] }>('/api/vignettes');
-const allVignettes = computed(() => data.value?.vignettes ?? []);
+const allVignettes = ref<Array<{
+  id: string;
+  title: string;
+  description: string | null;
+  updatedAt: string;
+}>>([]);
+
+onMounted(async () => {
+  const rows = await db.select().from(localSessions).orderBy(desc(localSessions.updatedAt)).all();
+  allVignettes.value = rows.map(r => ({
+    id: r.id,
+    title: r.title,
+    description: r.description,
+    updatedAt: r.updatedAt,
+  }));
+});
 
 function formatDate(date: string): string {
   const d = new Date(date);

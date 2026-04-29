@@ -4,7 +4,6 @@ import { NPCModule } from './npcModule';
 import { EventModule } from './eventModule';
 import { SystemPromptModule } from './systemPromptModule';
 
-/** Register all standard gameplay modules. Call once at app startup. */
 export const registerStandardModules = () => {
   registerModule(SystemPromptModule);
   registerModule(EventModule);

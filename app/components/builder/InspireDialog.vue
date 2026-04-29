@@ -52,6 +52,8 @@
 import { SuggestionParser } from '~/utils/suggestionParser';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
 import { unindent } from '@stegakir/aikit/utils';
+import { DEFAULT_MODEL } from '#shared/prompts';
+import { streamLlmFull } from '~/composables/useLlmStream';
 
 const STORY_SUGGEST_RANDOM_PERSONA = unindent(`
   You are a creative story idea generator.
@@ -133,65 +135,25 @@ async function generate() {
 
   try {
     const hasPrompt = keywords.value.trim().length > 0;
-    const response = await fetch('/api/llm/prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'zai-org/glm-4.6v-flash',
-        messages: [{
-          author: 'user',
-          content: hasPrompt ? `Keywords/theme: ${keywords.value.trim()}` : 'Generate random story ideas.',
-        }],
-        persona: hasPrompt ? STORY_SUGGEST_KEYWORDS_PERSONA : STORY_SUGGEST_RANDOM_PERSONA,
-      }),
+    const stream = streamLlmFull({
+      persona: hasPrompt ? STORY_SUGGEST_KEYWORDS_PERSONA : STORY_SUGGEST_RANDOM_PERSONA,
+      messages: [{
+        author: 'user',
+        content: hasPrompt ? `Keywords/theme: ${keywords.value.trim()}` : 'Generate random story ideas.',
+      }],
     });
 
-    if (!response.ok) {
-      error.value = `Failed to generate suggestions (${response.status})`;
-      return;
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      error.value = 'No response stream';
-      return;
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // Parse SSE events (separated by blank lines)
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop()!;
-
-      for (const part of parts) {
-        const lines = part.split('\n');
-        const eventType = lines.find(l => l.startsWith('event: '))?.slice(7).trim();
-        let data = lines.find(l => l.startsWith('data: '))?.slice(6) ?? '';
-        data = data && JSON.parse(data) as string;
-
-        if (eventType === 'error') {
-          error.value = data;
-          console.error('[inspire] SSE error:', data);
-          break;
-        }
-        if (eventType === 'done') {
-          console.log('[inspire] SSE done');
-          break;
-        }
-        if (eventType === 'text') {
-          parser.push(data);
-        } else if (eventType === 'reasoning') {
-          reasoning.value += data;
-        } else {
-          console.warn('[inspire] unknown SSE event:', eventType, data.slice(0, 100));
-        }
+    for await (const event of stream) {
+      if (event.type === 'error') {
+        error.value = event.data;
+        console.error('[inspire] SSE error:', event.data);
+        break;
+      }
+      if (event.type === 'done') break;
+      if (event.type === 'text') {
+        parser.push(event.data);
+      } else if (event.type === 'reasoning') {
+        reasoning.value += event.data;
       }
     }
 

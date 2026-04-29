@@ -88,36 +88,8 @@ onMounted(() => {
 
 async function fetchDebug() {
   loading.value = true;
-  error.value = null;
-  try {
-    const res = await $fetch<{
-      sessionId: number;
-      modules: Record<string, {
-        config: unknown;
-        state: unknown;
-        knowledge: unknown;
-        tools: string[];
-      }>;
-    }>(`/api/sessions/${props.sessionId}/debug`);
-
-    // Add UI-only fields
-    const modules: Record<string, DebugModule> = {};
-    for (const [type, mod] of Object.entries(res.modules)) {
-      modules[type] = {
-        ...mod,
-        _open: true,
-        _patchPath: '',
-        _patchType: 'bool',
-        _patchValue: '',
-        _patching: false,
-      };
-    }
-    data.value = { modules };
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage ?? e?.message ?? 'Failed to load debug data';
-  } finally {
-    loading.value = false;
-  }
+  error.value = 'Debug panel is temporarily disabled (migrating to local-first architecture)';
+  loading.value = false;
 }
 
 function formatJson(val: unknown): string {
@@ -129,52 +101,7 @@ function formatJson(val: unknown): string {
 }
 
 async function patchState(moduleId: string, mod: DebugModule) {
-  const path = mod._patchPath.trim();
-  if (!path) return;
-
-  let value: unknown;
-  switch (mod._patchType) {
-    case 'bool': value = mod._patchValue === 'true'; break;
-    case 'number': value = Number(mod._patchValue); break;
-    case 'string': value = mod._patchValue; break;
-    case 'json':
-      try { value = JSON.parse(mod._patchValue); } catch {
-        alert('Invalid JSON'); return;
-      }
-      break;
-  }
-
-  // Build nested patch from dot-path: "a.b.c" → { a: { b: { c: value } } }
-  const patch: Record<string, unknown> = {};
-  const keys = path.split('.');
-  let current: Record<string, unknown> = patch;
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i]!;
-    if (i === keys.length - 1) {
-      current[key] = value;
-    } else {
-      current[key] = {};
-      current = current[key] as Record<string, unknown>;
-    }
-  }
-
-  mod._patching = true;
-  try {
-    const res = await $fetch<{
-      moduleId: string;
-      state: Record<string, unknown>;
-    }>(`/api/sessions/${props.sessionId}/debug`, {
-      method: 'PATCH',
-      body: { moduleId, patch },
-    });
-    mod.state = res.state;
-    // Refresh knowledge
-    await fetchDebug();
-  } catch (e: any) {
-    alert(e?.data?.statusMessage ?? e?.message ?? 'Patch failed');
-  } finally {
-    mod._patching = false;
-  }
+  alert('Debug panel is temporarily disabled (migrating to local-first architecture)');
 }
 </script>
 

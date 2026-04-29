@@ -1,11 +1,11 @@
 import { db } from "../db";
 import { stories } from "../db/schema";
-import { eq, sql, and } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 export default defineEventHandler(async (event) => {
   // Get latest published version of each story (excluding vignettes)
   const allStories = await db.query.stories.findMany({
-    where: and(sql`${stories.version} > 0`, eq(stories.isVignette, false)),
+    where: sql`${stories.version} > 0`,
     orderBy: (stories, { desc }) => [desc(stories.createdAt)],
     with: {
       author: {

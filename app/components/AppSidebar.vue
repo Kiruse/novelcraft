@@ -47,59 +47,28 @@
         </NuxtLink>
       </nav>
 
-      <!-- Vignettes -->
-      <div v-if="(expanded || isMobile) && user" class="sidebar-section">
+      <!-- Vignettes (always shown, reads from local DB) -->
+      <div v-if="expanded || isMobile" class="sidebar-section">
         <h3 class="sidebar-section-title">Vignettes</h3>
-        <button class="sidebar-new-btn" @click="createVignette">
-          New
+        <button class="sidebar-new-btn" @click="navigateTo('/vignettes/new'); closeDrawer()">
+          + New vignette
         </button>
-        <div v-if="recentVignettes.length > 0" class="sidebar-sessions">
+        <div v-if="vignettes.length > 0" class="sidebar-sessions">
           <NuxtLink
-            v-for="v in recentVignettes"
+            v-for="v in vignettes"
             :key="v.id"
             :to="`/vignettes/${v.id}`"
             class="sidebar-session"
             @click="closeDrawer"
           >
-            <span class="session-dot session-dot--vignette" />
-            <span class="session-title">{{ v.title ?? 'Untitled Vignette' }}</span>
-          </NuxtLink>
-        </div>
-        <NuxtLink to="/vignettes" class="sidebar-more" @click="closeDrawer">
-          All vignettes →
-        </NuxtLink>
-      </div>
-
-      <!-- Sessions -->
-      <div v-if="(expanded || isMobile) && user" class="sidebar-section">
-        <h3 class="sidebar-section-title">Recent sessions</h3>
-        <div v-if="sessions.length > 0" class="sidebar-sessions">
-          <NuxtLink
-            v-for="s in regularSessions"
-            :key="s.id"
-            :to="`/stories/${s.story.author.name}/${s.story.storyId}?session=${s.id}`"
-            class="sidebar-session"
-            @click="closeDrawer"
-          >
             <span class="session-dot" />
-            <span class="session-title">{{ s.story.title }}</span>
+            <span class="session-title">{{ v.title }}</span>
+          </NuxtLink>
+          <NuxtLink v-if="hasMoreVignettes" to="/vignettes" class="sidebar-more" @click="closeDrawer">
+            View all
           </NuxtLink>
         </div>
-        <p v-else class="sidebar-empty">No sessions yet</p>
-
-        <div v-if="testSessions.length > 0" class="sidebar-sessions">
-          <h4 class="sidebar-section-subtitle">Test Sessions</h4>
-          <NuxtLink
-            v-for="s in testSessions"
-            :key="s.id"
-            :to="`/stories/${s.story.author.name}/${s.story.storyId}?session=${s.id}&test=1`"
-            class="sidebar-session"
-            @click="closeDrawer"
-          >
-            <span class="session-dot session-dot--test" />
-            <span class="session-title">{{ s.story.title }}</span>
-          </NuxtLink>
-        </div>
+        <p v-else class="sidebar-empty">No vignettes yet</p>
       </div>
 
       <!-- Author's stories -->
@@ -170,15 +139,10 @@
 import { authClient } from '~/composables/useAuthClient';
 import type { UserShape } from '~/composables/useCurrentUser';
 import { useCurrentUser } from '~/composables/useCurrentUser';
-import type { VignetteShape } from '~/composables/useCurrentUser';
 import { HomeOutlined, BuildOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons-vue';
 
 const props = defineProps<{
   user: UserShape | null;
-  sessions: Array<{
-    id: number;
-    story: { id: number; storyId: string; title: string; version: number; isVignette: boolean; author: { name: string } };
-  }>;
   authorStories: Array<{
     id: number;
     storyId: string;
@@ -187,20 +151,8 @@ const props = defineProps<{
   }>;
 }>();
 
-const { recentVignettes } = useCurrentUser();
-
-async function createVignette() {
-  try {
-    const res = await $fetch<{ vignette: { id: number } }>('/api/vignettes', {
-      method: 'POST',
-      body: { disposition: '' },
-    });
-    closeDrawer();
-    await navigateTo(`/vignettes/${res.vignette.id}`);
-  } catch (e) {
-    console.error('Failed to create vignette', e);
-  }
-}
+const vignettes = ref<Array<{ id: string; title: string }>>([]);
+const hasMoreVignettes = ref(false);
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -208,10 +160,6 @@ const expanded = ref(true);
 const drawerOpen = ref(false);
 const accountOpen = ref(false);
 const isMobile = ref(false);
-
-const nonVignetteSessions = computed(() => props.sessions.filter(s => !s.story.isVignette));
-const regularSessions = computed(() => nonVignetteSessions.value.filter(s => s.story.version > 0));
-const testSessions = computed(() => nonVignetteSessions.value.filter(s => s.story.version === 0));
 
 function toggle() {
   if (isMobile.value) {
@@ -249,9 +197,24 @@ function checkMobile() {
   if (!isMobile.value) drawerOpen.value = false;
 }
 
-onMounted(() => {
+onMounted(async () => {
   checkMobile();
   window.addEventListener('resize', checkMobile);
+  try {
+    const db = useLocalDb();
+    const { localSessions } = await import('#shared/db/localSchema');
+    const { desc } = await import('drizzle-orm');
+    const rows = await db
+      .select({ id: localSessions.id, title: localSessions.title })
+      .from(localSessions)
+      .orderBy(desc(localSessions.updatedAt))
+      .limit(4)
+      .all();
+    hasMoreVignettes.value = rows.length > 3;
+    vignettes.value = rows.slice(0, 3);
+  } catch {
+    // local DB not available (e.g. SSR)
+  }
 });
 
 onUnmounted(() => {
@@ -464,10 +427,6 @@ onUnmounted(() => {
   background: var(--green-5);
 }
 
-.session-dot--vignette {
-  background: var(--violet-5);
-}
-
 .sidebar-more {
   display: block;
   font-size: var(--font-size-0);
@@ -482,6 +441,7 @@ onUnmounted(() => {
 }
 
 .sidebar-new-btn {
+  display: block;
   margin-block-start: var(--size-2);
   inline-size: 100%;
   padding: var(--size-2) var(--size-3);
@@ -493,6 +453,8 @@ onUnmounted(() => {
   font-weight: var(--font-weight-5);
   cursor: pointer;
   transition: background var(--animation-duration, 0.15s) var(--ease-2);
+  font-family: inherit;
+  text-align: start;
 }
 
 .sidebar-new-btn:hover {

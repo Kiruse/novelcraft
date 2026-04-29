@@ -5,7 +5,6 @@
       <AppSidebar
         ref="sidebarRef"
         :user="currentUser"
-        :sessions="sessions"
         :author-stories="authorStories"
       />
       <main class="app-main">
@@ -18,7 +17,7 @@
 <script setup lang="ts">
 import { useCurrentUser } from '~/composables/useCurrentUser';
 
-const { currentUser, sessions, authorStories } = useCurrentUser();
+const { currentUser, authorStories } = useCurrentUser();
 
 const sidebarRef = ref<{ toggle: () => void } | null>(null);
 </script>

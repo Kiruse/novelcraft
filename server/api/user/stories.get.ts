@@ -1,7 +1,7 @@
 import { db } from "#server/db";
 import { stories } from "#server/db/schema";
 import { auth } from "#server/auth/config";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 export default defineEventHandler(async (event) => {
   const session = await auth.api.getSession({ headers: event.headers });
@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const authorStories = await db.query.stories.findMany({
-    where: and(eq(stories.authorId, session.user.id), eq(stories.isVignette, false)),
+    where: eq(stories.authorId, session.user.id),
     orderBy: desc(stories.updatedAt),
     columns: {
       id: true,

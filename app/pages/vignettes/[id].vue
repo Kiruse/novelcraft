@@ -1,14 +1,13 @@
 <template>
-  <div v-if="!vignette" class="vignette-loading">Loading...</div>
+  <div v-if="!loaded" class="vignette-loading">Loading...</div>
   <div v-else class="vignette-page">
-    <!-- Draft / Compose mode (no game session yet) -->
     <template v-if="!activeSessionId">
       <div class="vignette-compose">
         <input
           v-model="title"
           class="vignette-title-input"
           placeholder="Untitled Vignette"
-          @blur="updateTitle(($event.target as HTMLInputElement).value)"
+          @blur="saveTitle"
           @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
         />
         <p class="vignette-hint">
@@ -41,7 +40,6 @@
           </button>
         </div>
 
-        <!-- Suggestion picker -->
         <SuggestionPicker
           v-if="showPicker"
           ref="pickerRef"
@@ -60,7 +58,6 @@
       </div>
     </template>
 
-    <!-- Playing mode (session active) -->
     <template v-else>
       <Game
         :pages="pages"
@@ -77,7 +74,6 @@
 </template>
 
 <script setup lang="ts">
-import type { VignetteShape } from '~/composables/useCurrentUser';
 import type { GamePage } from '~/utils/msgUtils';
 import type { InputMode } from '~/components/Game.vue';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
@@ -88,19 +84,8 @@ import {
   SYSTEM_STEER,
   SYSTEM_INSTRUCT,
 } from '#shared/prompts';
-import { buildMessages, streamLlm } from '~/utils/llmHelpers';
-
-interface VignettePageShape {
-  id: number;
-  gameSessionId: number;
-  system: string | null;
-  prompt: string | null;
-  response: string | null;
-  createdAt: string;
-}
-
-// IMPORTANT: DO NOT TOUCH THIS PAGE
-// Human is currently completely refactoring this page
+import { streamLlm } from '~/composables/useLlmStream';
+import { buildMessages } from '~/utils/llmHelpers';
 
 const route = useRoute();
 const id = computed(() => route.params.id as string);
@@ -115,6 +100,7 @@ const selectedSuggestion = ref<ParsedSuggestion | null>(null);
 const selectedIndex = ref<number | null>(null);
 const streaming = ref(false);
 const streamText = ref('');
+const loaded = ref(false);
 
 const VIGNETTE_SUGGEST_PERSONA = unindent(`
   You are a creative story premise generator for quick interactive vignettes.
@@ -131,25 +117,9 @@ const VIGNETTE_SUGGEST_PERSONA = unindent(`
   Output ONLY the <suggestion> blocks with no other text.
 `);
 
-const { refresh: refreshUserData } = useCurrentUser();
-
-const { data, refresh: refreshData } = await useFetch<{
-  vignette: VignetteShape;
-  session: { id: number } | null;
-  pages: VignettePageShape[];
-}>(`/api/vignettes/${id.value}`);
-
-const vignette = computed(() => data.value?.vignette);
-const title = ref(data.value?.vignette?.title ?? 'Untitled Vignette');
-const activeSessionId = computed(() => data.value?.session?.id ?? null);
-const pages = ref<GamePage[]>(
-  (data.value?.pages ?? []).map(p => ({
-    id: p.id,
-    system: p.system,
-    prompt: p.prompt,
-    response: p.response,
-  })),
-);
+const title = ref('Untitled Vignette');
+const activeSessionId = ref<string | null>(null);
+const pages = ref<GamePage[]>([]);
 
 const suggestionPrompt = computed(() =>
   disposition.value.trim()
@@ -157,27 +127,63 @@ const suggestionPrompt = computed(() =>
     : 'Generate 3 random creative story suggestions for interactive vignettes. Surprise me with variety.',
 );
 
-// Whether the "Lock In" (disposition) button is enabled.
 const canLockIn = computed(() => {
   return disposition.value.trim().length > 0 || selectedIndex.value !== null;
 });
 
-// Clear suggestion selection when user edits the textarea
 let programmaticDisposition = false;
 
-async function updateTitle(newTitle: string) {
-  newTitle = newTitle.trim() || 'Untitled Vignette';
-  title.value = newTitle;
-
-  try {
-    await $fetch(`/api/vignettes/${id.value}`, {
-      method: 'PATCH',
-      body: { title: newTitle },
-    });
-    await refreshUserData();
-  } catch (e) {
-    console.error('Failed to save title', e);
+async function initNewVignette() {
+  const queryDisposition = route.query.disposition as string | undefined;
+  if (queryDisposition) {
+    disposition.value = queryDisposition;
   }
+  loaded.value = true;
+}
+
+async function initExistingVignette(vignetteId: string) {
+  const db = useLocalDb();
+  const { localSessions, localPages } = await import('#shared/db/localSchema');
+  const { eq } = await import('drizzle-orm');
+
+  const session = await db.select().from(localSessions).where(eq(localSessions.id, vignetteId)).get();
+  if (!session) {
+    loaded.value = true;
+    return;
+  }
+
+  title.value = session.title;
+  disposition.value = session.description ?? '';
+
+  const sessionPages = await db.select().from(localPages)
+    .where(eq(localPages.sessionId, session.id))
+    .all();
+
+  if (sessionPages.length > 0) {
+    activeSessionId.value = session.id;
+    pages.value = sessionPages.map(p => ({
+      id: p.id,
+      system: p.system,
+      prompt: p.prompt,
+      response: p.response,
+    }));
+  }
+
+  loaded.value = true;
+}
+
+onMounted(async () => {
+  if (id.value === 'new') {
+    await initNewVignette();
+  } else {
+    await initExistingVignette(id.value);
+  }
+});
+
+async function saveTitle() {
+  const newTitle = title.value.trim() || 'Untitled Vignette';
+  title.value = newTitle;
+  await persistSession({ title: newTitle });
 }
 
 function onDispositionInput() {
@@ -216,41 +222,57 @@ function useSuggestion(suggestion: ParsedSuggestion) {
   }
 }
 
+async function persistSession(patch: { title?: string; description?: string }) {
+  const db = useLocalDb();
+  const { localSessions } = await import('#shared/db/localSchema');
+  const { eq } = await import('drizzle-orm');
+
+  if (!activeSessionId.value) return;
+
+  const updates: Record<string, string> = {};
+  if (patch.title !== undefined) updates.title = patch.title;
+  if (patch.description !== undefined) updates.description = patch.description;
+
+  await db.update(localSessions).set(updates).where(eq(localSessions.id, activeSessionId.value)).run();
+}
+
+async function updateTitle(newTitle: string) {
+  newTitle = newTitle.trim() || 'Untitled Vignette';
+  title.value = newTitle;
+  await persistSession({ title: newTitle });
+}
+
 async function lockIn() {
-  const patchBody: Record<string, string> = {};
-  if (disposition.value.trim()) patchBody.disposition = disposition.value;
-  if (selectedSuggestion.value) {
-    if (selectedSuggestion.value.title) patchBody.title = selectedSuggestion.value.title;
-    if (selectedSuggestion.value.description) patchBody.premise = selectedSuggestion.value.description;
+  const now = new Date().toISOString();
+  const sessionId = crypto.randomUUID();
+
+  if (selectedSuggestion.value?.title) {
+    title.value = selectedSuggestion.value.title;
   }
 
-  if (Object.keys(patchBody).length > 0) {
-    await $fetch(`/api/vignettes/${id.value}`, {
-      method: 'PATCH',
-      body: patchBody,
-    });
-  }
+  const db = useLocalDb();
+  const { localSessions } = await import('#shared/db/localSchema');
 
+  await db.insert(localSessions).values({
+    id: sessionId,
+    storyId: 'vignette',
+    title: title.value,
+    description: disposition.value.trim() || null,
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+
+  activeSessionId.value = sessionId;
   streaming.value = true;
   streamText.value = '';
 
-  // Optimistically add an empty page for the opening
   const tempId = `temp-${Date.now()}`;
   pages.value.push({ id: tempId, system: null, prompt: null, response: null });
 
   try {
-    // 1. Create session + page on server (no sessionId = creates new session)
-    const { sessionId, pageId } = await $fetch<{ sessionId: number; pageId: number }>(
-      `/api/vignettes/${id.value}/message`,
-      { method: 'POST', body: JSON.stringify({}) },
-    );
-
-    await refreshData();
-
-    // 2. Generate opening via LLM
-    const context = vignette.value?.description
-      ? `Title: ${title.value}\n\nPremise:\n${vignette.value.description}`
-      : `Setup:\n${vignette.value?.description ?? ''}`;
+    const context = disposition.value.trim()
+      ? `Title: ${title.value}\n\nPremise:\n${disposition.value.trim()}`
+      : `Title: ${title.value}`;
 
     const messages = [
       { author: 'system', content: SYSTEM_VIGNETTE_OPEN },
@@ -267,22 +289,22 @@ async function lockIn() {
       streamText.value += chunk;
     }
 
-    // 3. Update local state
+    const pageId = crypto.randomUUID();
+    const { localPages } = await import('#shared/db/localSchema');
+
+    await db.insert(localPages).values({
+      id: pageId,
+      sessionId,
+      system: null,
+      prompt: null,
+      response: fullText,
+      createdAt: now,
+    }).run();
+
     const idx = pages.value.findIndex(p => p.id === tempId);
     if (idx !== -1) {
-      pages.value[idx] = {
-        id: pageId,
-        system: null,
-        prompt: null,
-        response: fullText,
-      };
+      pages.value[idx] = { id: pageId, system: null, prompt: null, response: fullText };
     }
-
-    // 4. Persist response
-    await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
-      method: 'PATCH',
-      body: { response: fullText },
-    });
   } catch (err) {
     console.error('Start failed:', err);
     const idx = pages.value.findIndex(p => p.id === tempId);
@@ -293,7 +315,6 @@ async function lockIn() {
   }
 }
 
-/** Dispatch prompt based on input mode. */
 function onPrompt(payload: { text: string; mode: InputMode; pageId: number | string | null }) {
   switch (payload.mode) {
     case 'steer':
@@ -306,14 +327,12 @@ function onPrompt(payload: { text: string; mode: InputMode; pageId: number | str
   }
 }
 
-/** /write — create a new page, generate via LLM, save. */
 async function sendWrite(text: string) {
   if (streaming.value || !activeSessionId.value) return;
 
   const isWriteMore = !text;
   const systemNote = isWriteMore ? 'Continue the story — write more.' : null;
 
-  // Optimistically add a new page
   const tempId = `temp-${Date.now()}`;
   pages.value.push({
     id: tempId,
@@ -326,23 +345,9 @@ async function sendWrite(text: string) {
   streamText.value = '';
 
   try {
-    // 1. Create page on server
-    const { pageId } = await $fetch<{ pageId: number }>(
-      `/api/vignettes/${id.value}/message`,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          content: text || null,
-          system: systemNote,
-          sessionId: activeSessionId.value,
-        }),
-      },
-    );
-
-    // 2. Generate response via LLM
     const messages = buildMessages({
       title: title.value,
-      description: vignette.value?.description,
+      description: disposition.value.trim() || null,
       pages: pages.value,
       lastPageOverride: { response: null },
     });
@@ -356,7 +361,20 @@ async function sendWrite(text: string) {
       streamText.value += chunk;
     }
 
-    // 3. Update local state
+    const pageId = crypto.randomUUID();
+    const db = useLocalDb();
+    const { localPages } = await import('#shared/db/localSchema');
+    const now = new Date().toISOString();
+
+    await db.insert(localPages).values({
+      id: pageId,
+      sessionId: activeSessionId.value!,
+      system: systemNote,
+      prompt: text || null,
+      response: fullText,
+      createdAt: now,
+    }).run();
+
     const idx = pages.value.findIndex(p => p.id === tempId);
     if (idx !== -1) {
       pages.value[idx] = {
@@ -366,12 +384,6 @@ async function sendWrite(text: string) {
         response: fullText,
       };
     }
-
-    // 4. Persist response
-    await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
-      method: 'PATCH',
-      body: { response: fullText },
-    });
   } catch (err) {
     console.error('Message failed:', err);
     const idx = pages.value.findIndex(p => p.id === tempId);
@@ -387,7 +399,6 @@ async function sendWrite(text: string) {
   }
 }
 
-/** /steer or /instruct — regenerate the current page via LLM. */
 async function regeneratePage(
   pageId: number | string | null,
   instruction: string,
@@ -400,7 +411,6 @@ async function regeneratePage(
 
   const oldPage = pages.value[pageIdx]!;
 
-  // For steer, optimistically append the instruction to the system field
   if (mode === 'steer') {
     const updatedSystem = oldPage.system
       ? `${oldPage.system}\n${instruction}`
@@ -415,23 +425,20 @@ async function regeneratePage(
     const currentPage = pages.value[pageIdx]!;
     const systemPage = currentPage.system;
 
-    // For steer, persist the updated system
-    if (mode === 'steer' && typeof pageId === 'number') {
-      await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
-        method: 'PATCH',
-        body: { system: systemPage },
-      });
+    if (mode === 'steer') {
+      const db = useLocalDb();
+      const { localPages } = await import('#shared/db/localSchema');
+      const { eq } = await import('drizzle-orm');
+      await db.update(localPages).set({ system: systemPage }).where(eq(localPages.id, pageId as string)).run();
     }
 
-    // Build editor instruction message
     const modeReminder = mode === 'steer' ? SYSTEM_STEER : SYSTEM_INSTRUCT;
-
     const systemParts = [modeReminder];
     if (systemPage) systemParts.push(systemPage);
 
     const messages = buildMessages({
       title: title.value,
-      description: vignette.value?.description,
+      description: disposition.value.trim() || null,
       pages: pages.value,
       lastPageOverride: { response: null },
     });
@@ -451,7 +458,6 @@ async function regeneratePage(
       streamText.value += chunk;
     }
 
-    // Update the page with the regenerated response
     const currentIdx = pages.value.findIndex(p => p.id === pageId);
     if (currentIdx !== -1) {
       pages.value[currentIdx] = {
@@ -460,13 +466,10 @@ async function regeneratePage(
       };
     }
 
-    // Persist response
-    if (typeof pageId === 'number') {
-      await $fetch(`/api/vignettes/${id.value}/pages/${pageId}`, {
-        method: 'PATCH',
-        body: { response: fullText },
-      });
-    }
+    const db = useLocalDb();
+    const { localPages } = await import('#shared/db/localSchema');
+    const { eq } = await import('drizzle-orm');
+    await db.update(localPages).set({ response: fullText }).where(eq(localPages.id, pageId as string)).run();
   } catch (err) {
     console.error('Regenerate failed:', err);
     if (mode === 'steer') {
@@ -478,7 +481,6 @@ async function regeneratePage(
   }
 }
 
-/** Handle page edits from the Game component. */
 async function onUpdatePage(payload: { pageId: number | string; response?: string; system?: string | null }) {
   const idx = pages.value.findIndex(p => p.id === payload.pageId);
   if (idx !== -1) {
@@ -490,33 +492,28 @@ async function onUpdatePage(payload: { pageId: number | string; response?: strin
     };
   }
 
-  if (typeof payload.pageId === 'number') {
-    const body: Record<string, string | null> = {};
-    if (payload.response !== undefined) body.response = payload.response;
-    if (payload.system !== undefined) body.system = payload.system;
+  const db = useLocalDb();
+  const { localPages } = await import('#shared/db/localSchema');
+  const { eq } = await import('drizzle-orm');
 
-    try {
-      await $fetch(`/api/vignettes/${id.value}/pages/${payload.pageId}`, {
-        method: 'PATCH',
-        body,
-      });
-    } catch (e) {
-      console.error('Failed to save page edit', e);
-    }
+  const updates: Record<string, string | null> = {};
+  if (payload.response !== undefined) updates.response = payload.response;
+  if (payload.system !== undefined) updates.system = payload.system;
+
+  try {
+    await db.update(localPages).set(updates).where(eq(localPages.id, payload.pageId as string)).run();
+  } catch (e) {
+    console.error('Failed to save page edit', e);
   }
 }
 </script>
 
 <style scoped>
-/* --- Loading --- */
-
 .vignette-loading {
   text-align: center;
   padding: var(--size-10);
   color: var(--text-2);
 }
-
-/* --- Page layout --- */
 
 .vignette-page {
   block-size: 100%;
@@ -525,9 +522,7 @@ async function onUpdatePage(payload: { pageId: number | string; response?: strin
 }
 
 .vignette-compose {
-  inline-size: var(--size-xl);
-  block-size: 100%;
-  margin-inline: auto;
+  flex: 1;
   padding: var(--size-8);
   display: flex;
   flex-direction: column;
@@ -599,8 +594,6 @@ async function onUpdatePage(payload: { pageId: number | string; response?: strin
   display: flex;
   gap: var(--size-3);
 }
-
-/* --- Buttons --- */
 
 .btn {
   padding: var(--size-3) var(--size-8);

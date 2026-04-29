@@ -36,7 +36,38 @@ export function defineGenerator<T>(fn: () => Promise<T>): () => Promise<T> {
 }
 ```
 
+**Gameplay Modules** (`shared/gameplay/`)
+- Use named exports
+- Barrel export via `index.ts`
+- Modules: `gameplayModule.ts`, `systemPromptModule.ts`, `eventModule.ts`, `npcModule.ts`, `graphMapModule.ts`
+
+```typescript
+// shared/gameplay/index.ts
+export { getAllModules } from './gameplayModule';
+export { ... } from './systemPromptModule';
+// etc.
+```
+
+**Local DB Schema** (`shared/db/`)
+- Drizzle SQLite table definitions in `localSchema.ts`
+- Barrel export via `index.ts`
+
 ## Import Patterns
+
+### Alias Imports
+
+**Always use alias imports — never relative `../` paths.**
+
+| Alias | Resolves to | Use in |
+|-------|------------|----------|
+| `~/` or `@/` | `app/` | App code (pages, components, composables) |
+| `#server/` | `server/` | Server code (API routes, plugins) |
+| `#shared/` | `shared/` | Shared code (from both app and server) |
+| `~~/` | Project root | Escape hatch (avoid unless necessary) |
+
+**Important:**
+- The `#server` import alias is only reliably available from code in `./server`. In `./shared`, use `~~/server` instead.
+- In `./app`, neither `#server` nor `~~/server` should ever be used — this WILL BREAK THE APP.
 
 ### ES Module Imports
 
@@ -48,31 +79,16 @@ import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 ```
 
-### Local Module Imports
-
-Local module imports must use `.js` extension for ESM compatibility:
-
-```typescript
-// From same directory
-import { getProjectRoot, defineGenerator } from './utils/index.js';
-
-// From parent directories
-import { defineGenerator } from '../../utils/index.js';
-
-// Or use index-less imports (handled by TypeScript)
-import { getProjectRoot } from '../../utils';
-```
-
-**Important**: Node.js built-in modules (e.g., `fs/promises`, `path`) do not require `.js` extensions.
-
 ### Auto-imports
 
 The following are auto-imported by Nuxt and do not require explicit imports:
 
 - **Vue composables**: `ref`, `computed`, `onMounted`, etc.
 - **Nuxt utilities**: `useFetch`, `useRoute`, `navigateTo`, etc.
-- **Drizzle ORM**: `db` instance (from `~/server/db/index.ts`)
-- **Database queries**: Tables from `~/server/db/schema`
+- **Components**: All `.vue` files in `app/components/`
+- **Composables**: All `use*.ts` files in `app/composables/`
+- **Drizzle ORM (server)**: `db` instance from `~/server/db/index.ts`
+- **Drizzle tables (server)**: Tables from `~/server/db/schema`
 
 ## Async Functions
 
@@ -203,6 +219,7 @@ export default defineGenerator(async () => {
 - Use explicit return types for exported functions
 - Leverage inferred types for internal functions
 - Define interfaces for complex objects
+- **Never use `as any`** — fix the root cause instead
 
 ```typescript
 // Good - explicit return type for exported function
@@ -245,11 +262,11 @@ const formattedCode = await prettier.format(code, {
 
 ## Database Query Patterns
 
-### Drizzle ORM Usage
+### Server Database (PostgreSQL)
 
 ```typescript
-import { db } from '~/server/db';
-import { stories } from '~/server/db/schema';
+import { db } from '#server/db';
+import { stories } from '#server/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 
 // Simple select
@@ -264,13 +281,63 @@ const storyWithAuthor = await db.query.stories.findFirst({
   where: eq(stories.id, 1),
   with: {
     author: true,
-    gameSessions: true,
   },
 });
+```
+
+### Local Database (SQLite via PowerSync)
+
+```typescript
+import { useLocalDb } from '~/composables/useLocalDb';
+import { localSessions, localPages } from '#shared/db/localSchema';
+import { eq } from 'drizzle-orm';
+
+const db = useLocalDb();
+
+// Simple select
+const sessions = await db.select().from(localSessions);
+
+// With where clause
+const pages = await db.select().from(localPages)
+  .where(eq(localPages.sessionId, sessionId));
+
+// Insert
+await db.insert(localPages).values({
+  id: crypto.randomUUID(),
+  sessionId: sessionId,
+  system: 'system prompt',
+  prompt: 'user input',
+  response: 'AI response',
+  createdAt: new Date().toISOString(),
+});
+```
+
+## LLM Streaming Pattern
+
+All LLM streaming must go through `useLlmStream` — never parse SSE inline:
+
+```typescript
+import { streamLlmFull } from '~/composables/useLlmStream';
+import { PERSONA_PLATFORM } from '#shared/prompts';
+
+const messages = [
+  { author: 'system', content: 'You are a storyteller.' },
+  { author: 'user', content: 'Tell me a story.' },
+];
+
+for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
+  if (event.type === 'text') {
+    // Append text chunk
+  }
+  if (event.type === 'error') {
+    // Handle error
+  }
+}
 ```
 
 ## Related Documentation
 
 - [Project Structure](./project-structure.md) - File organization and directory layout
-- [Generator System](./generator-system.md) - CLI generator patterns and conventions
 - [Database Schema](./database-schema.md) - Table definitions and query patterns
+- [API Routes](./api-routes.md) - Endpoint documentation
+- [Frontend Architecture](./frontend-architecture.md) - Pages, components, and styling conventions

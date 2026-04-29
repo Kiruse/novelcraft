@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-This document describes the frontend architecture, including pages, components, and styling conventions.
+This document describes the frontend architecture, including pages, components, composables, and styling conventions.
 
 ## Overview
 
@@ -12,6 +12,16 @@ The frontend is built with Nuxt 4 and Vue 3, using file-based routing and auto-i
 - **Vue 3**: Progressive JavaScript framework
 - **File-based routing**: Pages become routes automatically
 - **Auto-imports**: Components, composables, and utilities are auto-imported
+- **PowerSync + Drizzle SQLite**: Client-side local database for gameplay state
+- **Open Props**: CSS custom property design tokens
+
+### Architecture
+
+Gameplay (vignettes, sessions, module runtime) runs entirely on the client:
+
+- **Server API** (`useFetch`) — auth, user data, shareable story metadata
+- **Local SQLite** (`useLocalDb`) — vignettes, pages, module runtime
+- **LLM streaming** (`useLlmStream`) — text generation via `POST /api/llm/prompt`
 
 ## Pages
 
@@ -19,79 +29,57 @@ Pages are located in `app/pages/` and automatically become routes based on their
 
 ### Discovery Page (`app/pages/index.vue`)
 
-The home page displays available stories and the user's recent game sessions.
+The home page displays available stories and vignette quick-start options.
 
 **Route:** `/`
 
 **Features:**
-- Shows "Jump back in" section with recent game sessions (only if authenticated and has sessions)
-- Displays all stories in a responsive grid
-- Stories are ordered alphabetically by title
-- Empty state handling when no stories exist
-- Horizontal scrolling for sessions section
-
-**Responsive Grid:**
-- Mobile: 1 column
-- Tablet: 2 columns
-- Desktop: 3 columns
+- Displays all stories in a responsive grid (ordered alphabetically by title)
+- Vignette quick-start navigates to `/vignettes/new?disposition=...` instead of calling a server API
+- Sessions section has been removed (gameplay is client-side now)
 
 **API Calls:**
 - `GET /api/stories` - Fetch all stories
-- `GET /api/sessions` - Fetch user's recent sessions
 
 **Data Flow:**
 
 ```typescript
 const { data: stories } = await useFetch('/api/stories');
-const { data: sessions } = await useFetch('/api/sessions');
 ```
 
-**Conditional Rendering:**
+### Vignette Pages
 
-```vue
-<template>
-  <!-- Jump back in section (only if authenticated with sessions) -->
-  <section v-if="sessions && sessions.length > 0">
-    <h2>Jump back in</h2>
-    <div class="sessions-scroll">
-      <GameSessionCard
-        v-for="session in sessions"
-        :key="session.id"
-        :session="session"
-      />
-    </div>
-  </section>
+Vignettes are purely client-side — they use local SQLite instead of server API.
 
-  <!-- All stories section -->
-  <section>
-    <h2>All Stories</h2>
-    <div class="stories-grid">
-      <StoryCard
-        v-for="story in stories"
-        :key="story.id"
-        :story="story"
-      />
-    </div>
-  </section>
-</template>
-```
+#### Vignette List (`app/pages/vignettes/index.vue`)
 
-### Story Detail Page (`app/pages/stories/[id].vue`)
+Displays the user's local vignette sessions.
 
-Displays detailed information about a specific story.
+**Route:** `/vignettes`
 
-**Route:** `/stories/:id`
+**Data source:** Reads from local SQLite (`local_sessions` table via `useLocalDb`)
 
-**Dynamic Route Parameter:** `id` - Story ID (integer)
+#### Vignette Play (`app/pages/vignettes/[id].vue`)
 
-**Usage:**
+The main vignette gameplay page.
 
-```typescript
-const route = useRoute();
-const storyId = route.params.id;
+**Route:** `/vignettes/:id` (also supports `/vignettes/new` for creating new vignettes)
 
-const { data: story } = await useFetch(`/api/stories/${storyId}`);
-```
+**Data source:** Reads/writes to local SQLite (`local_sessions`, `local_pages`, `local_module_runtime`)
+
+**Features:**
+- Supports both `new` (from home page quick-start) and existing session IDs
+- LLM streaming via `useLlmStream` composable
+
+### Story Builder (`app/pages/builder.vue`)
+
+Story creation and editing interface.
+
+**Route:** `/builder`
+
+### Story Play Page (`/stories/:author/:id`)
+
+Displays a published story. Server session endpoints have been removed, so this page is temporarily stubbed.
 
 ### Creating New Pages
 
@@ -125,9 +113,76 @@ const userId = route.params.id;
 </template>
 ```
 
+## Composables
+
+Composables are located in `app/composables/` and are auto-imported.
+
+### useLocalDb
+
+Wraps PowerSync client with Drizzle ORM for local SQLite access.
+
+**Location:** `app/composables/useLocalDb.ts`
+
+**Returns:** Drizzle ORM database instance bound to local SQLite
+
+```typescript
+const db = useLocalDb();
+const sessions = await db.select().from(localSessions);
+```
+
+### useLlmStream
+
+Centralized SSE streaming client for the LLM proxy endpoint.
+
+**Location:** `app/composables/useLlmStream.ts`
+
+**Exports:**
+
+- `streamLlm(options)` — async generator yielding text chunks only
+- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`)
+
+```typescript
+import { streamLlmFull } from '~/composables/useLlmStream';
+
+for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
+  if (event.type === 'text') { /* append text */ }
+  if (event.type === 'error') { /* handle error */ }
+}
+```
+
+**Rule:** Never parse SSE inline in components — always use `useLlmStream`.
+
+### useCurrentUser
+
+Manages current user state and shape types.
+
+**Location:** `app/composables/useCurrentUser.ts`
+
+**Exports:** `UserShape`, `AuthorStoryShape` (vignette and session shapes have been removed — those are client-side now)
+
+### useStoryBuilder
+
+Story builder logic, imports gameplay modules from shared code.
+
+**Location:** `app/composables/useStoryBuilder.ts`
+
+Uses `getAllModules()` from `#shared/gameplay` instead of a server API endpoint.
+
+### useAuthClient
+
+Authentication client wrapper.
+
+**Location:** `app/composables/useAuthClient.ts`
+
+### useToast
+
+Toast notification system.
+
+**Location:** `app/composables/useToast.ts`
+
 ## Components
 
-Reusable Vue components are located in `app/components/` and are auto-imported. No manual imports required.
+Reusable Vue components are located in `app/components/` and are auto-imported.
 
 ### StoryCard
 
@@ -151,115 +206,47 @@ Displays story information in a card format.
 }
 ```
 
-**Features:**
-- Shows cover art (if available) with fallback
-- Displays title and description
-- Shows author name
-- Links to story detail page via `/stories/:id`
+### AppSidebar
 
-**Template:**
+Application navigation sidebar.
 
-```vue
-<script setup lang="ts">
-interface Props {
-  story: {
-    id: number;
-    title: string;
-    description: string | null;
-    coverArt: string | null;
-    author: {
-      name: string;
-    };
-  };
-}
+**Location:** `app/components/AppSidebar.vue`
 
-const props = defineProps<Props>();
-</script>
+**Note:** Vignette section, sessions section, and `createVignette()` have been removed. Gameplay navigation is handled client-side.
 
-<template>
-  <NuxtLink :to="`/stories/${story.id}`" class="story-card">
-    <div class="cover">
-      <img v-if="story.coverArt" :src="story.coverArt" :alt="story.title" />
-      <div v-else class="placeholder">No cover</div>
-    </div>
-    <div class="content">
-      <h3>{{ story.title }}</h3>
-      <p v-if="story.description" class="description">{{ story.description }}</p>
-      <p class="author">by {{ story.author.name }}</p>
-    </div>
-  </NuxtLink>
-</template>
-```
+### SuggestionPicker
 
-### GameSessionCard
+Provides AI-generated suggestions during gameplay.
 
-Displays game session information for the "Jump back in" section.
+**Location:** `app/components/SuggestionPicker.vue`
 
-**Location:** `app/components/GameSessionCard.vue`
+Uses `streamLlmFull()` from `useLlmStream.ts` for LLM streaming.
 
-**Props:**
+### InspireDialog
 
-```typescript
-{
-  session: {
-    id: number;
-    updatedAt: Date;
-    story: {
-      title: string;
-      coverArt: string | null;
-      genre: string | null;
-    };
-  };
-}
-```
+Inspiration dialog in the story builder.
 
-**Features:**
-- Shows story cover art
-- Displays story title and genre
-- Shows "Last played" timestamp
+**Location:** `app/components/builder/InspireDialog.vue`
 
-**Template:**
+Uses `streamLlmFull()` from `useLlmStream.ts` for LLM streaming.
 
-```vue
-<script setup lang="ts">
-interface Props {
-  session: {
-    id: number;
-    updatedAt: Date;
-    story: {
-      title: string;
-      coverArt: string | null;
-      genre: string | null;
-    };
-  };
-}
+### Game
 
-const props = defineProps<Props>();
+Main gameplay component.
 
-const formatDate = (date: Date) => {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-  }).format(new Date(date));
-};
-</script>
+**Location:** `app/components/Game.vue`
 
-<template>
-  <NuxtLink :to="`/sessions/${session.id}`" class="session-card">
-    <div class="cover">
-      <img v-if="session.story.coverArt" :src="session.story.coverArt" :alt="session.story.title" />
-      <div v-else class="placeholder">No cover</div>
-    </div>
-    <div class="content">
-      <h3>{{ session.story.title }}</h3>
-      <p v-if="session.story.genre" class="genre">{{ session.story.genre }}</p>
-      <p class="last-played">Last played {{ formatDate(session.updatedAt) }}</p>
-    </div>
-  </NuxtLink>
-</template>
-```
+### ChatArea
+
+Chat/conversation display area.
+
+**Location:** `app/components/ChatArea.vue`
+
+### GameDebugPanel
+
+Debug panel for gameplay state inspection.
+
+**Location:** `app/components/GameDebugPanel.vue`
 
 ### Creating New Components
 
@@ -284,7 +271,7 @@ defineProps<Props>();
 
 <style scoped>
 .my-component {
-  padding: 1rem;
+  padding: var(--size-3);
 }
 </style>
 ```
@@ -300,15 +287,23 @@ defineProps<Props>();
 </template>
 ```
 
+## Plugins
+
+### PowerSync Plugin
+
+**Location:** `app/plugins/powersync.client.ts`
+
+Initializes PowerSync on client-side only. Required for local SQLite access.
+
 ## Global Styles
 
 Global CSS is defined in `app/assets/css/app.css` and included via `nuxt.config.ts`.
 
 **Included Styles:**
-- CSS reset for consistency
-- Base element styling
-- Typography defaults
-- Layout utilities
+- Open Props design tokens
+- CSS normalize/reset
+- Semantic tokens for dark mode (`--text-1`, `--surface-1`, etc.)
+- Brand gradient (`--brand-gradient`)
 
 ### Configuring Global Styles
 
@@ -320,6 +315,23 @@ export default defineNuxtConfig({
 ```
 
 ## Styling Conventions
+
+### Open Props Tokens
+
+Reference design tokens via CSS custom properties:
+
+```vue
+<style scoped>
+.my-component {
+  padding: var(--size-3);
+  border-radius: var(--radius-2);
+  box-shadow: var(--shadow-2);
+  color: var(--text-1);
+  background: var(--surface-1);
+  font-size: var(--font-size-4);
+}
+</style>
+```
 
 ### Scoped Styles
 
@@ -334,11 +346,11 @@ Use scoped styles in single-file components to avoid style conflicts:
 
 <style scoped>
 .my-component {
-  padding: 1rem;
+  padding: var(--size-3);
 }
 
 .text {
-  color: #333;
+  color: var(--text-1);
 }
 </style>
 ```
@@ -360,6 +372,17 @@ Use kebab-case for CSS class names:
 </style>
 ```
 
+### Logical Properties
+
+Use logical properties for internationalization support:
+
+```css
+.inline-size: 100%;
+.block-size: auto;
+margin-block-start: var(--size-2);
+padding-inline: var(--size-3);
+```
+
 ### Responsive Design
 
 Use CSS Grid and Flexbox for responsive layouts:
@@ -369,7 +392,7 @@ Use CSS Grid and Flexbox for responsive layouts:
 .stories-grid {
   display: grid;
   grid-template-columns: 1fr; /* Mobile */
-  gap: 1.5rem;
+  gap: var(--size-6);
 }
 
 @media (min-width: 768px) {
@@ -396,43 +419,6 @@ Common breakpoints used in the project:
 | Tablet | 768px - 1023px | Two column layouts |
 | Desktop | ≥ 1024px | Three+ column layouts |
 
-### Horizontal Scrolling
-
-For horizontal scroll containers:
-
-```vue
-<style scoped>
-.sessions-scroll {
-  display: flex;
-  gap: 1rem;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
-  padding-bottom: 0.5rem;
-}
-
-.sessions-scroll::-webkit-scrollbar {
-  height: 6px;
-}
-
-.sessions-scroll::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 3px;
-}
-
-.sessions-scroll::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 3px;
-}
-
-.session-card {
-  scroll-snap-align: start;
-  flex-shrink: 0;
-  width: 280px;
-}
-</style>
-```
-
 ## Auto-Imports
 
 ### Components
@@ -443,7 +429,6 @@ All components in `app/components/` are auto-imported:
 <!-- No import needed -->
 <template>
   <StoryCard :story="story" />
-  <GameSessionCard :session="session" />
 </template>
 ```
 
@@ -457,6 +442,7 @@ Vue and Nuxt composables are auto-imported:
 const count = ref(0);
 const route = useRoute();
 const router = useRouter();
+const db = useLocalDb();
 
 const { data, pending, error } = await useFetch('/api/stories');
 </script>
@@ -472,6 +458,9 @@ export default defineNuxtConfig({
   compatibilityDate: '2024-11-01',
   devtools: { enabled: true },
   css: ['~/assets/css/app.css'],
+  vite: {
+    // PowerSync WASM worker settings
+  },
 });
 ```
 
@@ -480,3 +469,4 @@ export default defineNuxtConfig({
 - [Project Structure](./project-structure.md) - File organization for frontend code
 - [Code Conventions](./code-conventions.md) - Component patterns and styling guidelines
 - [API Routes](./api-routes.md) - Backend endpoints used by the frontend
+- [Database Schema](./database-schema.md) - Local SQLite schema for gameplay state

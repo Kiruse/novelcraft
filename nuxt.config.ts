@@ -5,6 +5,15 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/app.css'],
 
+  vite: {
+    optimizeDeps: {
+      exclude: ['@powersync/web'],
+    },
+    worker: {
+      format: 'es',
+    },
+  },
+
   nitro: {
     typescript: {
       tsConfig: {

@@ -4,21 +4,36 @@ This document describes the complete database schema, including all tables, colu
 
 ## Overview
 
-The database is organized across multiple schema files in `server/db/schema/`:
+The project has two separate databases:
+
+1. **Server database** (PostgreSQL) — shareable entities: users, auth, stories
+2. **Client-side local database** (SQLite via PowerSync) — gameplay state: vignettes, sessions, module runtime
+
+### Server Schema
+
+Located in `server/db/schema/`:
 
 - **auth.ts** - Better-Auth user tables (user, session, account, etc.)
-- **app.ts** - Application-specific tables (stories, game_sessions, etc.)
-- **placeholder.ts** - Placeholder tables for development
+- **app.ts** - Application-specific tables (stories only)
 - **index.ts** - Central export point for all schema definitions
+
+### Local Schema
+
+Located in `shared/db/`:
+
+- **localSchema.ts** - Client-side SQLite tables (local_sessions, local_pages, local_module_runtime)
+- **index.ts** - Barrel export
 
 ### Technology Stack
 
-- **ORM**: Drizzle ORM
-- **Validation**: drizzle-zod (Zod schemas generated from Drizzle definitions)
-- **Migration**: Drizzle Kit
-- **Database**: PostgreSQL
+| Layer | ORM | Database | Validation |
+|-------|-----|----------|------------|
+| Server | Drizzle ORM | PostgreSQL | drizzle-zod |
+| Client | Drizzle ORM via PowerSync driver | SQLite (WASM) | TypeScript types |
 
-## Schema Organization
+---
+
+## Server Schema (PostgreSQL)
 
 ### Import Structure
 
@@ -26,7 +41,6 @@ The database is organized across multiple schema files in `server/db/schema/`:
 // server/db/schema/index.ts
 export * from './auth';
 export * from './app';
-export * from './placeholder';
 ```
 
 ```typescript
@@ -52,21 +66,28 @@ Stores story content and version history.
 **Schema Definition:**
 
 ```typescript
-export const stories = pgTable('stories', {
-  id: serial('id').primaryKey(),
-  storyId: text('story_id').notNull(),
-  authorId: text('author_id').notNull().references(() => users.id, {
-    onDelete: 'restrict',
-  }),
-  version: integer('version').notNull(),
-  title: text('title').notNull(),
-  description: text('description'),
-  coverArt: text('cover_art'),
-  genre: text('genre'),
-  modules: jsonb('modules').notNull().$type<StoryModules>(),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull(),
-});
+export const stories = pgTable(
+  "stories",
+  {
+    id: serial("id").primaryKey(),
+    storyId: text("story_id").notNull(),
+    authorId: text("author_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    version: integer("version").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    coverArt: text("cover_art"),
+    genre: text("genre"),
+    modules: jsonb("modules").notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [uniqueIndex("stories_author_story_version_idx").on(table.authorId, table.storyId, table.version)],
+);
 ```
 
 **Columns:**
@@ -88,235 +109,39 @@ export const stories = pgTable('stories', {
 **Indexes:**
 
 ```typescript
-export const storiesAuthorStoryVersionIdx = index('stories_author_story_version_idx')
-  .on(stories.authorId, stories.storyId, stories.version);
+uniqueIndex("stories_author_story_version_idx").on(table.authorId, table.storyId, table.version)
 ```
 
 **Relations:**
 
 ```typescript
-export const storiesRelations = relations(stories, ({ one, many }) => ({
-  author: one(users, {
+export const storyRelations = relations(stories, ({ one }) => ({
+  author: one(user, {
     fields: [stories.authorId],
-    references: [users.id],
-  }),
-  gameSessions: many(gameSessions),
-}));
-```
-
-### game_sessions
-
-Stores player game sessions.
-
-**Location:** `server/db/schema/app.ts`
-
-**Schema Definition:**
-
-```typescript
-export const gameSessions = pgTable('game_sessions', {
-  id: serial('id').primaryKey(),
-  playerId: text('player_id').notNull().references(() => users.id, {
-    onDelete: 'cascade',
-  }),
-  storyId: integer('story_id').notNull().references(() => stories.id, {
-    onDelete: 'cascade',
-  }),
-  data: jsonb('data').notNull().$type<SessionData>(),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull(),
-});
-```
-
-**Columns:**
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | serial | PRIMARY KEY | Auto-incrementing primary key |
-| `player_id` | text | NOT NULL, FK → users.id | Player reference (DELETE CASCADE) |
-| `story_id` | integer | NOT NULL, FK → stories.id | Story reference (DELETE CASCADE) |
-| `data` | jsonb | NOT NULL | Session game state |
-| `created_at` | timestamp | NOT NULL, default now() | Creation timestamp |
-| `updated_at` | timestamp | NOT NULL | Last update timestamp |
-
-**Indexes:**
-
-```typescript
-export const gameSessionsPlayerUpdatedIdx = index('game_sessions_player_updated_idx')
-  .on(gameSessions.playerId, gameSessions.updatedAt);
-```
-
-**Relations:**
-
-```typescript
-export const gameSessionsRelations = relations(gameSessions, ({ one, many }) => ({
-  player: one(users, {
-    fields: [gameSessions.playerId],
-    references: [users.id],
-  }),
-  story: one(stories, {
-    fields: [gameSessions.storyId],
-    references: [stories.id],
-  }),
-  moduleRuntime: many(moduleRuntime),
-  messages: many(gameSessionMessages),
-}));
-```
-
-### module_runtime
-
-Stores runtime state of modules.
-
-**Location:** `server/db/schema/app.ts`
-
-**Schema Definition:**
-
-```typescript
-export const moduleRuntime = pgTable('module_runtime', {
-  id: serial('id').primaryKey(),
-  gameSessionId: integer('game_session_id').notNull().references(() => gameSessions.id, {
-    onDelete: 'cascade',
-  }),
-  moduleId: text('module_id').notNull(),
-  data: jsonb('data').notNull().$type<ModuleData>(),
-});
-```
-
-**Columns:**
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | serial | PRIMARY KEY | Auto-incrementing primary key |
-| `game_session_id` | integer | NOT NULL, FK → game_sessions.id | Session reference (DELETE CASCADE) |
-| `module_id` | text | NOT NULL | Module identifier (not a FK) |
-| `data` | jsonb | NOT NULL | Module runtime state |
-
-**Indexes:**
-
-```typescript
-export const moduleRuntimeSessionIdx = index('module_runtime_session_idx')
-  .on(moduleRuntime.gameSessionId);
-```
-
-**Relations:**
-
-```typescript
-export const moduleRuntimeRelations = relations(moduleRuntime, ({ one }) => ({
-  gameSession: one(gameSessions, {
-    fields: [moduleRuntime.gameSessionId],
-    references: [gameSessions.id],
+    references: [user.id],
   }),
 }));
 ```
 
-### game_session_messages
+### Removed Tables
 
-Stores conversation history for game sessions.
+The following tables were removed in migration `0008_futuristic_changeling.sql` as part of the shift to client-side gameplay:
 
-**Location:** `server/db/schema/app.ts`
+- `game_sessions` — replaced by `local_sessions` in SQLite
+- `game_session_pages` — replaced by `local_pages` in SQLite
+- `game_session_messages` — removed; messages stored in `local_pages`
+- `module_runtime` — replaced by `local_module_runtime` in SQLite
+- `is_vignette` column on `stories` — vignettes are no longer server-persisted
 
-**Schema Definition:**
-
-```typescript
-export const messageRoleEnum = pgEnum('message_role', ['system', 'agent', 'user', 'toolcall'] as const);
-
-export const gameSessionMessages = pgTable('game_session_messages', {
-  id: serial('id').primaryKey(),
-  gameSessionId: integer('game_session_id').notNull().references(() => gameSessions.id, {
-    onDelete: 'cascade',
-  }),
-  role: messageRoleEnum('role').notNull(),
-  contents: text('contents').notNull(),
-  toolcallData: jsonb('toolcall_data').$type<ToolcallData>(),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-});
-```
-
-**Columns:**
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | serial | PRIMARY KEY | Auto-incrementing primary key |
-| `game_session_id` | integer | NOT NULL, FK → game_sessions.id | Session reference (DELETE CASCADE) |
-| `role` | enum | NOT NULL | Message role (system/agent/user/toolcall) |
-| `contents` | text | NOT NULL | Message content |
-| `toolcall_data` | jsonb | nullable | Tool call data |
-| `created_at` | timestamp | NOT NULL, default now() | Creation timestamp |
-
-**Indexes:**
-
-```typescript
-export const gameSessionMessagesSessionCreatedIdx = index('game_session_messages_session_created_idx')
-  .on(gameSessionMessages.gameSessionId, gameSessionMessages.createdAt);
-```
-
-**Relations:**
-
-```typescript
-export const gameSessionMessagesRelations = relations(gameSessionMessages, ({ one }) => ({
-  gameSession: one(gameSessions, {
-    fields: [gameSessionMessages.gameSessionId],
-    references: [gameSessions.id],
-  }),
-}));
-```
-
-## Enums
-
-### message_role
-
-Enum defining message roles for game session messages.
-
-**Values:**
-- `'system'` - System-level messages
-- `'agent'` - AI agent responses
-- `'user'` - User messages
-- `'toolcall'` - Tool/function call records
-
-**Definition:**
-
-```typescript
-export const messageRoleEnum = pgEnum('message_role', ['system', 'agent', 'user', 'toolcall'] as const);
-```
-
-## Schema Relations
-
-All foreign key relations are defined using Drizzle ORM's `relations` API for type-safe queries.
-
-### Example Query with Relations
-
-```typescript
-import { db } from '~/server/db';
-import { stories } from '~/server/db/schema';
-import { eq } from 'drizzle-orm';
-
-// Query story with author and game sessions
-const storyWithAuthor = await db.query.stories.findFirst({
-  where: eq(stories.id, 1),
-  with: {
-    author: true,
-    gameSessions: {
-      with: {
-        player: true,
-        messages: true,
-      },
-    },
-  },
-});
-```
+## Server Schema Relations
 
 ### Relation Graph
 
 ```
-users (1) ----< (1) stories
-  |                     |
-  |                     | (1)
-  |                     +----< (N) game_sessions ----< (N) game_session_messages
-  |                     |
-  |                     | (N)
-  |                     +----< (N) module_runtime
-  |
-  +----< (N) game_sessions
+users (1) ----< (N) stories
 ```
+
+The server schema is now minimal — only auth tables and stories. All gameplay relations have moved to the local SQLite schema.
 
 ## Runtime Validation with drizzle-zod
 
@@ -324,16 +149,8 @@ The project uses `drizzle-zod` to generate Zod validation schemas from Drizzle t
 
 ### Generated Insert Schemas
 
-drizzle-zod automatically generates Zod schemas for insert operations:
-
 ```typescript
-import {
-  insertStorySchema,
-  insertGameSessionSchema,
-  insertModuleRuntimeSchema,
-  insertGameSessionMessageSchema,
-} from '~/server/db/schema/app';
-import { z } from 'zod';
+import { insertStorySchema } from '~/server/db/schema/app';
 ```
 
 ### Usage Examples
@@ -341,11 +158,10 @@ import { z } from 'zod';
 #### Basic Validation
 
 ```typescript
-import { insertStorySchema } from '~/server/db/schema/app';
-import { db } from '~/server/db';
-import { stories } from '~/server/db/schema';
+import { insertStorySchema } from '#server/db/schema/app';
+import { db } from '#server/db';
+import { stories } from '#server/db/schema';
 
-// Validate story data before insertion
 const storyData = {
   storyId: 'uuid-123',
   authorId: 'user-uuid',
@@ -361,16 +177,13 @@ await db.insert(stories).values(validated).returning();
 
 #### Custom Validation Extension
 
-Extend generated schemas with additional validation rules:
-
 ```typescript
-import { insertStorySchema } from '~/server/db/schema/app';
+import { insertStorySchema } from '#server/db/schema/app';
 import { z } from 'zod';
 
 const customStorySchema = insertStorySchema.extend({
   title: z.string().min(1).max(200),
   version: z.number().int().positive(),
-  genre: z.enum(['fantasy', 'sci-fi', 'mystery']).optional(),
 });
 
 const validated = customStorySchema.parse(data);
@@ -380,9 +193,9 @@ const validated = customStorySchema.parse(data);
 
 ```typescript
 // server/api/stories.post.ts
-import { insertStorySchema } from '~/server/db/schema/app';
-import { db } from '~/server/db';
-import { stories } from '~/server/db/schema';
+import { insertStorySchema } from '#server/db/schema/app';
+import { db } from '#server/db';
+import { stories } from '#server/db/schema';
 
 export default defineEventHandler(async (event) => {
   const body = await readBody(event);
@@ -392,17 +205,6 @@ export default defineEventHandler(async (event) => {
 });
 ```
 
-#### Select Schema Validation
-
-drizzle-zod also generates select schemas for output validation:
-
-```typescript
-import { selectStorySchema } from '~/server/db/schema/app';
-
-const story = await db.select().from(stories).limit(1);
-const validated = selectStorySchema.parse(story[0]);
-```
-
 ### Validation Schema Types
 
 | Schema Type | Description |
@@ -410,6 +212,133 @@ const validated = selectStorySchema.parse(story[0]);
 | `insertStorySchema` | Validates data for INSERT operations |
 | `selectStorySchema` | Validates data from SELECT operations |
 | `updateStorySchema` | Validates data for UPDATE operations |
+
+---
+
+## Local Schema (SQLite via PowerSync)
+
+Client-side gameplay state is stored in local SQLite via PowerSync. The schema is defined in `shared/db/localSchema.ts` and consumed through `app/composables/useLocalDb.ts`.
+
+**Location:** `shared/db/localSchema.ts`
+
+### local_sessions
+
+Stores vignette/gameplay sessions. Replaces the server-side `game_sessions` table.
+
+**Schema Definition:**
+
+```typescript
+export const localSessions = sqliteTable('local_sessions', {
+  id: text('id').primaryKey().notNull(),
+  storyId: text('story_id').notNull(),
+  title: text('title').notNull(),
+  description: text('description'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+```
+
+**Columns:**
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | text | PRIMARY KEY, NOT NULL | UUID session identifier |
+| `story_id` | text | NOT NULL | Associated story ID (nullable in vignettes) |
+| `title` | text | NOT NULL | Session/vignette title |
+| `description` | text | nullable | Session description |
+| `created_at` | text | NOT NULL | ISO timestamp |
+| `updated_at` | text | NOT NULL | ISO timestamp |
+
+### local_pages
+
+Stores conversation pages within a session. Replaces the server-side `game_session_pages` and `game_session_messages` tables.
+
+**Schema Definition:**
+
+```typescript
+export const localPages = sqliteTable('local_pages', {
+  id: text('id').primaryKey().notNull(),
+  sessionId: text('session_id').notNull(),
+  system: text('system'),
+  prompt: text('prompt'),
+  response: text('response'),
+  createdAt: text('created_at').notNull(),
+});
+```
+
+**Columns:**
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | text | PRIMARY KEY, NOT NULL | UUID page identifier |
+| `session_id` | text | NOT NULL | Parent session ID |
+| `system` | text | nullable | System prompt for this page |
+| `prompt` | text | nullable | User's input/prompt |
+| `response` | text | nullable | AI-generated response |
+| `created_at` | text | NOT NULL | ISO timestamp |
+
+### local_module_runtime
+
+Stores module runtime state per session. Replaces the server-side `module_runtime` table.
+
+**Schema Definition:**
+
+```typescript
+export const localModuleRuntime = sqliteTable('local_module_runtime', {
+  id: text('id').primaryKey().notNull(),
+  sessionId: text('session_id').notNull(),
+  moduleId: text('module_id').notNull(),
+  data: text('data').notNull(),
+});
+```
+
+**Columns:**
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | text | PRIMARY KEY, NOT NULL | UUID identifier |
+| `session_id` | text | NOT NULL | Parent session ID |
+| `module_id` | text | NOT NULL | Module identifier |
+| `data` | text | NOT NULL | Serialized module runtime state |
+
+### Local Schema Barrel Export
+
+```typescript
+// shared/db/localSchema.ts
+export const drizzleSchema = {
+  localSessions,
+  localPages,
+  localModuleRuntime,
+};
+```
+
+### Querying Local Database
+
+```typescript
+import { useLocalDb } from '~/composables/useLocalDb';
+import { localSessions, localPages } from '#shared/db/localSchema';
+import { eq } from 'drizzle-orm';
+
+const db = useLocalDb();
+
+// Query sessions
+const sessions = await db.select().from(localSessions);
+
+// Query pages for a session
+const pages = await db.select().from(localPages).where(eq(localPages.sessionId, sessionId));
+
+// Insert a new page
+await db.insert(localPages).values({
+  id: crypto.randomUUID(),
+  sessionId: sessionId,
+  system: 'system prompt',
+  prompt: 'user input',
+  response: 'AI response',
+  createdAt: new Date().toISOString(),
+});
+```
+
+---
 
 ## Migration Commands
 
@@ -424,7 +353,7 @@ const validated = selectStorySchema.parse(story[0]);
 }
 ```
 
-### Usage
+### Usage (Server PostgreSQL only)
 
 ```bash
 # Generate migration files from schema changes
@@ -440,8 +369,16 @@ bun run db:push
 bun run db:studio
 ```
 
+### Local Schema Changes
+
+To modify the local SQLite schema:
+
+1. Update `shared/db/localSchema.ts`
+2. PowerSync handles schema migration automatically on next client initialization (local-only mode)
+
 ## Related Documentation
 
 - [Code Conventions](./code-conventions.md) - Query patterns and type safety
 - [Project Structure](./project-structure.md) - Schema file organization
 - [API Routes](./api-routes.md) - Database usage in API endpoints
+- [Frontend Architecture](./frontend-architecture.md) - How the frontend uses local SQLite
