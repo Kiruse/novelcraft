@@ -90,56 +90,17 @@
     </div>
 
     <!-- Account box pinned to bottom -->
-    <div class="sidebar-footer">
-      <!-- Logged out -->
-      <div v-if="!user" class="account-guest">
-        <NuxtLink
-          v-if="expanded || isMobile"
-          to="/auth/login"
-          class="auth-btn"
-          @click="closeDrawer"
-        >
-          Log in
-        </NuxtLink>
-        <NuxtLink
-          v-if="expanded || isMobile"
-          to="/auth/login?signup=1"
-          class="auth-btn auth-btn--cta"
-          @click="closeDrawer"
-        >
-          Sign up
-        </NuxtLink>
-      </div>
-
-      <!-- Logged in -->
-      <div v-else>
-        <button class="account-trigger" @click="accountOpen = !accountOpen">
-          <img v-if="user.image" :src="user.image" :alt="user.name" class="avatar" />
-          <div v-else class="avatar avatar--fallback">{{ initials }}</div>
-          <span v-if="expanded || isMobile" class="account-name">{{ user.name }}</span>
-          <Chevron v-if="expanded || isMobile" :open="accountOpen" direction="down" />
-        </button>
-
-        <Transition name="slide-up">
-          <div v-if="accountOpen" class="account-menu">
-            <NuxtLink to="/settings" class="account-menu-item" @click="accountOpen = false; closeDrawer()">
-              <SettingOutlined class="account-menu-icon" /> Settings
-            </NuxtLink>
-            <button class="account-menu-item account-menu-item--danger" @click="signOut">
-              <LogoutOutlined class="account-menu-icon" /> Sign out
-            </button>
-          </div>
-        </Transition>
-      </div>
-    </div>
+    <AccountBox
+      :user="user"
+      :expanded="expanded || isMobile"
+      @close-drawer="closeDrawer"
+    />
   </aside>
 </template>
 
 <script setup lang="ts">
-import { authClient } from '~/composables/useAuthClient';
 import type { UserShape } from '~/composables/useCurrentUser';
-import { useCurrentUser } from '~/composables/useCurrentUser';
-import { HomeOutlined, BuildOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons-vue';
+import { HomeOutlined, BuildOutlined } from '@ant-design/icons-vue';
 
 const props = defineProps<{
   user: UserShape | null;
@@ -158,7 +119,6 @@ const MOBILE_BREAKPOINT = 768;
 
 const expanded = ref(true);
 const drawerOpen = ref(false);
-const accountOpen = ref(false);
 const isMobile = ref(false);
 
 function toggle() {
@@ -173,23 +133,6 @@ defineExpose({ toggle });
 
 function closeDrawer() {
   if (isMobile.value) drawerOpen.value = false;
-}
-
-const initials = computed(() => {
-  if (!props.user?.name) return '?';
-  return props.user.name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
-});
-
-async function signOut() {
-  accountOpen.value = false;
-  await authClient.signOut();
-  await useCurrentUser().refresh();
-  navigateTo('/auth/login');
 }
 
 function checkMobile() {
@@ -471,130 +414,6 @@ onUnmounted(() => {
   color: var(--text-2);
   padding: var(--size-2) var(--size-3);
   font-style: italic;
-}
-
-/* --- Footer (Account) --- */
-
-.sidebar-footer {
-  border-block-start: var(--border-size-1) solid var(--surface-3);
-  padding: var(--size-3);
-}
-
-.account-guest {
-  display: flex;
-  gap: var(--size-2);
-}
-
-.auth-btn {
-  flex: 1;
-  text-align: center;
-  padding: var(--size-2) var(--size-3);
-  border-radius: var(--radius-2);
-  font-size: var(--font-size-2);
-  font-weight: var(--font-weight-5);
-  text-decoration: none;
-  color: var(--text-2);
-}
-
-.auth-btn:hover {
-  background: var(--surface-3);
-  color: var(--text-1);
-}
-
-.auth-btn--cta {
-  background: var(--brand-gradient);
-  color: var(--gray-0);
-}
-
-.auth-btn--cta:hover {
-  color: var(--gray-0);
-  opacity: 0.9;
-}
-
-.account-trigger {
-  display: flex;
-  align-items: center;
-  gap: var(--size-2);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: var(--size-2);
-  border-radius: var(--radius-2);
-  inline-size: 100%;
-  text-align: start;
-}
-
-.account-trigger:hover {
-  background: var(--surface-3);
-}
-
-.avatar {
-  inline-size: var(--size-7);
-  block-size: var(--size-7);
-  border-radius: var(--radius-round);
-  object-fit: cover;
-  flex-shrink: 0;
-  background: var(--surface-3);
-}
-
-.avatar--fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--font-size-0);
-  font-weight: var(--font-weight-6);
-  background: var(--brand-gradient);
-  color: var(--gray-0);
-}
-
-.account-name {
-  flex: 1;
-  font-size: var(--font-size-2);
-  font-weight: var(--font-weight-5);
-  color: var(--text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-menu {
-  display: flex;
-  flex-direction: column;
-  padding: var(--size-1) 0;
-}
-
-.account-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--size-2);
-  padding: var(--size-2) var(--size-3);
-  border-radius: var(--radius-2);
-  font-size: var(--font-size-2);
-  font-weight: var(--font-weight-5);
-  text-decoration: none;
-  color: var(--text-1);
-  background: none;
-  border: none;
-  cursor: pointer;
-  inline-size: 100%;
-  text-align: start;
-}
-
-.account-menu-item:hover {
-  background: var(--surface-3);
-}
-
-.account-menu-item--danger {
-  color: var(--red-7);
-}
-
-.account-menu-item--danger:hover {
-  background: var(--red-2);
-}
-
-.account-menu-icon {
-  font-size: var(--font-size-2);
-  line-height: 1;
 }
 
 /* --- Transitions --- */

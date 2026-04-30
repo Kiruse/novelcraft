@@ -23,6 +23,8 @@ novelcraft/
 │   ├── components/               # Reusable Vue components (auto-imported)
 │   │   ├── StoryCard.vue         # Story card component
 │   │   ├── AppSidebar.vue        # Navigation sidebar
+│   │   ├── AccountBox.vue        # User account box (avatar, profile, menu)
+│   │   ├── ProfilesDialog.vue    # Profile management modal dialog
 │   │   ├── Game.vue              # Main gameplay component
 │   │   ├── ChatArea.vue          # Chat/conversation display
 │   │   ├── GameDebugPanel.vue    # Gameplay debug panel
@@ -32,6 +34,7 @@ novelcraft/
 │   │   └── ...                   # Other UI components
 │   ├── composables/              # Vue composables (auto-imported)
 │   │   ├── useLocalDb.ts         # PowerSync + Drizzle SQLite wrapper
+│   │   ├── useProfiles.ts        # Player profiles CRUD (local SQLite)
 │   │   ├── useLlmStream.ts       # Centralized SSE streaming client
 │   │   ├── useStoryBuilder.ts    # Story builder logic
 │   │   ├── useCurrentUser.ts     # Current user state
@@ -153,7 +156,7 @@ Code shared between the frontend app and server.
 
 **`db/`**
 - Client-side SQLite schema for PowerSync
-- `localSchema.ts` defines: `local_sessions`, `local_pages`, `local_module_runtime`
+- `localSchema.ts` defines: `local_sessions`, `local_pages`, `local_module_runtime`, `local_profiles`
 - Barrel export via `index.ts`
 - Consumed by `useLocalDb` composable
 

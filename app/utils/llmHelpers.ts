@@ -8,19 +8,12 @@ export interface LlmMessage {
 }
 
 export interface BuildMessagesOpts {
-  /** Story title for context. */
   title: string;
-  /** Story description/premise for context. */
   description: string | null | undefined;
-  /** Current pages to build conversation from. */
   pages: GamePage[];
-  /** Override the last page's prompt/response (e.g. suppress response for generation). */
   lastPageOverride?: { prompt?: string | null; response?: string | null };
 }
 
-// --- Functions ---
-
-/** Build conversation messages from pages + context. */
 export function buildMessages(opts: BuildMessagesOpts): LlmMessage[] {
   const context = opts.description
     ? `Title: ${opts.title}\nPremise: ${opts.description}`

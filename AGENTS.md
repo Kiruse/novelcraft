@@ -115,11 +115,14 @@ Always import from `#shared/prompts` & maintain them there as a single source of
 
 Gameplay state (vignettes, pages, module runtime) is stored in **local SQLite** via PowerSync.
 
-- **Schema**: `shared/db/localSchema.ts` — defines `local_sessions`, `local_pages`, `local_module_runtime`
+- **Schema**: `shared/db/localSchema.ts` — defines `local_sessions`, `local_pages`, `local_module_runtime`, `local_profiles`
 - **Composable**: `app/composables/useLocalDb.ts` — wraps PowerSync client with Drizzle ORM, provides `db` instance
+- **Composable**: `app/composables/useProfiles.ts` — wraps `local_profiles` table; exposes `profiles`, `activeProfile`, `create`, `update`, `remove`, `setActive`, `init`; auto-creates a default profile on first use (max 5)
 - **Plugin**: `app/plugins/powersync.client.ts` — initializes PowerSync on client-side only
 - **Mode**: Local-only (no sync service yet)
 - **Dependencies**: `@powersync/web`, `@journeyapps/wa-sqlite`, `@powersync/drizzle-driver`
+
+**Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `app/utils/llmHelpers.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
 
 ```typescript
 // Access local database in any composable/component

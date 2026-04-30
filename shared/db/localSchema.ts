@@ -25,8 +25,18 @@ export const localModuleRuntime = sqliteTable('local_module_runtime', {
   data: text('data').notNull(),
 });
 
+export const localProfiles = sqliteTable('local_profiles', {
+  id: text('id').primaryKey().notNull(),
+  name: text('name').notNull(),
+  fields: text('fields').notNull(),
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const drizzleSchema = {
   localSessions,
   localPages,
   localModuleRuntime,
+  localProfiles,
 };

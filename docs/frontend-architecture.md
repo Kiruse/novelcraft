@@ -130,6 +130,32 @@ const db = useLocalDb();
 const sessions = await db.select().from(localSessions);
 ```
 
+### useProfiles
+
+Wraps the `local_profiles` SQLite table for managing player profiles.
+
+**Location:** `app/composables/useProfiles.ts`
+
+**Exports:** `ProfileRow`, `Profile` types
+
+**Returns:** `{ profiles, activeProfile, refresh, create, update, remove, setActive, init, maxProfiles, defaultFields }`
+
+- `profiles` — `readonly` reactive array of all profiles
+- `activeProfile` — computed reference to the profile with `active: true`
+- `init()` — loads profiles from local DB, auto-creates a "Default" profile if none exist
+- `create(name, fields?)` — creates a new profile (max 5)
+- `update(id, patch)` — updates name and/or fields
+- `remove(id)` — deletes a profile; if it was active, activates the next available
+- `setActive(id)` — sets exactly one profile as active
+
+**Default fields:** `{ name, appearance, interests, favorite color }`
+
+```typescript
+const { profiles, activeProfile, init } = useProfiles();
+await init();
+console.log(activeProfile.value?.fields);
+```
+
 ### useLlmStream
 
 Centralized SSE streaming client for the LLM proxy endpoint.
@@ -212,7 +238,29 @@ Application navigation sidebar.
 
 **Location:** `app/components/AppSidebar.vue`
 
-**Note:** Vignette section, sessions section, and `createVignette()` have been removed. Gameplay navigation is handled client-side.
+**Note:** Vignette section, sessions section, and `createVignette()` have been removed. Gameplay navigation is handled client-side. The account box (footer) is extracted into the `AccountBox` component.
+
+### AccountBox
+
+User account section displayed in the sidebar footer. Shows user avatar/name, current active profile name, and an account menu (Profiles, Settings, Sign out). Contains the `ProfilesDialog`.
+
+**Location:** `app/components/AccountBox.vue`
+
+**Props:** `{ user: UserShape | null; expanded: boolean }`
+
+**Events:** `closeDrawer`
+
+Initialized via `useProfiles().init()` on mount.
+
+### ProfilesDialog
+
+Modal dialog for managing player profiles (create, edit, delete, switch active). Fields are `key: value` pairs in single text inputs. Tab on last non-empty field creates a new one.
+
+**Location:** `app/components/ProfilesDialog.vue`
+
+**Props:** `{ open, profiles, activeProfile, maxProfiles, defaultFields }`
+
+**Events:** `close`, `create`, `update`, `remove`, `setActive`
 
 ### SuggestionPicker
 

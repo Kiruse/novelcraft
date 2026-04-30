@@ -7,7 +7,7 @@ This document describes the complete database schema, including all tables, colu
 The project has two separate databases:
 
 1. **Server database** (PostgreSQL) — shareable entities: users, auth, stories
-2. **Client-side local database** (SQLite via PowerSync) — gameplay state: vignettes, sessions, module runtime
+2. **Client-side local database** (SQLite via PowerSync) — gameplay state: vignettes, sessions, module runtime, profiles
 
 ### Server Schema
 
@@ -21,7 +21,7 @@ Located in `server/db/schema/`:
 
 Located in `shared/db/`:
 
-- **localSchema.ts** - Client-side SQLite tables (local_sessions, local_pages, local_module_runtime)
+- **localSchema.ts** - Client-side SQLite tables (local_sessions, local_pages, local_module_runtime, local_profiles)
 - **index.ts** - Barrel export
 
 ### Technology Stack
@@ -301,6 +301,40 @@ export const localModuleRuntime = sqliteTable('local_module_runtime', {
 | `module_id` | text | NOT NULL | Module identifier |
 | `data` | text | NOT NULL | Serialized module runtime state |
 
+### local_profiles
+
+Stores user-defined player profiles. Profile data is local-only — never synced to the server. The active profile's fields are injected into gameplay LLM prompts.
+
+**Schema Definition:**
+
+```typescript
+export const localProfiles = sqliteTable('local_profiles', {
+  id: text('id').primaryKey().notNull(),
+  name: text('name').notNull(),
+  fields: text('fields').notNull(),
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+```
+
+**Columns:**
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | text | PRIMARY KEY, NOT NULL | UUID profile identifier |
+| `name` | text | NOT NULL | Profile display name |
+| `fields` | text | NOT NULL | JSON-serialized `Record<string, string>` of key-value fields |
+| `active` | integer (boolean) | NOT NULL, default false | Whether this is the currently active profile |
+| `created_at` | text | NOT NULL | ISO timestamp |
+| `updated_at` | text | NOT NULL | ISO timestamp |
+
+**Business rules:**
+- Max 5 profiles per user
+- Only one profile may be active at a time
+- Default fields prepopulated: `name`, `appearance`, `interests`, `favorite color`
+- Managed via `app/composables/useProfiles.ts`
+
 ### Local Schema Barrel Export
 
 ```typescript
@@ -309,6 +343,7 @@ export const drizzleSchema = {
   localSessions,
   localPages,
   localModuleRuntime,
+  localProfiles,
 };
 ```
 

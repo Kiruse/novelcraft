@@ -9,6 +9,7 @@ export interface StreamLlmOptions {
   persona: string;
   messages: Array<{ author: string; content: string }>;
   model?: string;
+  context?: Record<string, unknown>;
 }
 
 function parseSseChunk(buffer: string): { events: StreamEvent[]; remainder: string } {
@@ -33,37 +34,10 @@ function parseSseChunk(buffer: string): { events: StreamEvent[]; remainder: stri
   return { events, remainder };
 }
 
-export async function* streamLlm({
-  persona,
-  messages,
-  model = DEFAULT_MODEL,
-}: StreamLlmOptions): AsyncGenerator<string> {
-  const response = await fetch('/api/llm/prompt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages, persona }),
-  });
-
-  if (!response.ok) throw new Error(`LLM request failed: HTTP ${response.status}`);
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const { events } = parseSseChunk(buffer);
-    buffer = buffer.includes('\n\n') ? buffer.split('\n\n').pop() ?? '' : buffer;
-
-    for (const event of events) {
-      if (event.type === 'text') {
-        yield event.data;
-      }
+export async function* streamLlm(options: StreamLlmOptions): AsyncGenerator<string> {
+  for await (const event of streamLlmFull(options)) {
+    if (event.type === 'text') {
+      yield event.data;
     }
   }
 }
@@ -72,11 +46,12 @@ export async function* streamLlmFull({
   persona,
   messages,
   model = DEFAULT_MODEL,
+  context,
 }: StreamLlmOptions): AsyncGenerator<StreamEvent> {
   const response = await fetch('/api/llm/prompt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages, persona }),
+    body: JSON.stringify({ model, messages, persona, context }),
   });
 
   if (!response.ok) throw new Error(`LLM request failed: HTTP ${response.status}`);

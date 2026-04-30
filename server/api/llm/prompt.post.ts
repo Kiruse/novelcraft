@@ -8,15 +8,13 @@ import { z } from 'zod';
 const archetype = new ConversationalArchetype({});
 
 const bodySchema = z.object({
-  /** Model identifier resolvable via `resolveModel`. */
   model: z.string().min(1),
-  /** Conversation history — each entry maps to a user/assistant message. */
   messages: z.array(z.object({
     author: z.string(),
     content: z.string().min(1),
   })).min(1),
-  /** System prompt / persona to apply. */
   persona: z.string().min(1),
+  context: z.record(z.string(), z.string()).optional(),
 });
 
 export default defineEventHandler(async (event) => {
@@ -37,7 +35,7 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const { model: modelId, messages: history, persona } = parsed.data;
+  const { model: modelId, messages: history, persona, context } = parsed.data;
   const model = resolveModel(modelId);
 
   // --- Build conversation ---
@@ -52,7 +50,7 @@ export default defineEventHandler(async (event) => {
 
   const streamLoop = (async () => {
     try {
-      const stream = await archetype.prompt({ model, conversation, persona });
+      const stream = await archetype.prompt({ model, conversation, persona, context });
 
       for await (const chunk of stream) {
         if (chunk.type === 'text-delta') {

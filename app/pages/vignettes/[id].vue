@@ -86,6 +86,7 @@ import {
 } from '#shared/prompts';
 import { streamLlm } from '~/composables/useLlmStream';
 import { buildMessages } from '~/utils/llmHelpers';
+import { useProfiles } from '~/composables/useProfiles';
 
 const route = useRoute();
 const id = computed(() => route.params.id as string);
@@ -101,6 +102,15 @@ const selectedIndex = ref<number | null>(null);
 const streaming = ref(false);
 const streamText = ref('');
 const loaded = ref(false);
+
+const { activeProfile } = useProfiles();
+
+const profileContext = computed(() => {
+  if (!activeProfile.value) return undefined;
+  const fields = Object.entries(activeProfile.value.fields).filter(([, v]) => v.trim());
+  if (fields.length === 0) return undefined;
+  return Object.fromEntries(fields) as Record<string, unknown>;
+});
 
 const VIGNETTE_SUGGEST_PERSONA = unindent(`
   You are a creative story premise generator for quick interactive vignettes.
@@ -283,6 +293,7 @@ async function lockIn() {
     const streamGen = streamLlm({
       persona: PERSONA_PLATFORM,
       messages,
+      context: profileContext.value,
     });
     for await (const chunk of streamGen) {
       fullText += chunk;
@@ -355,6 +366,7 @@ async function sendWrite(text: string) {
     const streamGen = streamLlm({
       persona: PERSONA_PLATFORM,
       messages,
+      context: profileContext.value,
     });
     for await (const chunk of streamGen) {
       fullText += chunk;
@@ -452,6 +464,7 @@ async function regeneratePage(
     const streamGen = streamLlm({
       persona: PERSONA_PLATFORM,
       messages,
+      context: profileContext.value,
     });
     for await (const chunk of streamGen) {
       fullText += chunk;
