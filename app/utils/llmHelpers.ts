@@ -1,6 +1,8 @@
 import type { GamePage } from '~/utils/msgUtils';
 
-// --- Types ---
+export interface Context {
+  [key: string]: string | Context;
+}
 
 export interface LlmMessage {
   author: string;
@@ -11,42 +13,60 @@ export interface BuildMessagesOpts {
   title: string;
   description: string | null | undefined;
   pages: GamePage[];
+  pageIndex?: number;
   lastPageOverride?: { prompt?: string | null; response?: string | null };
 }
 
-export function buildMessages(opts: BuildMessagesOpts): LlmMessage[] {
-  const context = opts.description
-    ? `Title: ${opts.title}\nPremise: ${opts.description}`
-    : `Title: ${opts.title}`;
+export interface BuildMessagesResult {
+  context: Context;
+  messages: LlmMessage[];
+}
 
-  const msgs: LlmMessage[] = [
-    { author: 'user', content: `[Context] ${context}` },
-    { author: 'ai', content: '(Story started)' },
-  ];
+export function buildMessages({
+  title,
+  description = undefined,
+  pages,
+  pageIndex = pages.length - 1,
+  lastPageOverride,
+}: BuildMessagesOpts): BuildMessagesResult {
+  const context: any = {
+    story: {
+      title,
+    },
+  };
 
-  for (let i = 0; i < opts.pages.length; i++) {
-    const isLast = i === opts.pages.length - 1;
-    const page = opts.pages[i]!;
+  if (description) context.story.description = description;
+
+  pages = pages.slice(0, pageIndex + 1);
+
+  const messages: LlmMessage[] = [];
+
+  for (let i = 0; i < pages.length; i++) {
+    const isLast = i === pages.length - 1;
+    const page = pages[i]!;
 
     // Inject the page's system field as a system message
     if (page.system) {
-      msgs.push({ author: 'system', content: page.system });
+      messages.push({ author: 'system', content: page.system });
     }
 
-    const effectivePrompt = (isLast && opts.lastPageOverride?.prompt !== undefined)
-      ? opts.lastPageOverride.prompt
+    const effectivePrompt = (isLast && lastPageOverride?.prompt !== undefined)
+      ? lastPageOverride.prompt
       : page.prompt;
-    const effectiveResponse = (isLast && opts.lastPageOverride?.response !== undefined)
-      ? opts.lastPageOverride.response
+    const effectiveResponse = (isLast && lastPageOverride?.response !== undefined)
+      ? lastPageOverride.response
       : page.response;
 
     if (effectivePrompt) {
-      msgs.push({ author: 'user', content: effectivePrompt });
+      messages.push({ author: 'user', content: effectivePrompt });
     }
     if (effectiveResponse) {
-      msgs.push({ author: 'ai', content: effectiveResponse });
+      messages.push({ author: 'ai', content: effectiveResponse });
     }
   }
 
-  return msgs;
+  return {
+    context,
+    messages,
+  };
 }

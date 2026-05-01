@@ -1,6 +1,8 @@
+- [ ] Introduce new "aside" chat for temporary brainstorming sessions
+- [ ] Introduce multiple timelines
+- [ ] Introduce events to pages & use them to materialize game state
+- [ ] Store game state checkpoints to improve performance of materialization upon starting new timelines
 - [ ] Setup PowerSync infra & connect to NeonDB (logical replication, `CREATE PUBLICATION`)
 - [ ] Add PWA support via `@vite-pwa/nuxt` — verify compatibility with Nuxt 4
-- [ ] Refactor story play page (`/stories/:author/:id`) to use local DB instead of server sessions
-- [ ] Remove `streamLlm` / `StreamLlmOptions` from `llmHelpers.ts` (superseded by `useLlmStream.ts`)
 - [ ] Migrate `GameDebugPanel.vue` to use local DB + shared gameplay modules
 - [ ] Add bring-your-own-model UI (settings page for configuring model endpoint/key)

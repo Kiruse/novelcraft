@@ -1,4 +1,4 @@
-import { ConversationalArchetype } from '@stegakir/aikit/archetypes/conversational';
+import { ConversationalArchetype, type Context } from '@stegakir/aikit/archetypes/conversational';
 import { Conversation, message } from '@stegakir/aikit/messages';
 import { MemoryMessageStore } from '@stegakir/aikit/message-stores/memory';
 import { auth } from '#server/auth/config';
@@ -7,6 +7,12 @@ import { z } from 'zod';
 
 const archetype = new ConversationalArchetype({});
 
+const contextValueSchema: z.ZodType<Context[keyof Context]> = z.union([
+  z.string(),
+  z.record(z.string(), z.lazy(() => contextValueSchema)),
+  z.undefined(),
+]);
+
 const bodySchema = z.object({
   model: z.string().min(1),
   messages: z.array(z.object({
@@ -14,7 +20,7 @@ const bodySchema = z.object({
     content: z.string().min(1),
   })).min(1),
   persona: z.string().min(1),
-  context: z.record(z.string(), z.string()).optional(),
+  context: z.record(z.string(), contextValueSchema).optional(),
 });
 
 export default defineEventHandler(async (event) => {

@@ -50,7 +50,7 @@
       <!-- Vignettes (always shown, reads from local DB) -->
       <div v-if="expanded || isMobile" class="sidebar-section">
         <h3 class="sidebar-section-title">Vignettes</h3>
-        <button class="sidebar-new-btn" @click="navigateTo('/vignettes/new'); closeDrawer()">
+        <button class="sidebar-new-btn" style="margin-bottom: var(--size-1)" @click="navigateTo('/vignettes/new'); closeDrawer()">
           + New vignette
         </button>
         <div v-if="vignettes.length > 0" class="sidebar-sessions">

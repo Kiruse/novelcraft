@@ -2,7 +2,7 @@ import { marked } from 'marked';
 
 /** A page in the game session. */
 export interface GamePage {
-  id: number | string;
+  id: string;
   /** System instructions for this page. */
   system: string | null;
   /** The user's prompt. */

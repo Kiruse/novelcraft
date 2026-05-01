@@ -53,11 +53,13 @@ Vignettes are purely client-side — they use local SQLite instead of server API
 
 #### Vignette List (`app/pages/vignettes/index.vue`)
 
-Displays the user's local vignette sessions.
+Displays the user's local vignette sessions with keyboard-navigable rows.
 
 **Route:** `/vignettes`
 
 **Data source:** Reads from local SQLite (`local_sessions` table via `useLocalDb`)
+
+**Keyboard navigation:** `j`/`↓` and `k`/`↑` move a `focusedIndex` through the list; `Enter` opens the focused vignette. A document-level `keydown` listener is added in `onMounted` and removed in `onUnmounted`. Each row is a `<NuxtLink>` tracked via `rowRefs`; focused rows get the `vignette-row--focused` class and DOM focus for the `:focus` outline.
 
 #### Vignette Play (`app/pages/vignettes/[id].vue`)
 
@@ -194,6 +196,25 @@ Story builder logic, imports gameplay modules from shared code.
 
 Uses `getAllModules()` from `#shared/gameplay` instead of a server API endpoint.
 
+### useShortcutsDialog
+
+Shared state composable for the keyboard shortcuts dialog.
+
+**Location:** `app/composables/useShortcutsDialog.ts`
+
+**Returns:** `{ open: Readonly<Ref<boolean>>, show: () => void, close: () => void, toggle: () => void }`
+
+- `open` — readonly reactive boolean controlling dialog visibility
+- `show()` — opens the dialog
+- `close()` — closes the dialog
+- `toggle()` — toggles dialog visibility
+
+Used by both `app.vue` (global `Ctrl+Shift+/` shortcut) and `AccountBox.vue` (menu item) to control the same dialog instance.
+
+```typescript
+const { open, show, close, toggle } = useShortcutsDialog();
+```
+
 ### useAuthClient
 
 Authentication client wrapper.
@@ -242,7 +263,7 @@ Application navigation sidebar.
 
 ### AccountBox
 
-User account section displayed in the sidebar footer. Shows user avatar/name, current active profile name, and an account menu (Profiles, Settings, Sign out). Contains the `ProfilesDialog`.
+User account section displayed in the sidebar footer. Shows user avatar/name, current active profile name, and an account menu (Profiles, Shortcuts, Settings, Sign out). Contains the `ProfilesDialog`. The "Shortcuts" menu item opens the shortcuts dialog via `useShortcutsDialog().show()`.
 
 **Location:** `app/components/AccountBox.vue`
 
@@ -280,9 +301,38 @@ Uses `streamLlmFull()` from `useLlmStream.ts` for LLM streaming.
 
 ### Game
 
-Main gameplay component.
+Main gameplay component — the single interactive surface for vignette play sessions.
 
 **Location:** `app/components/Game.vue`
+
+**Props:**
+
+```typescript
+interface GameProps {
+  /** Pre-built page entries rendered in the story body. */
+  pages: GamePage[];
+  /** Story title shown in the header input. */
+  title?: string;
+  /** Placeholder for the title input. */
+  titlePlaceholder?: string;
+  /** Whether the agent is currently streaming a response. */
+  streaming?: boolean;
+  /** Accumulated streaming text shown during generation. */
+  streamText?: string;
+}
+```
+
+**Events:**
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `prompt` | `{ text: string; mode: InputMode; pageId: number \| string \| null }` | User submitted a message in the chat bar |
+| `updateTitle` | `string` | Title input blurred with a new value |
+| `updatePage` | `{ pageId: number \| string; response?: string; system?: string \| null }` | User edited a page's prose response or system prompt |
+
+**Input modes** (cycled via Shift+Tab or the mode button): `write`, `steer`, `instruct`
+
+**Exposed:** `setPage(n: number)` — programmatic page navigation (used by parent).
 
 ### ChatArea
 
@@ -295,6 +345,48 @@ Chat/conversation display area.
 Debug panel for gameplay state inspection.
 
 **Location:** `app/components/GameDebugPanel.vue`
+
+### ShortcutsDialog
+
+Teleport-ed modal dialog listing all keyboard shortcuts, mounted in `app.vue`.
+
+**Location:** `app/components/ShortcutsDialog.vue`
+
+**Features:**
+- Search bar to filter shortcuts by name (default mode)
+- "By keys" checkbox toggle to filter by key combination instead
+- Highlights matching keys or dims non-matching labels based on active filter mode
+- Escape key closes the dialog
+- Auto-focuses the search input when opened
+- Resets filter state on each open
+
+**Shortcut groups** (defined in the `SHORTCUTS` constant):
+- **Global** — shortcuts dialog toggle, Alt+N chord navigation (Home, Vignettes)
+- **Vignettes list** — j/k/Enter row navigation
+- **Game — input focus** — Ctrl+↑/↓ focus cycle, Ctrl+Enter chat bar
+- **Game — chat bar** — Shift+Tab mode cycle, Enter send, ↑ edit last response
+- **Game — editors** — Escape close, Ctrl+Enter save
+- **Game — slash commands** — /write, /steer, /instruct
+
+Uses `ShortcutRow` with the `highlight` prop to visually emphasize matching elements.
+
+### ShortcutRow
+
+Presentational component that renders a keyboard shortcut as a row with a label and styled `<kbd>` keys.
+
+**Location:** `app/components/ShortcutRow.vue`
+
+**Props:**
+
+```typescript
+{
+  keys: string;                // Space-separated key tokens, e.g. "Ctrl Shift /"
+  label: string;               // Human-readable description of what the shortcut does
+  highlight?: 'keys' | 'label' | '';  // Controls visual emphasis when filtering (default: '')
+}
+```
+
+The `keys` string is split on spaces to produce individual `<kbd>` elements. When `highlight` is `'keys'`, the kbd elements are visually emphasized; when `'label'`, the label text is emphasized. Used by `ShortcutsDialog`.
 
 ### Creating New Components
 
@@ -511,6 +603,69 @@ export default defineNuxtConfig({
   },
 });
 ```
+
+## Keyboard Shortcuts
+
+### Global Shortcuts
+
+Registered in `app.vue` on `document`, so they work on every page.
+
+| Shortcut | Behavior |
+|----------|----------|
+| `Ctrl+Shift+/` (also `Ctrl+Shift+?`) | Open/toggle the shortcuts dialog |
+| `Alt+N → H` | Navigate to Home (`/`) |
+| `Alt+N → V` | Navigate to Vignettes (`/vignettes`) |
+
+The `Ctrl+Shift+/` listener also matches `?` because pressing `/` with Shift on US keyboards produces `?`. The dialog is a `ShortcutsDialog` component controlled via `useShortcutsDialog().toggle()`.
+
+**Alt+N chord navigation:** Pressing `Alt+N` sets an internal `awaitingAltN` flag. On the next non-Alt keypress, the flag is cleared and the key is looked up in the `ALT_N_ROUTES` map (`{ h: '/', v: '/vignettes' }`). If a match is found, `navigateTo(route)` is called. Unrecognized keys are silently ignored.
+
+### Vignettes List Shortcuts
+
+Registered in `app/pages/vignettes/index.vue` on `document` via `onMounted`, removed on `onUnmounted`. Only active while the vignettes list page is mounted.
+
+| Shortcut | Behavior |
+|----------|----------|
+| `j` or `↓` | Select next vignette |
+| `k` or `↑` | Select previous vignette |
+| `Enter` | Open the selected vignette |
+
+Implementation uses a `focusedIndex` ref to track the currently highlighted row and a `rowRefs` array of `<HTMLElement>` template refs. `moveFocus(delta)` clamps the index and calls `.focus()` on the corresponding `<NuxtLink>` element. The focused row receives the `vignette-row--focused` CSS class (background change + slight upward translate) and a `:focus` outline.
+
+### Game Component Shortcuts
+
+The `Game` component registers its own global `keydown` listener on mount (`onGlobalKeydown`) that handles focus cycling and chat bar access. These shortcuts work from any input within the Game component.
+
+### Focus Cycle Shortcuts
+
+Three focus slots exist in top-to-bottom order: **chat input** → **prose editor** → **system prompt editor**.
+
+| Shortcut | Behavior |
+|----------|----------|
+| `Ctrl+Up` | Cycle focus upward: chat → prose → system. If a target editor is not yet open but has content to edit, it enters edit mode automatically. Unavailable targets (no content, streaming) are skipped. |
+| `Ctrl+Down` | Cycle focus downward: system → prose → chat. Same auto-open and skip logic as `Ctrl+Up`. |
+
+### Chat Bar Shortcut
+
+| Shortcut | Behavior |
+|----------|----------|
+| `Ctrl+Enter` | Focus the chat bar. If the prose editor or system prompt editor is currently active, it saves (blurs) that editor first, then focuses the chat bar. Works from any input in the Game component. |
+
+### Other Shortcuts
+
+| Shortcut | Context | Behavior |
+|----------|---------|----------|
+| `Shift+Tab` | Chat input focused | Cycle input mode (write → steer → instruct → write) |
+| `ArrowUp` | Chat input empty, response exists | Open prose editor for the current page |
+| `Escape` | Prose or system editor focused | Save (blur) the editor |
+| `/command ` | Chat input | Slash commands: `/steer`, `/remind`, `/write`, `/instruct` switch mode and strip the command prefix |
+
+### Implementation Details
+
+- The global listener (`onGlobalKeydown`) is registered on `document` in `onMounted` and cleaned up in `onUnmounted`.
+- `cycleFocus(direction)` determines the currently focused slot by comparing `document.activeElement` against the template refs (`chatField`, `editArea`, `editSystemArea`), then walks the `FOCUS_CYCLE` array in the requested direction.
+- `focusSlot(slot)` returns a boolean indicating whether the target accepted focus — editors that cannot be activated (no content, currently streaming) return `false` so the cycle continues to the next slot.
+- The inline `@keydown.ctrl.enter` handler that was previously on the prose editor textarea has been removed in favor of the single global handler.
 
 ## Related Documentation
 

@@ -17,17 +17,21 @@
       <Transition name="page" mode="out-in">
         <div v-if="currentEntry" :key="'page-' + currentEntry.id" class="story-page" :class="{ 'story-page--editing': editing }">
           <!-- System prompt (steer notes) -->
-          <div v-if="currentEntry.system && !editingSystem" class="story-system story-system--editable" @click="startSystemEditing">
+          <div
+            v-if="currentEntry.system && editing?.which !== 'system'"
+            class="story-system story-system--editable"
+            @click="startEditingSystem"
+          >
             {{ currentEntry.system }}
           </div>
           <textarea
-            v-if="editingSystem"
+            v-if="editing?.which === 'system'"
             ref="editSystemArea"
-            v-model="editSystemText"
+            v-model="editing.text"
             class="story-system-editor"
             placeholder="Steer notes (clear to remove)…"
-            @blur="finishSystemEditing"
-            @keydown.escape.prevent="finishSystemEditing"
+            @blur="finishEditingSystem"
+            @keydown.escape.prevent="finishEditingSystem"
           />
 
           <!-- User prompt (quoted) -->
@@ -45,19 +49,18 @@
           <template v-else>
             <!-- Edit mode -->
             <textarea
-              v-if="editing"
+              v-if="editing?.which === 'prose'"
               ref="editArea"
-              v-model="editText"
+              v-model="editing.text"
               class="story-prose-editor"
-              @blur="finishEditing"
-              @keydown.escape.prevent="finishEditing"
-              @keydown.ctrl.enter.prevent="finishEditing"
+              @blur="finishEditingProse"
+              @keydown.escape.prevent="finishEditingProse"
             />
             <!-- Rendered markdown (click to edit) -->
             <div
               v-else-if="currentEntry.response"
               class="story-prose story-prose--editable"
-              @click="startEditing"
+              @click="startEditingProse"
               v-html="renderedResponse"
             />
           </template>
@@ -104,9 +107,8 @@
           class="chat-input-field"
           autofocus
           @keydown.tab="onTab"
-          @keydown.arrow-up="onArrowUp"
         />
-        <button type="submit" :disabled="streaming || (!input.trim() && mode !== 'write')" class="chat-input-send">
+        <button type="submit" :disabled="streaming" class="chat-input-send">
           <template v-if="!input.trim() && mode === 'write'">Write more</template>
           <template v-else>Send</template>
         </button>
@@ -120,6 +122,12 @@ import type { GamePage } from '~/utils/msgUtils';
 import { renderMarkdown, normalizeContent } from '~/utils/msgUtils';
 
 export type InputMode = 'write' | 'steer' | 'instruct';
+
+interface EditState {
+  which: 'system' | 'prose';
+  pageIndex: number;
+  text: string;
+}
 
 const MODE_ORDER: InputMode[] = ['write', 'steer', 'instruct'];
 
@@ -168,25 +176,22 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   /** Emitted when the user submits a message. */
-  prompt: [payload: { text: string; mode: InputMode; pageId: number | string | null }];
+  prompt: [payload: { text: string; mode: InputMode; pageIndex: number }];
   /** Emitted when the title input is blurred with a new value. */
   updateTitle: [title: string];
   /** Emitted when the user edits a page's response. */
-  updatePage: [payload: { pageId: number | string; response?: string; system?: string | null }];
+  updatePage: [payload: { pageIndex: number; response?: string; system?: string | null }];
+  /** Emitted when the user navigates between pages. */
+  updatePageIndex: [index: number];
 }>();
 
 const currentPage = ref(props.pages.length - 1);
 const input = ref('');
 const mode = ref<InputMode>('write');
 
-// --- Response editing state ---
-const editing = ref(false);
-const editText = ref('');
-const editArea = ref<HTMLTextAreaElement | null>(null);
+const editing = ref<EditState | null>(null);
 
-// --- System editing state ---
-const editingSystem = ref(false);
-const editSystemText = ref('');
+const editArea = ref<HTMLTextAreaElement | null>(null);
 const editSystemArea = ref<HTMLTextAreaElement | null>(null);
 const chatField = ref<HTMLInputElement | null>(null);
 
@@ -214,8 +219,7 @@ watch(() => props.pages.length, (len) => {
 
 // Cancel editing when navigating away from the current page
 watch(currentPage, () => {
-  editing.value = false;
-  editingSystem.value = false;
+  editing.value = null;
 });
 
 // --- Slash command detection ---
@@ -235,7 +239,6 @@ watch(input, (val, oldVal) => {
 
 function onSubmit() {
   const rawText = input.value.trim();
-  if (!rawText && mode.value !== 'write') return;
   if (props.streaming) return;
 
   // Bare slash command without content — just switch mode
@@ -250,7 +253,7 @@ function onSubmit() {
   emit('prompt', {
     text: rawText,
     mode: mode.value,
-    pageId: currentEntry.value?.id ?? null,
+    pageIndex: currentPage.value,
   });
 }
 
@@ -258,12 +261,6 @@ function onTab(e: KeyboardEvent) {
   if (e.shiftKey) {
     e.preventDefault();
     cycleMode();
-  }
-}
-
-function onArrowUp() {
-  if (input.value === '' && currentEntry.value?.response && !props.streaming) {
-    startEditing();
   }
 }
 
@@ -278,43 +275,124 @@ function setPage(n: number) {
 
 // --- Editing ---
 
-function startEditing() {
+function startEditingProse() {
   if (!currentEntry.value?.response) return;
-  editText.value = currentEntry.value.response;
-  editing.value = true;
+  finishEditingSystem();
+  editing.value = {
+    which: 'prose',
+    text: currentEntry.value.response,
+    pageIndex: currentPage.value,
+  };
   nextTick(() => editArea.value?.focus());
 }
 
-function finishEditing() {
+function finishEditingProse() {
   if (!editing.value) return;
-  editing.value = false;
   const entry = currentEntry.value;
-  if (entry && editText.value !== entry.response) {
-    emit('updatePage', { pageId: entry.id, response: editText.value });
+  if (entry && editing.value.text !== entry.response) {
+    emit('updatePage', {
+      pageIndex: editing.value.pageIndex,
+      response: editing.value.text,
+    });
   }
-  nextTick(() => chatField.value?.focus());
+  editing.value = null;
 }
 
 // --- System editing ---
 
-function startSystemEditing() {
+function startEditingSystem() {
   const entry = currentEntry.value;
   if (!entry) return;
-  editSystemText.value = entry.system ?? '';
-  editingSystem.value = true;
+  finishEditingProse();
+  editing.value = {
+    which: 'system',
+    text: entry.system ?? '',
+    pageIndex: currentPage.value,
+  };
   nextTick(() => editSystemArea.value?.focus());
 }
 
-function finishSystemEditing() {
-  if (!editingSystem.value) return;
-  editingSystem.value = false;
+function finishEditingSystem() {
   const entry = currentEntry.value;
+  if (!editing.value) return;
   if (!entry) return;
-  const newValue = editSystemText.value.trim() || null;
+  const newValue = editing.value.text.trim() || null;
   if (newValue !== entry.system) {
-    emit('updatePage', { pageId: entry.id, system: newValue });
+    emit('updatePage', {
+      pageIndex: editing.value.pageIndex,
+      system: newValue,
+    });
+  }
+  editing.value = null;
+}
+
+type FocusSlot = 'chat' | 'prose' | 'system';
+
+const FOCUS_CYCLE: FocusSlot[] = ['chat', 'prose', 'system'];
+
+function focusSlot(slot: FocusSlot): boolean {
+  switch (slot) {
+    case 'chat':
+      chatField.value?.focus();
+      return true;
+    case 'prose':
+      if (currentEntry.value?.response && !props.streaming) {
+        startEditingProse();
+        return true;
+      }
+      return false;
+    case 'system':
+      if (currentEntry.value?.system) {
+        startEditingSystem();
+        return true;
+      }
+      return false;
+  }
+  return false;
+}
+
+function cycleFocus(direction: 'up' | 'down') {
+  const active = document.activeElement;
+  let currentIdx = 0;
+  if (active === chatField.value) currentIdx = 0;
+  else if (active === editArea.value) currentIdx = 1;
+  else if (active === editSystemArea.value) currentIdx = 2;
+
+  const step = direction === 'up' ? 1 : -1;
+  focusSlot(FOCUS_CYCLE[currentIdx + step]!);
+}
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (!e.ctrlKey) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    chatField.value?.focus();
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    cycleFocus('up');
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    cycleFocus('down');
+    return;
+  }
+  if (e.ctrlKey && e.shiftKey && e.key === 'ArrowLeft') {
+    e.preventDefault();
+    if (currentPage.value > 0 && !props.streaming) setPage(currentPage.value - 1);
+    return;
+  }
+  if (e.ctrlKey && e.shiftKey && e.key === 'ArrowRight') {
+    e.preventDefault();
+    if (currentPage.value < props.pages.length - 1 && !props.streaming) setPage(currentPage.value + 1);
+    return;
   }
 }
+
+onMounted(() => document.addEventListener('keydown', onGlobalKeydown));
+onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown));
 
 defineExpose({ setPage });
 </script>

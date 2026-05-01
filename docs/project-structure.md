@@ -28,6 +28,8 @@ novelcraft/
 │   │   ├── Game.vue              # Main gameplay component
 │   │   ├── ChatArea.vue          # Chat/conversation display
 │   │   ├── GameDebugPanel.vue    # Gameplay debug panel
+│   │   ├── ShortcutRow.vue       # Keyboard shortcut row (label + kbd keys, optional highlight)
+│   │   ├── ShortcutsDialog.vue   # Keyboard shortcuts modal dialog (search, filter)
 │   │   ├── SuggestionPicker.vue  # AI suggestion picker (uses useLlmStream)
 │   │   ├── builder/              # Story builder components
 │   │   │   └── InspireDialog.vue # Inspiration dialog (uses useLlmStream)
@@ -36,6 +38,7 @@ novelcraft/
 │   │   ├── useLocalDb.ts         # PowerSync + Drizzle SQLite wrapper
 │   │   ├── useProfiles.ts        # Player profiles CRUD (local SQLite)
 │   │   ├── useLlmStream.ts       # Centralized SSE streaming client
+│   │   ├── useShortcutsDialog.ts # Shared state for ShortcutsDialog (open/show/close/toggle)
 │   │   ├── useStoryBuilder.ts    # Story builder logic
 │   │   ├── useCurrentUser.ts     # Current user state
 │   │   ├── useAuthClient.ts      # Auth client wrapper
@@ -115,6 +118,8 @@ Contains the Nuxt 4 frontend application built with Vue 3.
 **`app.vue`**
 - Root Vue component
 - Contains `<NuxtPage>` for page rendering
+- Mounts `<ShortcutsDialog />` component
+- Registers global `Ctrl+Shift+/` keydown listener that toggles the shortcuts dialog via `useShortcutsDialog().toggle()`
 
 **`pages/`**
 - File-based routing system

@@ -36,6 +36,9 @@
           <button class="account-menu-item" @click="profilesOpen = true">
             <UserOutlined class="account-menu-icon" /> Profiles
           </button>
+          <button class="account-menu-item" @click="menuOpen = false; $emit('closeDrawer'); openShortcuts()">
+            <QuestionCircleOutlined class="account-menu-icon" /> Shortcuts
+          </button>
           <NuxtLink to="/settings" class="account-menu-item" @click="menuOpen = false; $emit('closeDrawer')">
             <SettingOutlined class="account-menu-icon" /> Settings
           </NuxtLink>
@@ -66,7 +69,7 @@ import type { UserShape } from '~/composables/useCurrentUser';
 import { useCurrentUser } from '~/composables/useCurrentUser';
 import { authClient } from '~/composables/useAuthClient';
 import { useProfiles } from '~/composables/useProfiles';
-import { SettingOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons-vue';
+import { SettingOutlined, LogoutOutlined, UserOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue';
 
 const props = defineProps<{
   user: UserShape | null;
@@ -81,6 +84,7 @@ const menuOpen = ref(false);
 const profilesOpen = ref(false);
 const profileStore = useProfiles();
 const { activeProfile } = profileStore;
+const { show: openShortcuts } = useShortcutsDialog();
 
 onMounted(() => profileStore.init());
 

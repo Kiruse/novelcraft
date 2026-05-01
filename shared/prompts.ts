@@ -41,11 +41,11 @@ export const SYSTEM_VIGNETTE_OPEN = unindent(`
 /** Steer mode: nudge the current page's direction. */
 export const SYSTEM_STEER = unindent(`
   The player wants to adjust the direction of this interactive story while keeping the same
-  general events and narrative voice. Rewrite the passage incorporating the player's guidance.
+  general events and narrative voice. Rewrite the above passage incorporating the player's guidance.
 `);
 
 /** Instruct mode: free-form rewrite. */
 export const SYSTEM_INSTRUCT = unindent(`
-  The player has given instructions for how to rewrite the current page of this interactive
+  The player has given instructions for how to rewrite the above page of this interactive
   story. Follow their instructions — you may make substantial or minimal changes as requested.
 `);

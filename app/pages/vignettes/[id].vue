@@ -84,7 +84,7 @@ import {
   SYSTEM_STEER,
   SYSTEM_INSTRUCT,
 } from '#shared/prompts';
-import { streamLlm } from '~/composables/useLlmStream';
+import { streamLlm, type StreamLlmOptions } from '~/composables/useLlmStream';
 import { buildMessages } from '~/utils/llmHelpers';
 import { useProfiles } from '~/composables/useProfiles';
 
@@ -326,12 +326,12 @@ async function lockIn() {
   }
 }
 
-function onPrompt(payload: { text: string; mode: InputMode; pageId: number | string | null }) {
+function onPrompt(payload: { text: string; mode: InputMode; pageIndex: number }) {
   switch (payload.mode) {
     case 'steer':
-      return regeneratePage(payload.pageId, payload.text, 'steer');
+      return regeneratePage(payload.pageIndex, payload.text, 'steer');
     case 'instruct':
-      return regeneratePage(payload.pageId, payload.text, 'instruct');
+      return regeneratePage(payload.pageIndex, payload.text, 'instruct');
     case 'write':
     default:
       return sendWrite(payload.text);
@@ -356,18 +356,22 @@ async function sendWrite(text: string) {
   streamText.value = '';
 
   try {
-    const messages = buildMessages({
+    const { context, messages } = buildMessages({
       title: title.value,
       description: disposition.value.trim() || null,
       pages: pages.value,
-      lastPageOverride: { response: null },
     });
-    let fullText = '';
-    const streamGen = streamLlm({
+    const streamOpts: StreamLlmOptions = {
       persona: PERSONA_PLATFORM,
       messages,
-      context: profileContext.value,
-    });
+      context: {
+        ...context,
+        ...profileContext.value,
+      },
+    };
+    console.debug('Prompt:', streamOpts);
+    let fullText = '';
+    const streamGen = streamLlm(streamOpts);
     for await (const chunk of streamGen) {
       fullText += chunk;
       streamText.value += chunk;
@@ -412,60 +416,76 @@ async function sendWrite(text: string) {
 }
 
 async function regeneratePage(
-  pageId: number | string | null,
+  pageIndex: number,
   instruction: string,
   mode: 'steer' | 'instruct',
 ) {
-  if (!instruction || streaming.value || !activeSessionId.value || !pageId) return;
+  if (streaming.value || !activeSessionId.value) return;
+  if (pageIndex === -1) return;
 
-  const pageIdx = pages.value.findIndex(p => p.id === pageId);
-  if (pageIdx === -1) return;
+  const oldPage = pages.value[pageIndex]!;
+  const pageId = oldPage.id;
+  const truncatedIds = pages.value.slice(pageIndex + 1).map(p => p.id);
 
-  const oldPage = pages.value[pageIdx]!;
+  pages.value = pages.value.slice(0, pageIndex + 1);
 
   if (mode === 'steer') {
     const updatedSystem = oldPage.system
       ? `${oldPage.system}\n${instruction}`
       : instruction;
-    pages.value[pageIdx] = { ...oldPage, system: updatedSystem };
+    pages.value[pageIndex] = { ...oldPage, system: updatedSystem };
   }
 
   streaming.value = true;
   streamText.value = '';
 
   try {
-    const currentPage = pages.value[pageIdx]!;
+    const currentPage = pages.value[pageIndex]!;
     const systemPage = currentPage.system;
 
     if (mode === 'steer') {
       const db = useLocalDb();
       const { localPages } = await import('#shared/db/localSchema');
       const { eq } = await import('drizzle-orm');
-      await db.update(localPages).set({ system: systemPage }).where(eq(localPages.id, pageId as string)).run();
+      await db.update(localPages).set({ system: systemPage }).where(eq(localPages.id, pageId)).run();
     }
 
-    const modeReminder = mode === 'steer' ? SYSTEM_STEER : SYSTEM_INSTRUCT;
-    const systemParts = [modeReminder];
-    if (systemPage) systemParts.push(systemPage);
-
-    const messages = buildMessages({
+    const { context, messages } = buildMessages({
       title: title.value,
       description: disposition.value.trim() || null,
       pages: pages.value,
-      lastPageOverride: { response: null },
+      pageIndex,
     });
 
-    messages.push({
-      author: 'system',
-      content: systemParts.join('\n\n'),
-    });
+    if (mode === 'steer') {
+      messages.push({
+        author: 'system',
+        content: SYSTEM_STEER,
+      });
+    } else {
+      messages.push(
+        {
+          author: 'system',
+          content: SYSTEM_INSTRUCT,
+        },
+        {
+          author: 'user',
+          content: instruction || '(no particular instructions)',
+        },
+      );
+    }
 
     let fullText = '';
-    const streamGen = streamLlm({
+    const streamOpts: StreamLlmOptions = {
       persona: PERSONA_PLATFORM,
       messages,
-      context: profileContext.value,
-    });
+      context: {
+        ...context,
+        ...profileContext.value,
+      },
+    };
+    console.debug('Regenerate:', streamOpts);
+    const streamGen = streamLlm(streamOpts);
     for await (const chunk of streamGen) {
       fullText += chunk;
       streamText.value += chunk;
@@ -481,12 +501,15 @@ async function regeneratePage(
 
     const db = useLocalDb();
     const { localPages } = await import('#shared/db/localSchema');
-    const { eq } = await import('drizzle-orm');
-    await db.update(localPages).set({ response: fullText }).where(eq(localPages.id, pageId as string)).run();
+    const { eq, inArray } = await import('drizzle-orm');
+    await db.update(localPages).set({ response: fullText }).where(eq(localPages.id, pageId)).run();
+    if (truncatedIds.length > 0) {
+      await db.delete(localPages).where(inArray(localPages.id, truncatedIds)).run();
+    }
   } catch (err) {
     console.error('Regenerate failed:', err);
     if (mode === 'steer') {
-      pages.value[pageIdx] = oldPage;
+      pages.value[pageIndex] = oldPage;
     }
   } finally {
     streaming.value = false;
@@ -494,16 +517,16 @@ async function regeneratePage(
   }
 }
 
-async function onUpdatePage(payload: { pageId: number | string; response?: string; system?: string | null }) {
-  const idx = pages.value.findIndex(p => p.id === payload.pageId);
-  if (idx !== -1) {
-    const current = pages.value[idx]!;
-    pages.value[idx] = {
-      ...current,
-      ...(payload.response !== undefined ? { response: payload.response } : {}),
-      ...(payload.system !== undefined ? { system: payload.system } : {}),
-    };
-  }
+async function onUpdatePage(payload: { pageIndex: number; response?: string; system?: string | null }) {
+  const idx = payload.pageIndex;
+  const page = pages.value[idx];
+  if (!page) return;
+
+  pages.value[idx] = {
+    ...page,
+    ...(payload.response !== undefined ? { response: payload.response } : {}),
+    ...(payload.system !== undefined ? { system: payload.system } : {}),
+  };
 
   const db = useLocalDb();
   const { localPages } = await import('#shared/db/localSchema');
@@ -514,7 +537,7 @@ async function onUpdatePage(payload: { pageId: number | string; response?: strin
   if (payload.system !== undefined) updates.system = payload.system;
 
   try {
-    await db.update(localPages).set(updates).where(eq(localPages.id, payload.pageId as string)).run();
+    await db.update(localPages).set(updates).where(eq(localPages.id, page.id)).run();
   } catch (e) {
     console.error('Failed to save page edit', e);
   }

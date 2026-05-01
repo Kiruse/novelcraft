@@ -11,6 +11,7 @@
         <NuxtPage />
       </main>
     </div>
+    <ShortcutsDialog />
   </div>
 </template>
 
@@ -20,6 +21,41 @@ import { useCurrentUser } from '~/composables/useCurrentUser';
 const { currentUser, authorStories } = useCurrentUser();
 
 const sidebarRef = ref<{ toggle: () => void } | null>(null);
+
+const { toggle: toggleShortcuts } = useShortcutsDialog();
+
+const ALT_N_ROUTES: Record<string, string> = {
+  h: '/',
+  v: '/vignettes',
+};
+
+let awaitingAltN = false;
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.shiftKey && (e.key === '/' || e.key === '?')) {
+    e.preventDefault();
+    toggleShortcuts();
+    return;
+  }
+
+  if (e.altKey && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    awaitingAltN = true;
+    return;
+  }
+
+  if (awaitingAltN && !e.altKey) {
+    awaitingAltN = false;
+    const route = ALT_N_ROUTES[e.key.toLowerCase()];
+    if (route) {
+      e.preventDefault();
+      navigateTo(route);
+    }
+  }
+}
+
+onMounted(() => document.addEventListener('keydown', onGlobalKeydown));
+onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown));
 </script>
 
 <style scoped>
