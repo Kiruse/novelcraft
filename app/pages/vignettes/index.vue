@@ -20,23 +20,41 @@
       </NuxtLink>
 
       <template v-if="allVignettes.length > 0">
-        <NuxtLink
+        <div
           v-for="(v, i) in allVignettes"
           :key="v.id"
-          :ref="el => { if (el) rowRefs[i] = el }"
-          :to="`/vignettes/${v.id}`"
-          class="vignette-row"
-          :class="{ 'vignette-row--focused': i + 1 === focusedIndex }"
-          @keydown.enter.prevent="navigateTo(`/vignettes/${v.id}`)"
+          class="vignette-row-wrapper"
         >
-          <div class="vignette-row-info">
-            <span class="vignette-row-title">{{ v.title }}</span>
-            <span v-if="v.description" class="vignette-row-disposition">{{ truncate(v.description, 120) }}</span>
+          <NuxtLink
+            :ref="el => { if (el) rowRefs[i] = el }"
+            :to="`/vignettes/${v.id}`"
+            class="vignette-row"
+            :class="{ 'vignette-row--focused': i + 1 === focusedIndex }"
+            @keydown.enter.prevent="navigateTo(`/vignettes/${v.id}`)"
+          >
+            <div class="vignette-row-info">
+              <span class="vignette-row-title">{{ v.title }}</span>
+              <span v-if="v.description" class="vignette-row-disposition">{{ truncate(v.description, 120) }}</span>
+            </div>
+            <div class="vignette-row-meta">
+              <span class="vignette-row-date">{{ formatDate(v.updatedAt) }}</span>
+              <button
+                class="vignette-delete-btn"
+                aria-label="Delete vignette"
+                @click.prevent="pendingDeleteId = v.id"
+              >&times;</button>
+            </div>
+          </NuxtLink>
+          <div v-if="pendingDeleteId === v.id" class="confirm-overlay" @click.self="pendingDeleteId = null">
+            <div class="confirm-box">
+              <p class="confirm-text">Delete this vignette?</p>
+              <div class="confirm-actions">
+                <button class="btn btn--danger" @click="confirmDelete">Delete</button>
+                <button class="btn btn--ghost" @click="pendingDeleteId = null">Cancel</button>
+              </div>
+            </div>
           </div>
-          <div class="vignette-row-meta">
-            <span class="vignette-row-date">{{ formatDate(v.updatedAt) }}</span>
-          </div>
-        </NuxtLink>
+        </div>
       </template>
       <div v-else class="empty-state">
         <p>No vignettes yet. Create one above!</p>
@@ -47,8 +65,8 @@
 
 <script setup lang="ts">
 const db = useLocalDb();
-const { localSessions } = await import('#shared/db/localSchema');
-const { desc } = await import('drizzle-orm');
+const { localSessions, localPages } = await import('#shared/db/localSchema');
+const { desc, eq } = await import('drizzle-orm');
 
 const allVignettes = ref<Array<{
   id: string;
@@ -67,6 +85,7 @@ function resolveEl(raw: unknown): HTMLElement | null {
 const focusedIndex = ref(-1);
 const rowRefs = ref<unknown[]>([]);
 const newVignetteRef = ref<unknown>(null);
+const pendingDeleteId = ref<string | null>(null);
 
 const totalRows = computed(() => 1 + allVignettes.value.length);
 
@@ -104,6 +123,15 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('keydown', onListKeydown);
 });
+
+async function confirmDelete() {
+  if (!pendingDeleteId.value) return;
+  const id = pendingDeleteId.value;
+  pendingDeleteId.value = null;
+  await db.delete(localPages).where(eq(localPages.sessionId, id));
+  await db.delete(localSessions).where(eq(localSessions.id, id));
+  allVignettes.value = allVignettes.value.filter(v => v.id !== id);
+}
 
 function formatDate(date: string): string {
   const d = new Date(date);
@@ -148,6 +176,10 @@ function truncate(text: string, max: number): string {
   display: flex;
   flex-direction: column;
   gap: var(--size-2);
+}
+
+.vignette-row-wrapper {
+  position: relative;
 }
 
 .vignette-row {
@@ -217,6 +249,91 @@ function truncate(text: string, max: number): string {
 .vignette-row--new .vignette-row-disposition {
   color: var(--text-3);
   font-style: italic;
+}
+
+.vignette-delete-btn {
+  background: none;
+  border: none;
+  font-size: var(--font-size-4);
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0 var(--size-2);
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--animation-duration, 0.15s) var(--ease-2),
+    color var(--animation-duration, 0.15s) var(--ease-2);
+}
+
+.vignette-row:hover .vignette-delete-btn,
+.vignette-row--focused .vignette-delete-btn {
+  opacity: 1;
+}
+
+.vignette-delete-btn:hover {
+  color: var(--red-6);
+}
+
+.confirm-overlay {
+  position: absolute;
+  inset: 0;
+  background: oklch(from var(--gray-9) l c h / 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  border-radius: var(--radius-3);
+}
+
+.confirm-box {
+  background: var(--surface-2);
+  border: var(--border-size-1) solid var(--surface-4);
+  border-radius: var(--radius-3);
+  padding: var(--size-5);
+  box-shadow: var(--shadow-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4);
+  min-inline-size: 16rem;
+}
+
+.confirm-text {
+  font-size: var(--font-size-2);
+  color: var(--text-1);
+  margin: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: var(--size-2);
+  justify-content: flex-end;
+}
+
+.btn {
+  padding: var(--size-3) var(--size-8);
+  border-radius: var(--radius-2);
+  font-size: var(--font-size-2);
+  font-weight: var(--font-weight-6);
+  cursor: pointer;
+  border: none;
+}
+
+.btn--danger {
+  background: var(--red-6);
+  color: var(--gray-0);
+}
+
+.btn--danger:hover {
+  opacity: 0.9;
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--text-2);
+}
+
+.btn--ghost:hover {
+  color: var(--text-1);
+  background: var(--surface-3);
 }
 
 .empty-state {

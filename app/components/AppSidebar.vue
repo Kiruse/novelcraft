@@ -64,7 +64,7 @@
             <span class="session-dot" />
             <span class="session-title">{{ v.title }}</span>
           </NuxtLink>
-          <NuxtLink v-if="hasMoreVignettes" to="/vignettes" class="sidebar-more" @click="closeDrawer">
+          <NuxtLink to="/vignettes" class="sidebar-more" @click="closeDrawer">
             View all
           </NuxtLink>
         </div>

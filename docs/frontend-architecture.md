@@ -53,13 +53,15 @@ Vignettes are purely client-side — they use local SQLite instead of server API
 
 #### Vignette List (`app/pages/vignettes/index.vue`)
 
-Displays the user's local vignette sessions with keyboard-navigable rows.
+Displays the user's local vignette sessions with keyboard-navigable rows and inline delete functionality.
 
 **Route:** `/vignettes`
 
 **Data source:** Reads from local SQLite (`local_sessions` table via `useLocalDb`)
 
 **Keyboard navigation:** `j`/`↓` and `k`/`↑` move a `focusedIndex` through the list; `Enter` opens the focused vignette. A document-level `keydown` listener is added in `onMounted` and removed in `onUnmounted`. Each row is a `<NuxtLink>` tracked via `rowRefs`; focused rows get the `vignette-row--focused` class and DOM focus for the `:focus` outline.
+
+**Delete:** Each vignette row has an `×` button (visible on hover/focus) in the row's meta area. Clicking it sets `pendingDeleteId` which renders a confirmation overlay (`.confirm-overlay`) absolutely positioned within a `.vignette-row-wrapper` div. The overlay contains "Delete" and "Cancel" buttons following the same pattern as `ProfilesDialog.vue`. `confirmDelete()` deletes associated `local_pages` first (by `sessionId`), then `local_sessions`, and removes the item from the reactive `allVignettes` list.
 
 #### Vignette Play (`app/pages/vignettes/[id].vue`)
 
