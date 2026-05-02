@@ -86,8 +86,6 @@ const profileStore = useProfiles();
 const { activeProfile } = profileStore;
 const { show: openShortcuts } = useShortcutsDialog();
 
-onMounted(() => profileStore.init());
-
 const initials = computed(() => {
   if (!props.user?.name) return '?';
   return props.user.name

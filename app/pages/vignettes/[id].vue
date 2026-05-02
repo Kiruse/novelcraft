@@ -457,6 +457,10 @@ async function regeneratePage(
       pageIndex,
     });
 
+    if (pageIndex === 0) {
+      messages.unshift({ author: 'system', content: SYSTEM_VIGNETTE_OPEN });
+    }
+
     if (mode === 'steer') {
       messages.push({
         author: 'system',
