@@ -1,4 +1,5 @@
 import type { GamePage } from '~/utils/msgUtils';
+import type { Profile } from '~/composables/useProfiles';
 
 export interface Context {
   [key: string]: string | Context;
@@ -12,6 +13,7 @@ export interface LlmMessage {
 export interface BuildMessagesOpts {
   title: string;
   description: string | null | undefined;
+  profile?: Profile;
   pages: GamePage[];
   pageIndex?: number;
   lastPageOverride?: { prompt?: string | null; response?: string | null };
@@ -25,6 +27,7 @@ export interface BuildMessagesResult {
 export function buildMessages({
   title,
   description = undefined,
+  profile,
   pages,
   pageIndex = pages.length - 1,
   lastPageOverride,
@@ -33,6 +36,7 @@ export function buildMessages({
     story: {
       title,
     },
+    ...getProfileContext(profile),
   };
 
   if (description) context.story.description = description;
@@ -68,5 +72,14 @@ export function buildMessages({
   return {
     context,
     messages,
+  };
+}
+
+function getProfileContext(profile?: Profile) {
+  if (!profile) return {};
+  const fields = Object.entries(profile.fields).filter(([, v]) => v.trim());
+  if (fields.length === 0) return {};
+  return {
+    user: Object.fromEntries(fields) as Record<string, unknown>,
   };
 }

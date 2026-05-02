@@ -4,12 +4,15 @@
       {{ label }}
     </span>
     <span class="shortcut-keys">
-      <kbd
-        v-for="(k, i) in keyList"
-        :key="i"
-        class="shortcut-key"
-        :class="{ 'shortcut-key--highlight': highlight === 'keys' }"
-      >{{ k }}</kbd>
+      <template v-for="(group, gi) in keyGroups" :key="gi">
+        <kbd
+          v-for="(k, i) in group"
+          :key="i"
+          class="shortcut-key"
+          :class="{ 'shortcut-key--highlight': highlight === 'keys' }"
+        >{{ k }}</kbd>
+        <span v-if="gi < keyGroups.length - 1" class="shortcut-or">or</span>
+      </template>
     </span>
   </div>
 </template>
@@ -21,7 +24,9 @@ const props = defineProps<{
   highlight?: string;
 }>();
 
-const keyList = computed(() => props.keys.split(' '));
+const keyGroups = computed(() =>
+  props.keys.split(' | ').map(g => g.split(' ')),
+);
 </script>
 
 <style scoped>
@@ -46,7 +51,14 @@ const keyList = computed(() => props.keys.split(' '));
 .shortcut-keys {
   display: flex;
   gap: var(--size-1);
+  align-items: center;
   flex-shrink: 0;
+}
+
+.shortcut-or {
+  font-size: var(--font-size-0);
+  color: var(--text-3);
+  padding: 0 var(--size-1);
 }
 
 .shortcut-key {

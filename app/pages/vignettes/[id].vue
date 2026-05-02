@@ -105,13 +105,6 @@ const loaded = ref(false);
 
 const { activeProfile } = useProfiles();
 
-const profileContext = computed(() => {
-  if (!activeProfile.value) return undefined;
-  const fields = Object.entries(activeProfile.value.fields).filter(([, v]) => v.trim());
-  if (fields.length === 0) return undefined;
-  return Object.fromEntries(fields) as Record<string, unknown>;
-});
-
 const VIGNETTE_SUGGEST_PERSONA = unindent(`
   You are a creative story premise generator for quick interactive vignettes.
   The user will provide a disposition — either a few keywords, a theme, or a full paragraph
@@ -250,6 +243,8 @@ async function updateTitle(newTitle: string) {
   newTitle = newTitle.trim() || 'Untitled Vignette';
   title.value = newTitle;
   await persistSession({ title: newTitle });
+  const { refresh: refreshVignettes } = useVignetteList();
+  refreshVignettes();
 }
 
 async function lockIn() {
@@ -280,21 +275,21 @@ async function lockIn() {
   pages.value.push({ id: tempId, system: null, prompt: null, response: null });
 
   try {
-    const context = disposition.value.trim()
-      ? `Title: ${title.value}\n\nPremise:\n${disposition.value.trim()}`
-      : `Title: ${title.value}`;
-
-    const messages = [
-      { author: 'system', content: SYSTEM_VIGNETTE_OPEN },
-      { author: 'user', content: `Start the vignette based on this setup:\n\n${context}` },
-    ];
+    const { context, messages } = buildMessages({
+      title: title.value,
+      description: disposition.value.trim() || '',
+      profile: activeProfile.value ?? undefined,
+      pages: [],
+    });
 
     let fullText = '';
-    const streamGen = streamLlm({
+    const streamOpts: StreamLlmOptions = {
       persona: PERSONA_PLATFORM,
       messages,
-      context: profileContext.value,
-    });
+      context,
+    };
+    console.log('Lock in:', streamOpts);
+    const streamGen = streamLlm(streamOpts);
     for await (const chunk of streamGen) {
       fullText += chunk;
       streamText.value += chunk;
@@ -359,15 +354,13 @@ async function sendWrite(text: string) {
     const { context, messages } = buildMessages({
       title: title.value,
       description: disposition.value.trim() || null,
+      profile: activeProfile.value ?? undefined,
       pages: pages.value,
     });
     const streamOpts: StreamLlmOptions = {
       persona: PERSONA_PLATFORM,
       messages,
-      context: {
-        ...context,
-        ...profileContext.value,
-      },
+      context,
     };
     console.debug('Prompt:', streamOpts);
     let fullText = '';
@@ -453,6 +446,7 @@ async function regeneratePage(
     const { context, messages } = buildMessages({
       title: title.value,
       description: disposition.value.trim() || null,
+      profile: activeProfile.value ?? undefined,
       pages: pages.value,
       pageIndex,
     });
@@ -483,10 +477,7 @@ async function regeneratePage(
     const streamOpts: StreamLlmOptions = {
       persona: PERSONA_PLATFORM,
       messages,
-      context: {
-        ...context,
-        ...profileContext.value,
-      },
+      context,
     };
     console.debug('Regenerate:', streamOpts);
     const streamGen = streamLlm(streamOpts);
@@ -521,7 +512,7 @@ async function regeneratePage(
   }
 }
 
-async function onUpdatePage(payload: { pageIndex: number; response?: string; system?: string | null }) {
+async function onUpdatePage(payload: { pageIndex: number; response?: string; system?: string | null; prompt?: string }) {
   const idx = payload.pageIndex;
   const page = pages.value[idx];
   if (!page) return;
@@ -530,6 +521,7 @@ async function onUpdatePage(payload: { pageIndex: number; response?: string; sys
     ...page,
     ...(payload.response !== undefined ? { response: payload.response } : {}),
     ...(payload.system !== undefined ? { system: payload.system } : {}),
+    ...(payload.prompt !== undefined ? { prompt: payload.prompt } : {}),
   };
 
   const db = useLocalDb();
@@ -539,6 +531,7 @@ async function onUpdatePage(payload: { pageIndex: number; response?: string; sys
   const updates: Record<string, string | null> = {};
   if (payload.response !== undefined) updates.response = payload.response;
   if (payload.system !== undefined) updates.system = payload.system;
+  if (payload.prompt !== undefined) updates.prompt = payload.prompt;
 
   try {
     await db.update(localPages).set(updates).where(eq(localPages.id, page.id)).run();

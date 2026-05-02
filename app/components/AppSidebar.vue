@@ -112,8 +112,7 @@ const props = defineProps<{
   }>;
 }>();
 
-const vignettes = ref<Array<{ id: string; title: string }>>([]);
-const hasMoreVignettes = ref(false);
+const { vignettes, hasMore: hasMoreVignettes, refresh: refreshVignettes } = useVignetteList();
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -144,17 +143,7 @@ onMounted(async () => {
   checkMobile();
   window.addEventListener('resize', checkMobile);
   try {
-    const db = useLocalDb();
-    const { localSessions } = await import('#shared/db/localSchema');
-    const { desc } = await import('drizzle-orm');
-    const rows = await db
-      .select({ id: localSessions.id, title: localSessions.title })
-      .from(localSessions)
-      .orderBy(desc(localSessions.updatedAt))
-      .limit(4)
-      .all();
-    hasMoreVignettes.value = rows.length > 3;
-    vignettes.value = rows.slice(0, 3);
+    await refreshVignettes();
   } catch {
     // local DB not available (e.g. SSR)
   }

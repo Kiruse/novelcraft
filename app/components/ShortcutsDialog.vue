@@ -66,23 +66,24 @@ const SHORTCUTS: ShortcutGroup[] = [
   {
     title: 'Vignettes list',
     shortcuts: [
-      { keys: 'j / ↓', label: 'Select next vignette' },
-      { keys: 'k / ↑', label: 'Select previous vignette' },
+      { keys: 'j | ↓', label: 'Select next vignette' },
+      { keys: 'k | ↑', label: 'Select previous vignette' },
       { keys: 'Enter', label: 'Open selected vignette' },
     ],
   },
   {
     title: 'Game — navigation',
     shortcuts: [
-      { keys: 'Ctrl Shift ←', label: 'Previous page' },
-      { keys: 'Ctrl Shift →', label: 'Next page' },
+      { keys: 'Alt ←', label: 'Previous page' },
+      { keys: 'Alt →', label: 'Next page' },
+      { keys: 'PageUp | PageDown', label: 'Scroll the prose area' },
     ],
   },
   {
     title: 'Game — input focus',
     shortcuts: [
-      { keys: 'Ctrl ↑', label: 'Focus previous slot (chat → prose → system prompt)' },
-      { keys: 'Ctrl ↓', label: 'Focus next slot (system prompt → prose → chat)' },
+      { keys: 'Alt ↑', label: 'Focus previous slot (chat → prose → prompt → system)' },
+      { keys: 'Alt ↓', label: 'Focus next slot (system → prompt → prose → chat)' },
       { keys: 'Ctrl Enter', label: 'Save any active editor & focus chat bar' },
     ],
   },
@@ -99,6 +100,7 @@ const SHORTCUTS: ShortcutGroup[] = [
     shortcuts: [
       { keys: 'Escape', label: 'Close editor without saving' },
       { keys: 'Ctrl Enter', label: 'Save & return to chat bar' },
+      { keys: 'Ctrl ↑ | Ctrl ↓', label: 'Jump between paragraphs (prose editor)' },
     ],
   },
   {

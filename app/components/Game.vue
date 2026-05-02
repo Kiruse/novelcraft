@@ -13,7 +13,7 @@
     </div>
 
     <!-- Story pages -->
-    <div class="game-body">
+    <div ref="bodyEl" class="game-body">
       <Transition name="page" mode="out-in">
         <div v-if="currentEntry" :key="'page-' + currentEntry.id" class="story-page" :class="{ 'story-page--editing': editing }">
           <!-- System prompt (steer notes) -->
@@ -35,9 +35,23 @@
           />
 
           <!-- User prompt (quoted) -->
-          <blockquote v-if="currentEntry.prompt" class="story-quote">
+          <blockquote
+            v-if="currentEntry.prompt && editing?.which !== 'prompt'"
+            ref="quoteEl"
+            class="story-quote story-quote--editable"
+            tabindex="0"
+            @click="startEditingPrompt"
+          >
             {{ currentEntry.prompt }}
           </blockquote>
+          <textarea
+            v-else-if="editing?.which === 'prompt'"
+            ref="editPromptArea"
+            v-model="editing.text"
+            class="story-quote-editor"
+            @blur="finishEditingPrompt"
+            @keydown.escape.prevent="finishEditingPrompt"
+          />
 
           <!-- Streaming response -->
           <div v-if="streaming" class="story-prose">
@@ -55,6 +69,8 @@
               class="story-prose-editor"
               @blur="finishEditingProse"
               @keydown.escape.prevent="finishEditingProse"
+              @keydown.ctrl.up.prevent="jumpParagraph(-1)"
+              @keydown.ctrl.down.prevent="jumpParagraph(1)"
             />
             <!-- Rendered markdown (click to edit) -->
             <div
@@ -107,6 +123,8 @@
           class="chat-input-field"
           autofocus
           @keydown.tab="onTab"
+          @keydown.page-up.prevent="scrollBody(-1)"
+          @keydown.page-down.prevent="scrollBody(1)"
         />
         <button type="submit" :disabled="streaming" class="chat-input-send">
           <template v-if="!input.trim() && mode === 'write'">Write more</template>
@@ -124,7 +142,7 @@ import { renderMarkdown, normalizeContent } from '~/utils/msgUtils';
 export type InputMode = 'write' | 'steer' | 'instruct';
 
 interface EditState {
-  which: 'system' | 'prose';
+  which: 'system' | 'prose' | 'prompt';
   pageIndex: number;
   text: string;
 }
@@ -180,7 +198,7 @@ const emit = defineEmits<{
   /** Emitted when the title input is blurred with a new value. */
   updateTitle: [title: string];
   /** Emitted when the user edits a page's response. */
-  updatePage: [payload: { pageIndex: number; response?: string; system?: string | null }];
+  updatePage: [payload: { pageIndex: number; response?: string; system?: string | null; prompt?: string }];
   /** Emitted when the user navigates between pages. */
   updatePageIndex: [index: number];
 }>();
@@ -193,6 +211,9 @@ const editing = ref<EditState | null>(null);
 
 const editArea = ref<HTMLTextAreaElement | null>(null);
 const editSystemArea = ref<HTMLTextAreaElement | null>(null);
+const editPromptArea = ref<HTMLTextAreaElement | null>(null);
+const quoteEl = ref<HTMLElement | null>(null);
+const bodyEl = ref<HTMLElement | null>(null);
 const chatField = ref<HTMLInputElement | null>(null);
 
 const currentEntry = computed(() =>
@@ -273,6 +294,10 @@ function setPage(n: number) {
   currentPage.value = Math.max(0, Math.min(props.pages.length - 1, n));
 }
 
+function scrollBody(direction: -1 | 1) {
+  bodyEl.value?.scrollBy({ top: direction * window.innerHeight * 0.6, behavior: 'smooth' });
+}
+
 // --- Editing ---
 
 function startEditingProse() {
@@ -293,6 +318,31 @@ function finishEditingProse() {
     emit('updatePage', {
       pageIndex: editing.value.pageIndex,
       response: editing.value.text,
+    });
+  }
+  editing.value = null;
+}
+
+// --- Prompt editing ---
+
+function startEditingPrompt() {
+  const entry = currentEntry.value;
+  if (!entry?.prompt) return;
+  editing.value = {
+    which: 'prompt',
+    text: entry.prompt,
+    pageIndex: currentPage.value,
+  };
+  nextTick(() => editPromptArea.value?.focus());
+}
+
+function finishEditingPrompt() {
+  if (!editing.value) return;
+  const entry = currentEntry.value;
+  if (entry && editing.value.text !== entry.prompt) {
+    emit('updatePage', {
+      pageIndex: editing.value.pageIndex,
+      prompt: editing.value.text,
     });
   }
   editing.value = null;
@@ -326,9 +376,9 @@ function finishEditingSystem() {
   editing.value = null;
 }
 
-type FocusSlot = 'chat' | 'prose' | 'system';
+type FocusSlot = 'chat' | 'prompt' | 'prose' | 'system';
 
-const FOCUS_CYCLE: FocusSlot[] = ['chat', 'prose', 'system'];
+const FOCUS_CYCLE: FocusSlot[] = ['chat', 'prose', 'prompt', 'system'];
 
 function focusSlot(slot: FocusSlot): boolean {
   switch (slot) {
@@ -338,6 +388,12 @@ function focusSlot(slot: FocusSlot): boolean {
     case 'prose':
       if (currentEntry.value?.response && !props.streaming) {
         startEditingProse();
+        return true;
+      }
+      return false;
+    case 'prompt':
+      if (currentEntry.value?.prompt) {
+        startEditingPrompt();
         return true;
       }
       return false;
@@ -356,19 +412,44 @@ function cycleFocus(direction: 'up' | 'down') {
   let currentIdx = 0;
   if (active === chatField.value) currentIdx = 0;
   else if (active === editArea.value) currentIdx = 1;
-  else if (active === editSystemArea.value) currentIdx = 2;
+  else if (active === editPromptArea.value || active === quoteEl.value) currentIdx = 2;
+  else if (active === editSystemArea.value) currentIdx = 3;
 
   const step = direction === 'up' ? 1 : -1;
   focusSlot(FOCUS_CYCLE[currentIdx + step]!);
 }
 
+function jumpParagraph(direction: -1 | 1) {
+  const el = editArea.value;
+  if (!el) return;
+  const text = el.value;
+  const pos = el.selectionStart;
+  const sep = '\n\n';
+
+  if (direction === -1) {
+    const before = text.slice(0, pos);
+    let boundary = before.lastIndexOf(sep);
+    if (boundary === pos - sep.length && boundary > 0) {
+      boundary = before.slice(0, boundary).lastIndexOf(sep);
+    }
+    const target = boundary === -1 ? 0 : boundary + sep.length;
+    el.selectionStart = el.selectionEnd = target;
+  } else {
+    const after = text.slice(pos);
+    let idx = after.indexOf(sep);
+    if (idx === 0) idx = after.slice(sep.length).indexOf(sep);
+    const target = idx === -1 ? text.length : pos + idx + sep.length;
+    el.selectionStart = el.selectionEnd = target;
+  }
+}
+
 function onGlobalKeydown(e: KeyboardEvent) {
-  if (!e.ctrlKey) return;
-  if (e.key === 'Enter') {
+  if (e.ctrlKey && e.key === 'Enter') {
     e.preventDefault();
     chatField.value?.focus();
     return;
   }
+  if (!e.altKey) return;
   if (e.key === 'ArrowUp') {
     e.preventDefault();
     cycleFocus('up');
@@ -379,12 +460,12 @@ function onGlobalKeydown(e: KeyboardEvent) {
     cycleFocus('down');
     return;
   }
-  if (e.ctrlKey && e.shiftKey && e.key === 'ArrowLeft') {
+  if (e.key === 'ArrowLeft') {
     e.preventDefault();
     if (currentPage.value > 0 && !props.streaming) setPage(currentPage.value - 1);
     return;
   }
-  if (e.ctrlKey && e.shiftKey && e.key === 'ArrowRight') {
+  if (e.key === 'ArrowRight') {
     e.preventDefault();
     if (currentPage.value < props.pages.length - 1 && !props.streaming) setPage(currentPage.value + 1);
     return;
@@ -530,6 +611,41 @@ defineExpose({ setPage });
   line-height: var(--font-lineheight-4);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.story-quote--editable {
+  cursor: text;
+  transition: background var(--animation-duration, 0.15s) var(--ease-2),
+    box-shadow var(--animation-duration, 0.15s) var(--ease-2);
+}
+
+.story-quote--editable:hover {
+  background: var(--surface-3);
+  box-shadow: 0 0 0 var(--border-size-1) var(--surface-4);
+}
+
+.story-quote:focus {
+  outline: 2px solid var(--indigo-5);
+  outline-offset: 2px;
+}
+
+.story-quote-editor {
+  inline-size: 100%;
+  padding: var(--size-3) var(--size-4);
+  border-inline-start: var(--border-size-3) solid var(--indigo-4);
+  background: var(--surface-2);
+  border-radius: var(--radius-2);
+  font-style: italic;
+  color: var(--text-2);
+  font-size: var(--font-size-2);
+  line-height: var(--font-lineheight-4);
+  font-family: inherit;
+  resize: vertical;
+  field-sizing: content;
+}
+
+.story-quote-editor:focus {
+  outline: none;
 }
 
 .story-prose {
