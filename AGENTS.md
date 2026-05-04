@@ -2,16 +2,19 @@
 
 High-level overview for AI agents working on the NovelCraft project. For comprehensive documentation, see the [detailed docs](./docs/).
 
-**IMPORTANT:** Whenever you make changes, assert validity by running `bun run typecheck`, then summarize & document the changes with the `@docs-writer` subagent.
+**IMPORTANT:** Whenever you make changes, assert validity by running `just check`, then summarize & document the changes with the `@docs-writer` subagent.
 
 ## Architecture Overview
 
-NovelCraft uses a **client-side gameplay** architecture:
+NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, no server.
 
-- **Server API** is pure CRUD — auth, user data, and shareable story metadata only
-- **Gameplay is entirely client-side** — modules, LLM prompting, state management via PowerSync local SQLite
-- **Vignettes are purely client-side** — no server persistence, no shareable metadata
-- **LLM proxy** — `POST /api/llm/prompt` is the only server-side AI endpoint; it streams SSE events to the client
+- **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`) and file operations (export/import, file dialogs)
+- **Vue 3 frontend** (`gui/src/`) runs in a webview via Vite — manages gameplay state, LLM orchestration, and all UI
+- **Local SQLite** via `tauri-plugin-sql` — all gameplay data (sessions, pages, profiles, module runtime) lives in a local `.db` file
+- **No server, no auth, no PostgreSQL** — single-user desktop application
+- **LLM calls** go through Rust Tauri commands — the webview calls `invoke('prompt', ...)` (fire-and-forget, via `useLlmStream`), Rust streams from the LLM provider and emits events (`llm:text`, `llm:reasoning`, `llm:error`, `llm:done`) back to the frontend
+- **Story sharing** is file-based — export/import JSON files via native file dialogs
+- **Build orchestration** is via a root `justfile` — no top-level `package.json`
 
 ## Quick Reference
 
@@ -19,29 +22,36 @@ NovelCraft uses a **client-side gameplay** architecture:
 
 ```
 novelcraft/
-├── app/                    # Frontend (Nuxt 4 + Vue 3)
-│   ├── pages/              # File-based routing
-│   ├── components/         # Auto-imported Vue components
-│   ├── composables/        # Auto-imported Vue composables
-│   ├── plugins/            # Nuxt plugins (client-only: powersync)
-│   └── assets/css/         # Global styles
-├── shared/                 # Code shared between app and server
-│   ├── gameplay/           # Game modules (moved from server/gameplay/)
-│   ├── db/                 # Client-side SQLite schema (localSchema.ts)
-│   └── prompts.ts          # Prompts & personas (single source of truth)
-├── scripts/                # Development scripts
-│   └── utils/              # Shared utilities for scripts
-├── server/
-│   ├── api/                # API routes (file-based)
-│   ├── db/
-│   │   ├── schema/         # Drizzle schema definitions (PostgreSQL)
-│   │   └── migrations/     # Database migrations
-│   ├── ai/
-│   │   └── models.ts       # Model registry & resolveModel()
-│   └── auth.ts             # Better-Auth config
-├── docs/                   # Comprehensive documentation
-├── nuxt.config.ts          # Nuxt configuration
-└── package.json            # Dependencies & scripts
+├── justfile                # Build orchestration (just commands)
+├── engine/                 # Rust backend (Tauri v2)
+│   └── src/
+│       ├── src/
+│       │   ├── main.rs     # Entry point
+│       │   ├── lib.rs      # App builder, plugin registration, command handler
+│       │   └── commands/
+│       │       ├── mod.rs  # Module barrel
+│       │       ├── llm.rs  # LLM proxy (HTTP streaming via reqwest)
+│       │       └── fs.rs   # File export/import, file dialogs
+│       ├── Cargo.toml      # Rust dependencies
+│       └── tauri.conf.json # Tauri configuration
+├── gui/                    # Vue 3 frontend (Vite + Vue Router)
+│   ├── src/
+│   │   ├── main.ts         # App entry, mounts Vue + Router
+│   │   ├── App.vue         # Root component
+│   │   ├── env.d.ts        # Global type declarations & auto-imports
+│   │   ├── pages/          # Vue Router pages
+│   │   ├── components/     # Vue components
+│   │   ├── composables/    # Vue composables
+│   │   ├── utils/          # Frontend utilities
+│   │   ├── gameplay/       # Game modules (barrel via index.ts)
+│   │   ├── prompts.ts      # Prompts & personas (single source of truth)
+│   │   ├── router/         # Vue Router configuration
+│   │   └── assets/css/     # Open Props CSS
+│   ├── index.html          # Vite entry HTML
+│   ├── vite.config.ts      # Vite config with ~ alias
+│   ├── tsconfig.json       # TypeScript config with ~/* paths
+│   └── package.json        # Dependencies
+└── docs/                   # Comprehensive documentation
 ```
 
 **Detailed docs:** [Project Structure](./docs/project-structure.md)
@@ -54,96 +64,97 @@ novelcraft/
 
 | Category | Location | Pattern |
 |----------|----------|---------|
-| Generators | `scripts/generators/` | Default export, `defineGenerator()` wrapper |
-| Utilities | `scripts/utils/` | Named exports, centralized via `index.ts` |
-| API Routes | `server/api/` | `[resource].[method].ts` |
-| Pages | `app/pages/` | `[route].vue`, `[param].vue` for dynamic |
-| Components | `app/components/` | PascalCase `.vue`, auto-imported |
-| Composables | `app/composables/` | `use*.ts`, auto-imported |
-| Gameplay Modules | `shared/gameplay/` | Named exports, barrel via `index.ts` |
-| Local DB Schema | `shared/db/` | Drizzle SQLite tables in `localSchema.ts` |
-| Server Schema | `server/db/schema/` | Separate files: `auth.ts`, `app.ts` |
+| Pages | `gui/src/pages/` | `[route].vue`, `[param].vue` for dynamic |
+| Components | `gui/src/components/` | PascalCase `.vue` |
+| Composables | `gui/src/composables/` | `use*.ts` |
+| Utilities | `gui/src/utils/` | Named exports |
+| Router | `gui/src/router/` | `index.ts` with `createRouter()` |
+| Gameplay Modules | `gui/src/gameplay/` | Named exports, barrel via `index.ts` |
+| Prompts | `gui/src/prompts.ts` | Single source of truth |
+| Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `fs.rs`) |
 
 **Detailed docs:** [Code Conventions](./docs/code-conventions.md)
 
 ### Import Patterns
 
-**Always use alias imports — never relative `../` paths.**
+**Always use the `~/` alias — never relative `../` paths.**
 
 | Alias | Resolves to | Use in |
 |-------|------------|----------|
-| `~/` or `@/` | `app/` | App code (pages, components, composables) |
-| `#server/` | `server/` | Server code (API routes, plugins) |
-| `#shared/` | `shared/` | Shared code (from both app and server) |
-| `~~/` | Project root | Escape hatch (avoid unless necessary) |
+| `~/` | `gui/src/` | All frontend code (pages, components, composables, utils, gameplay) |
 
-- **Node.js built-ins**: No extension required (`fs/promises`, `path`)
-- **Auto-imports**: Components, composables, `db` instance (server), Drizzle tables
-
-**Important:** The `#server` import alias is only reliably available from code in `./server`. In `./shared`, use `~~/server` instead. In `./app`, neither `#server` nor `~~/server` should ever be used — this WILL BREAK THE APP.
+- **Auto-imports**: A custom Vite plugin (`gui/vite-plugins/auto-import.ts`) automatically injects the following identifiers into all `.ts` and `.vue` (`<script setup>`) files at build time. **Never import these manually** — it causes duplicate import conflicts:
+  - From `vue`: `ref`, `reactive`, `computed`, `watch`, `readonly`, `onMounted`, `onUnmounted`, `nextTick`
+  - From `vue-router`: `useRoute`, `useRouter`
+- Type declarations for these are in `gui/src/env.d.ts` (for TypeScript). The Vite plugin handles runtime injection.
+- **Components**: Import explicitly with `~/components/...` paths (not auto-imported)
+- **No `@/`, `#shared/`, or `#server/` aliases** — those were removed
 
 ### AI / Model Configuration
 
-**Never use `gateway` from the `ai` package.** All models are resolved through `#server/ai/models` → `resolveModel(name)`.
+Models are configured in Rust, persisted to disk as JSON.
 
-- Models are defined in `server/ai/models.ts` as a hard-coded `Record<string, ModelConfig>`
-- Each entry maps a model ID → `{ baseURL, apiKey? }`
-- Always uses `@ai-sdk/openai-compatible` (`createOpenAICompatible`) — no provider-specific SDKs
-- To add a new model: add an entry to the `models` map, then call `resolveModel('your-model-id')`
-- To use a model: `import { resolveModel } from '#server/ai/models'; const model = resolveModel('meta-llama/llama-3.3-70b-instruct');`
+- **Rust side**: `engine/src/src/commands/llm.rs` — `init_models()` loads from `{app_data_dir}/models.json` or falls back to defaults
+- **Frontend side**: Call `invoke('list_models')` to read, `invoke('save_models', { models })` to write
+- Each model entry maps a model ID → `{ base_url, api_key? }`
+- Default models point to `http://localhost:1234/v1` (local LLM server)
 
-### Agent / LLM Integration — Separation of Concerns
+### Agent / LLM Integration
 
-**All agent/LLM calls must be isolated from endpoint logic.**
+**All LLM calls go through the Rust backend via Tauri commands.**
 
-- **LLM calls** go through `POST /api/llm/prompt` — a single, generic streaming endpoint that takes `{ model, messages[], persona }` and returns SSE events
-- **Server CRUD endpoints** handle only data persistence for shareable entities (stories, users) — no LLM calls
-- **Frontend orchestrates**: manages local SQLite state via PowerSync, calls `/api/llm/prompt` for text generation, persists results locally
-- **Vignette/gameplay state** lives entirely in client-side SQLite — never hits server API
+- **`invoke('prompt', { request })`** — takes `{ model, messages[], persona, context? }` and streams the response. The invoke is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted.
+- Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames, and emits Tauri events:
+  - `llm:text` — text content chunk
+  - `llm:reasoning` — reasoning/thinking chunk
+  - `llm:error` — error message
+  - `llm:done` — stream complete
+- **Frontend composable**: `gui/src/composables/useLlmStream.ts` wraps this into async generators. It calls `invoke('prompt', ...)` without awaiting, starts a polling loop immediately, and drains event queues as they arrive. If the Rust command rejects, the invoke promise's `.catch()` sets `done = true` and records the error, which is yielded as an error event after the loop exits.
 
-This separation enables:
-- **Bring-your-own-agent**: swap the LLM endpoint for a third-party server without touching CRUD logic
-- **Premium agent servers**: route requests to different backends based on plan/feature
-- **Testability**: mock the LLM endpoint independently of data logic
-
-**Prompts and personas** are defined in `shared/prompts.ts` so both frontend and server can access them.
-Always import from `#shared/prompts` & maintain them there as a single source of truth.
+**Prompts and personas** are defined in `gui/src/prompts.ts`.
+Always import from `~/prompts` & maintain them there as a single source of truth.
 
 **Important terminology:** A "persona" is ONLY the system prompt passed as the `persona` parameter to the LLM call — it defines who the agent *is*. The sole persona used throughout the app is `PERSONA_PLATFORM`. Everything else — scene instructions (`SYSTEM_VIGNETTE_OPEN`), steering notes (`SYSTEM_STEER`), editor requests (`SYSTEM_INSTRUCT`), page-level `system` fields — are **NOT** personas. They are regular messages with `author: 'system'` injected into the conversation history to guide the agent's behavior.
 
-### Client-Side Data — PowerSync + Drizzle SQLite
+### Client-Side Data — SQLite via tauri-plugin-sql
 
-Gameplay state (vignettes, pages, module runtime) is stored in **local SQLite** via PowerSync.
+Gameplay state (sessions, pages, module runtime, profiles) is stored in **local SQLite** via `tauri-plugin-sql`.
 
-- **Schema**: `shared/db/localSchema.ts` — defines `local_sessions`, `local_pages`, `local_module_runtime`, `local_profiles`
-- **Composable**: `app/composables/useLocalDb.ts` — wraps PowerSync client with Drizzle ORM, provides `db` instance
-- **Composable**: `app/composables/useProfiles.ts` — wraps `local_profiles` table; exposes `profiles`, `activeProfile`, `create`, `update`, `remove`, `setActive`, `init`; auto-creates a default profile on first use (max 5)
-- **Plugin**: `app/plugins/powersync.client.ts` — initializes PowerSync on client-side only
-- **Mode**: Local-only (no sync service yet)
-- **Dependencies**: `@powersync/web`, `@journeyapps/wa-sqlite`, `@powersync/drizzle-driver`
+- **Composable**: `gui/src/composables/useLocalDb.ts` — lazy-initializes the database, runs `CREATE TABLE IF NOT EXISTS`, exports `select<T>()` and `execute()` helpers
+- **Composable**: `gui/src/composables/useProfiles.ts` — wraps `local_profiles` table; exposes `profiles`, `activeProfile`, `create`, `update`, `remove`, `setActive`, `init`; auto-creates a default profile on first use (max 5)
+- **Mode**: Local-only, no sync
+- **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
+- **Dependencies**: `@tauri-apps/plugin-sql`
 
-**Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `app/utils/llmHelpers.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
+**Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/utils/llmHelpers.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
 
 ```typescript
-// Access local database in any composable/component
-const db = useLocalDb();
-const sessions = await db.select().from(localSessions);
+// Raw SQL query in any composable/component (auto-imported via env.d.ts)
+const sessions = await select<{ id: string; title: string }>('SELECT id, title FROM local_sessions');
+
+// Insert via execute
+await execute('INSERT INTO local_pages (id, session_id, response, created_at) VALUES (?, ?, ?, ?)', [
+  id, sessionId, response, new Date().toISOString(),
+]);
 ```
 
 ### LLM Streaming — useLlmStream
 
-All SSE streaming to `/api/llm/prompt` goes through `app/composables/useLlmStream.ts`.
+All LLM streaming goes through `gui/src/composables/useLlmStream.ts`.
 
 - `streamLlm(options)` — async generator yielding text chunks only
 - `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`)
-- Replaces any inline SSE parsing — never duplicate SSE logic in components
+- Replaces any inline Tauri event listening — never duplicate event logic in components
+- The `invoke('prompt', ...)` call is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted. The polling loop starts immediately and drains event queues as they arrive.
 
 ```typescript
 import { streamLlmFull } from '~/composables/useLlmStream';
 
 for await (const event of streamLlmFull({ persona, messages })) {
   if (event.type === 'text') { /* append text */ }
+  if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
+  if (event.type === 'done') { /* stream complete */ }
 }
 ```
 
@@ -152,23 +163,23 @@ for await (const event of streamLlmFull({ persona, messages })) {
 **Never use `as any` casts.** If a type incompatibility arises, fix the root cause:
 
 - Widen or narrow the source/target types (e.g. `Record<string, unknown>` instead of `unknown`)
-- Fix schema types (e.g. Drizzle `.$type<>()`)
+- Fix schema types
 - Remove unnecessary type wrappers (e.g. `DeepReadonly` that creates cascading `Readonly<unknown>` constraints)
 - Use targeted type assertions like `as ExpectedType` when crossing package boundaries
-- If a genuine cross-package type mismatch exists (e.g. aikit vs ai SDK versions), **inform the user** rather than silently casting to `any`
+- If a genuine cross-package type mismatch exists, **inform the user** rather than silently casting to `any`
 
 ### Module Type
 
-ESM modules (`"type": "module"` in package.json)
+ESM modules (`"type": "module"` in gui/package.json)
 
 ### Styling — Open Props
 
 The project uses [Open Props](https://open-props.style/) as its styling foundation. It provides CSS custom property design tokens for spacing, color, typography, shadows, radii, animations, and more.
 
-- **Global styles**: `app/assets/css/app.css` — imports `open-props` (tokens) and `normalize` (reset)
+- **Global styles**: `gui/src/assets/css/` — imports `open-props` (tokens) and `normalize` (reset)
 - **Usage**: Reference tokens via `var(--size-3)`, `var(--gray-7)`, `var(--radius-2)`, `var(--shadow-2)`, `var(--font-size-4)`, etc.
 - **Semantic tokens**: `--text-1`/`--text-2`, `--surface-1`..`--surface-4` for colors that adapt to dark mode
-- **Brand**: `--brand-gradient` defined in `app.css` for the app's gradient
+- **Brand**: `--brand-gradient` defined in global CSS for the app's gradient
 - **Rules**:
   - Never hardcode colors, spacing, radii, shadows, or font sizes — use Open Props tokens
   - Use logical properties (`inline-size`/`block-size`, `margin-block-start`, etc.)
@@ -181,146 +192,141 @@ The project uses [Open Props](https://open-props.style/) as its styling foundati
 
 ### Running the Application
 
-```bash
-# Development server
-bun run dev
+All commands are managed by the root `justfile`. Run `just` with no arguments to list available recipes.
 
-# Build for production
-bun run build
+```bash
+# Frontend only (Vite dev server on :5173)
+just dev-frontend
+
+# Engine (cargo tauri dev, requires frontend already running)
+just dev-engine
+
+# Build frontend (Vite production build)
+just build-frontend
+
+# Build engine (cargo tauri build)
+just build-engine
+
+# Build both frontend + engine
+just build
 ```
 
-### Database Operations (Server — PostgreSQL)
+### Type Checking & Linting
 
 ```bash
-# Generate migrations from schema changes
-bun run db:generate
+# TypeScript (vue-tsc --noEmit in gui/)
+just typecheck
 
-# Apply migrations
-bun run db:migrate
+# Typecheck + cargo check
+just check
 
-# Push schema directly (development)
-bun run db:push
+# Cargo clippy
+just clippy
 
-# Open Drizzle Studio
-bun run db:studio
+# Cargo fmt / fmt --check
+just fmt
+just fmt-check
 ```
 
 ---
 
 ## Database Query Patterns
 
-### Server Database (PostgreSQL)
+### Local Database (SQLite — via tauri-plugin-sql)
+
+All data access uses raw SQL through `select()` and `execute()` from `gui/src/composables/useLocalDb.ts`.
 
 ```typescript
-import { db } from '#server/db';
-import { stories } from '#server/db/schema';
-import { eq } from 'drizzle-orm';
+// These are auto-imported globally (declared in env.d.ts)
 
-// Select all
-const allStories = await db.select().from(stories);
+// Query sessions
+const sessions = await select<{ id: string; title: string; description: string | null }>(
+  'SELECT id, title, description FROM local_sessions ORDER BY created_at DESC'
+);
 
-// With where clause
-const oneStory = await db.select().from(stories).where(eq(stories.id, 1));
+// Query with parameters
+const pages = await select<{ id: string; response: string }>(
+  'SELECT id, response FROM local_pages WHERE session_id = ? ORDER BY created_at',
+  [sessionId]
+);
 
-// With relations
-const storyWithAuthor = await db.query.stories.findFirst({
-  where: eq(stories.id, 1),
-  with: {
-    author: true,
-  },
-});
-```
+// Insert
+await execute(
+  'INSERT INTO local_pages (id, session_id, system, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  [id, sessionId, system, prompt, response, new Date().toISOString()]
+);
 
-### Local Database (SQLite — Client-side)
+// Update
+await execute(
+  'UPDATE local_sessions SET title = ?, updated_at = ? WHERE id = ?',
+  [newTitle, new Date().toISOString(), sessionId]
+);
 
-```typescript
-import { useLocalDb } from '~/composables/useLocalDb';
-import { localSessions, localPages } from '#shared/db/localSchema';
-import { eq } from 'drizzle-orm';
-
-const db = useLocalDb();
-
-// Query local sessions
-const sessions = await db.select().from(localSessions);
-
-// Insert a new local page
-await db.insert(localPages).values({
-  id: 'uuid',
-  sessionId: 'session-uuid',
-  system: 'system prompt',
-  prompt: 'user input',
-  response: 'AI response',
-  createdAt: new Date().toISOString(),
-});
-```
-
-### Runtime Validation (Server)
-
-```typescript
-import { insertStorySchema } from '#server/db/schema/app';
-
-const validated = insertStorySchema.parse(data);
-await db.insert(stories).values(validated);
+// Delete
+await execute('DELETE FROM local_sessions WHERE id = ?', [sessionId]);
 ```
 
 **Detailed docs:** [Database Schema](./docs/database-schema.md)
 
 ---
 
-## API Route Patterns
+## Tauri Commands
 
-### Creating a New Endpoint
-
-```typescript
-// server/api/my-resource.get.ts
-import { db } from "../db";
-import { myTable } from "../db/schema";
-
-export default defineEventHandler(async (event) => {
-  const data = await db.select().from(myTable);
-  return { data };
-});
-```
-
-### Dynamic Routes
-
-```typescript
-// server/api/my-resource/[id].get.ts
-import { eq } from "drizzle-orm";
-
-export default defineEventHandler(async (event) => {
-  const id = getRouterParam(event, "id");
-  const data = await db.select().from(myTable).where(eq(myTable.id, id));
-  return { data: data[0] };
-});
-```
-
-### Available Endpoints
-
-**Story CRUD:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/stories` | GET | List all stories (with author) |
-| `/api/stories` | POST | Create a new story |
-| `/api/stories/[author]/[id]` | GET | Get story by author and ID |
-| `/api/stories/draft` | PUT | Update story draft |
-| `/api/stories/publish` | POST | Publish a story version |
+### Available Commands
 
 **LLM Proxy:**
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/llm/prompt` | POST | Stream LLM response via SSE |
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `prompt` | `{ request: { model, messages[], persona, context? } }` | `void` (emits events) | Stream LLM response |
+| `list_models` | none | `Record<string, ModelConfig>` | Get configured models |
+| `save_models` | `{ models: Record<string, ModelConfig> }` | `void` | Save model configuration |
 
-**Auth & User:**
+**File Operations:**
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/auth/[...all]` | ALL | Better-Auth handler (login, signup, etc.) |
-| `/api/user/me` | GET | Get current authenticated user |
-| `/api/user/redeem-author` | POST | Redeem author role |
-| `/api/user/stories` | GET | Get current user's stories |
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `export_session` | `{ session_id, file_path, data: ExportData }` | `void` | Write session to file |
+| `import_session` | `{ file_path }` | `ExportData` | Read session from file |
+| `pick_file` | `{ filters? }` | `string \| null` | Open native file picker |
+| `pick_folder` | none | `string \| null` | Open native folder picker |
+
+### Calling Commands from Frontend
+
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+
+// LLM streaming (use the composable — never call invoke('prompt', ...) directly)
+// import { streamLlmFull } from '~/composables/useLlmStream';
+
+// Get/save models
+const models = await invoke<Record<string, ModelConfig>>('list_models');
+await invoke('save_models', { models: updatedModels });
+
+// File dialogs
+const filePath = await invoke<string | null>('pick_file', {
+  filters: [{ name: 'JSON', extensions: ['json'] }],
+});
+
+// Export/import
+await invoke('export_session', { session_id: id, file_path: filePath, data: exportData });
+const imported = await invoke<ExportData>('import_session', { file_path: filePath });
+```
+
+### Listening for LLM Events
+
+```typescript
+import { streamLlmFull } from '~/composables/useLlmStream';
+
+for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
+  if (event.type === 'text') { /* append text */ }
+  if (event.type === 'reasoning') { /* append reasoning */ }
+  if (event.type === 'error') { /* handle error */ }
+  if (event.type === 'done') { /* stream complete */ }
+}
+```
+
+**Do not use `listen('llm:*', ...)` directly** — always go through `useLlmStream`.
 
 **Detailed docs:** [API Routes](./docs/api-routes.md)
 
@@ -328,18 +334,40 @@ export default defineEventHandler(async (event) => {
 
 ## Frontend Patterns
 
-### Data Fetching (Server API)
+### Routing (Vue Router)
 
 ```typescript
-const { data: stories } = await useFetch('/api/stories');
-const { data: user } = await useFetch('/api/user/me');
+// Navigation
+const router = useRouter();
+router.push('/vignettes');
+router.push({ name: 'vignette', params: { id: sessionId } });
+
+// Route params
+const route = useRoute();
+const id = route.params.id;
 ```
 
-### Local Data Access (PowerSync SQLite)
+**Routes** (defined in `gui/src/router/index.ts`):
+
+| Path | Name | Component |
+|------|------|-----------|
+| `/` | home | `gui/src/pages/index.vue` |
+| `/vignettes` | vignettes | `gui/src/pages/vignettes/index.vue` |
+| `/vignettes/:id` | vignette | `gui/src/pages/vignettes/[id].vue` |
+| `/builder` | builder | `gui/src/pages/builder.vue` |
+| `/settings` | settings | `gui/src/pages/settings.vue` |
+
+### Component Props
 
 ```typescript
-const db = useLocalDb();
-const { data: sessions } = await db.select().from(localSessions);
+interface Props {
+  story: {
+    id: string;
+    title: string;
+  };
+}
+
+defineProps<Props>();
 ```
 
 ### LLM Streaming
@@ -348,29 +376,18 @@ const { data: sessions } = await db.select().from(localSessions);
 import { streamLlmFull } from '~/composables/useLlmStream';
 
 for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
-  // handle events
+  if (event.type === 'text') { /* append text */ }
+  if (event.type === 'error') { /* handle error */ }
 }
 ```
 
-### Route Parameters
+### Local Data Access
 
 ```typescript
-const route = useRoute();
-const id = route.params.id;
-```
-
-### Component Props
-
-```typescript
-interface Props {
-  story: {
-    id: number;
-    title: string;
-    // ...
-  };
-}
-
-defineProps<Props>();
+// select() and execute() are auto-imported globally
+const sessions = await select<{ id: string; title: string }>(
+  'SELECT id, title FROM local_sessions ORDER BY created_at DESC'
+);
 ```
 
 **Detailed docs:** [Frontend Architecture](./docs/frontend-architecture.md)
@@ -379,37 +396,25 @@ defineProps<Props>();
 
 ## Agent Guidelines
 
-### When to Modify Server Schema
+### When to Add a Tauri Command
 
-- New shareable entities require server-side tables
-- Existing entities need additional persisted fields
-- Relations between shareable entities need to change
+- Frontend needs access to a system capability (file system, native dialogs, etc.)
+- New LLM-related functionality that requires Rust-side HTTP handling
+- Operations that should run outside the webview sandbox
 
 **Process:**
-1. Update `server/db/schema/app.ts`
-2. Run `bun run db:generate` to create migration
-3. Run `bun run db:migrate` to apply changes
+1. Create a new function with `#[tauri::command]` in the appropriate `engine/src/src/commands/*.rs` file
+2. Register it in `engine/src/src/lib.rs` via `tauri::generate_handler![]`
+3. Call from frontend via `invoke('command_name', { params })`
 
-### When to Modify Local Schema
+### When to Modify Local DB Schema
 
 - Client-side gameplay state needs new tables or columns
-- Vignette or session data structures change
+- Vignette, session, or profile data structures change
 
 **Process:**
-1. Update `shared/db/localSchema.ts`
-2. PowerSync will handle schema migration on next client initialization (local-only mode)
-
-### When to Add an API Route
-
-- Frontend needs shareable data not currently exposed
-- New endpoints for external integrations
-- CRUD operations for shareable entities
-
-**Process:**
-1. Create `[resource].[method].ts` in `server/api/`
-2. Use `defineEventHandler` with `db` auto-import
-3. Use Drizzle ORM for queries
-4. Validate input with `drizzle-zod` schemas
+1. Add/modify the `CREATE TABLE IF NOT EXISTS` SQL in `gui/src/composables/useLocalDb.ts`
+2. Schema changes apply on next app launch (tables created if not exist; column additions require manual `ALTER TABLE` or DB recreation)
 
 ### When to Create a Component
 
@@ -418,37 +423,83 @@ defineProps<Props>();
 - Shared functionality (cards, modals, forms)
 
 **Process:**
-1. Create `.vue` file in `app/components/`
+1. Create `.vue` file in `gui/src/components/`
 2. Use `defineProps<T>()` for TypeScript props
 3. Use scoped styles to avoid conflicts
-4. Component is auto-imported (no imports needed)
+4. Import explicitly: `import MyComponent from '~/components/MyComponent.vue'`
 
 ### When to Add a Composable
 
 - Shared reactive state or logic across components/pages
-- Wrapping external libraries (PowerSync, LLM streaming)
+- Wrapping Tauri APIs or external libraries
 - Data access patterns (local DB queries)
 
 **Process:**
-1. Create `use*.ts` file in `app/composables/`
+1. Create `use*.ts` file in `gui/src/composables/`
 2. Export a composable function using Vue's `ref`/`computed`/`onMounted` etc.
-3. Composable is auto-imported (no imports needed)
+3. If it should be auto-imported, add its type declaration to `gui/src/env.d.ts`
+
+### When to Add a Page
+
+- New route/view in the application
+
+**Process:**
+1. Create `.vue` file in `gui/src/pages/`
+2. Add route to `gui/src/router/index.ts`
+3. Use dynamic imports for code splitting: `component: () => import('~/pages/my-page.vue')`
 
 ---
 
-## Package Scripts
+## Justfile Commands
 
-| Script | Purpose |
+All build and development commands are in the root `justfile`.
+
+| Recipe | Purpose |
 |--------|---------|
-| `dev` | Start development server (with local mailpit) |
-| `build` | Build for production |
-| `generate` | Generate static site |
-| `preview` | Preview production build |
-| `typecheck` | Run TypeScript type checking |
-| `db:generate` | Generate Drizzle migrations |
-| `db:migrate` | Apply database migrations |
-| `db:push` | Push schema to database (dev) |
-| `db:studio` | Open Drizzle Studio |
+| `just dev-frontend` | Start Vite dev server (`gui/`) |
+| `just dev-engine` | Start `cargo tauri dev` (`engine/src/`, requires frontend running) |
+| `just build-frontend` | Vite production build |
+| `just build-engine` | cargo tauri build |
+| `just build` | Both frontend + engine |
+| `just typecheck` | `vue-tsc --noEmit` in `gui/` |
+| `just check` | typecheck + `cargo check` |
+| `just clippy` | cargo clippy in `engine/` |
+| `just fmt` | cargo fmt in `engine/` |
+| `just fmt-check` | cargo fmt --check in `engine/` |
+
+## Key Dependencies
+
+### Frontend (gui/package.json)
+
+| Package | Purpose |
+|---------|---------|
+| `vue` | UI framework |
+| `vue-router` | Client-side routing |
+| `@tauri-apps/api` | Tauri IPC (`invoke`, `listen`) |
+| `@tauri-apps/plugin-sql` | SQLite database access |
+| `@tauri-apps/plugin-dialog` | Native file dialogs |
+| `@tauri-apps/plugin-fs` | File system access |
+| `@stegakir/aikit` | AI/LLM utilities |
+| `open-props` | CSS design tokens |
+| `marked` | Markdown rendering |
+| `zod` | Runtime validation |
+| `vite` | Build tool (dev dependency) |
+| `@vitejs/plugin-vue` | Vite Vue plugin (dev dependency) |
+| `vue-tsc` | Vue TypeScript checking (dev dependency) |
+
+### Backend (engine/src/Cargo.toml)
+
+| Crate | Purpose |
+|-------|---------|
+| `tauri` | Desktop app framework |
+| `tauri-plugin-sql` | SQLite plugin |
+| `tauri-plugin-dialog` | Native dialog plugin |
+| `tauri-plugin-fs` | File system plugin |
+| `reqwest` | HTTP client (streaming SSE) |
+| `serde` / `serde_json` | Serialization |
+| `tokio` | Async runtime |
+| `futures` | Async stream utilities |
+| `dirs` | Platform directories |
 
 ---
 
@@ -458,6 +509,6 @@ defineProps<Props>();
 |----------|-------------|
 | [Project Structure](./docs/project-structure.md) | Complete file organization and directory layout |
 | [Code Conventions](./docs/code-conventions.md) | Code styling, imports, patterns, and best practices |
-| [Database Schema](./docs/database-schema.md) | Table definitions (server + local), relations, and validation |
-| [API Routes](./docs/api-routes.md) | Endpoint documentation and route creation patterns |
+| [Database Schema](./docs/database-schema.md) | Local SQLite table definitions and query patterns |
+| [API Routes](./docs/api-routes.md) | Tauri command documentation and usage patterns |
 | [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, composables, and styling conventions |

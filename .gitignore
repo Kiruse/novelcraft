@@ -1,22 +1,21 @@
-# Nuxt dev/build outputs
-.output
-.data
-.nuxt
-.nitro
-.cache
-dist
+# Tauri
+engine/target/
+engine/gen/
 
-# Node dependencies
-node_modules
+# Vite
+dist/
+
+# Node
+node_modules/
 
 # Logs
-logs
+logs/
 *.log
 
 # Misc
-.DS_Store
-.fleet
-.idea
+.DS_Store/
+.fleet/
+.idea/
 
 # Local env files
 .env

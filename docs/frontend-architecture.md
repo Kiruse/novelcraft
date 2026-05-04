@@ -4,66 +4,53 @@ This document describes the frontend architecture, including pages, components, 
 
 ## Overview
 
-The frontend is built with Nuxt 4 and Vue 3, using file-based routing and auto-imports for a streamlined development experience.
+The frontend is built with Vue 3 + Vite + Vue Router, running inside a Tauri webview. There is no Nuxt — routing is manual via Vue Router, and components require explicit imports.
 
 ### Key Technologies
 
-- **Nuxt 4**: Vue framework with server-side rendering
-- **Vue 3**: Progressive JavaScript framework
-- **File-based routing**: Pages become routes automatically
-- **Auto-imports**: Components, composables, and utilities are auto-imported
-- **PowerSync + Drizzle SQLite**: Client-side local database for gameplay state
+- **Vue 3**: Progressive JavaScript framework (Composition API)
+- **Vite**: Build tool and dev server
+- **Vue Router**: Client-side routing
+- **tauri-plugin-sql**: Local SQLite for gameplay state
 - **Open Props**: CSS custom property design tokens
 
 ### Architecture
 
-Gameplay (vignettes, sessions, module runtime) runs entirely on the client:
+All gameplay runs client-side inside the Tauri webview:
 
-- **Server API** (`useFetch`) — auth, user data, shareable story metadata
-- **Local SQLite** (`useLocalDb`) — vignettes, pages, module runtime
-- **LLM streaming** (`useLlmStream`) — text generation via `POST /api/llm/prompt`
+- **Tauri IPC** (`invoke`) — LLM proxy, file operations, model configuration
+- **Local SQLite** (`select` / `execute`) — vignettes, pages, module runtime, profiles
+- **LLM streaming** (`useLlmStream`) — text generation via Tauri events
 
 ## Pages
 
-Pages are located in `app/pages/` and automatically become routes based on their file path.
+Pages are located in `gui/src/pages/` and registered manually in `gui/src/router/index.ts`.
 
-### Discovery Page (`app/pages/index.vue`)
+### Home Page (`gui/src/pages/index.vue`)
 
-The home page displays available stories and vignette quick-start options.
+The home page shows a hero section, the most recent vignettes, and an empty state when none exist.
 
 **Route:** `/`
 
 **Features:**
-- Displays all stories in a responsive grid (ordered alphabetically by title)
-- Vignette quick-start navigates to `/vignettes/new?disposition=...` instead of calling a server API
-- Sessions section has been removed (gameplay is client-side now)
-
-**API Calls:**
-- `GET /api/stories` - Fetch all stories
-
-**Data Flow:**
-
-```typescript
-const { data: stories } = await useFetch('/api/stories');
-```
+- Hero section with app title, subtitle, and a "+ New vignette" button linking to `/vignettes/new`
+- Recent vignettes section showing up to 3 most recent vignettes as clickable rows (via `useVignetteList`)
+- "View all vignettes" link to `/vignettes`
+- Empty state message when no vignettes exist
 
 ### Vignette Pages
 
-Vignettes are purely client-side — they use local SQLite instead of server API.
+Vignettes are purely client-side — they use local SQLite.
 
-#### Vignette List (`app/pages/vignettes/index.vue`)
+#### Vignette List (`gui/src/pages/vignettes/index.vue`)
 
-Displays the user's local vignette sessions with keyboard-navigable rows and inline delete functionality.
+Displays the user's local vignette sessions.
 
 **Route:** `/vignettes`
 
-**Data source:** Reads from local SQLite (`local_sessions` table via `useLocalDb`)
+**Data source:** Reads from local SQLite (`local_sessions` table via `useVignetteList`)
 
-**Keyboard navigation:** `j`/`↓` and `k`/`↑` move a `focusedIndex` through the list; `Enter` opens the focused vignette. A document-level `keydown` listener is added in `onMounted` and removed in `onUnmounted`. Each row is a `<NuxtLink>` tracked via `rowRefs`; focused rows get the `vignette-row--focused` class and DOM focus for the `:focus` outline.
-
-**Delete:** Each vignette row has an `×` button (visible on hover/focus) in the row's meta area. Clicking it sets `pendingDeleteId` which renders a confirmation overlay (`.confirm-overlay`) absolutely positioned within a `.vignette-row-wrapper` div. The overlay contains "Delete" and "Cancel" buttons following the same pattern as `ProfilesDialog.vue`. `confirmDelete()` deletes associated `local_pages` first (by `sessionId`), then `local_sessions`, and removes the item from the reactive `allVignettes` list.
-
-#### Vignette Play (`app/pages/vignettes/[id].vue`)
+#### Vignette Play (`gui/src/pages/vignettes/[id].vue`)
 
 The main vignette gameplay page.
 
@@ -72,75 +59,59 @@ The main vignette gameplay page.
 **Data source:** Reads/writes to local SQLite (`local_sessions`, `local_pages`, `local_module_runtime`)
 
 **Features:**
-- Supports both `new` (from home page quick-start) and existing session IDs
+- Supports both `new` (from home page "New vignette" button) and existing session IDs
 - LLM streaming via `useLlmStream` composable
 
-### Story Builder (`app/pages/builder.vue`)
+### Story Builder (`gui/src/pages/builder.vue`)
 
 Story creation and editing interface.
 
 **Route:** `/builder`
 
-### Story Play Page (`/stories/:author/:id`)
+### Settings (`gui/src/pages/settings.vue`)
 
-Displays a published story. Server session endpoints have been removed, so this page is temporarily stubbed.
+Full page for configuring LLM models. Loads models on mount via `invoke('list_models')`, supports add/edit/delete with Model ID, Base URL, and API Key fields. Persists changes immediately via `invoke('save_models', { models })`. Delete confirmation uses a Teleport overlay.
+
+**Route:** `/settings`
 
 ### Creating New Pages
 
-Create a new `.vue` file in `app/pages/`:
+Create a new `.vue` file in `gui/src/pages/` and register it in `gui/src/router/index.ts`:
 
 ```typescript
-// app/pages/about.vue
-<script setup lang="ts">
-const pageTitle = 'About Novelcraft';
-</script>
+// gui/src/router/index.ts
+import MyPage from '~/pages/my-page.vue';
 
-<template>
-  <div>
-    <h1>{{ pageTitle }}</h1>
-    <p>About content here</p>
-  </div>
-</template>
-```
-
-**Dynamic Routes:**
-
-```typescript
-// app/pages/users/[id].vue
-<script setup lang="ts">
-const route = useRoute();
-const userId = route.params.id;
-</script>
-
-<template>
-  <div>User {{ userId }}</div>
-</template>
+const routes = [
+  { path: '/my-page', name: 'my-page', component: MyPage },
+  // or use dynamic imports:
+  { path: '/my-page', name: 'my-page', component: () => import('~/pages/my-page.vue') },
+];
 ```
 
 ## Composables
 
-Composables are located in `app/composables/` and are auto-imported.
+Composables are located in `gui/src/composables/`. Vue composition API functions (`ref`, `computed`, `watch`, etc.) and vue-router functions (`useRoute`, `useRouter`) are auto-imported at build time by a custom Vite plugin (`gui/vite-plugins/auto-import.ts`). The `select()` and `execute()` local DB helpers are declared in `gui/src/env.d.ts`.
 
 ### useLocalDb
 
-Wraps PowerSync client with Drizzle ORM for local SQLite access.
+Wraps `tauri-plugin-sql` for local SQLite access.
 
-**Location:** `app/composables/useLocalDb.ts`
+**Location:** `gui/src/composables/useLocalDb.ts`
 
-**Returns:** Drizzle ORM database instance bound to local SQLite
+**Exports:** `select<T>()`, `execute()` (auto-imported globally)
 
 ```typescript
-const db = useLocalDb();
-const sessions = await db.select().from(localSessions);
+const sessions = await select<{ id: string; title: string }>(
+  'SELECT id, title FROM local_sessions ORDER BY created_at DESC'
+);
 ```
 
 ### useProfiles
 
 Wraps the `local_profiles` SQLite table for managing player profiles.
 
-**Location:** `app/composables/useProfiles.ts`
-
-**Exports:** `ProfileRow`, `Profile` types
+**Location:** `gui/src/composables/useProfiles.ts`
 
 **Returns:** `{ profiles, activeProfile, refresh, create, update, remove, setActive, init, maxProfiles, defaultFields }`
 
@@ -154,17 +125,11 @@ Wraps the `local_profiles` SQLite table for managing player profiles.
 
 **Default fields:** `{ name, appearance, interests, favorite color }`
 
-```typescript
-const { profiles, activeProfile, init } = useProfiles();
-await init();
-console.log(activeProfile.value?.fields);
-```
-
 ### useLlmStream
 
-Centralized SSE streaming client for the LLM proxy endpoint.
+Centralized LLM streaming client wrapping Tauri event emission.
 
-**Location:** `app/composables/useLlmStream.ts`
+**Location:** `gui/src/composables/useLlmStream.ts`
 
 **Exports:**
 
@@ -176,223 +141,145 @@ import { streamLlmFull } from '~/composables/useLlmStream';
 
 for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
   if (event.type === 'text') { /* append text */ }
+  if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
+  if (event.type === 'done') { /* stream complete */ }
 }
 ```
 
-**Rule:** Never parse SSE inline in components — always use `useLlmStream`.
+**Rule:** Never listen to Tauri `llm:*` events directly — always use `useLlmStream`.
 
-### useCurrentUser
+**Implementation notes:**
 
-Manages current user state and shape types.
+The `invoke('prompt', ...)` call to the Rust backend is **fire-and-forget** (the promise is not awaited). This is necessary because the Rust command does not resolve until *after* it has emitted `llm:done`, meaning the `llm:done` event would arrive before the polling loop could start if the invoke were awaited.
 
-**Location:** `app/composables/useCurrentUser.ts`
+The flow is:
 
-**Exports:** `UserShape`, `AuthorStoryShape` (vignette and session shapes have been removed — those are client-side now)
+1. Event listeners for `llm:text`, `llm:reasoning`, `llm:error`, and `llm:done` are registered.
+2. `invoke('prompt', ...)` is called without awaiting. Its `.catch()` captures any Rust-side rejection into `invokeError` and sets `done = true`.
+3. A polling loop starts immediately, draining the text/reasoning queues and yielding events. Error events cause an early return.
+4. When `done` becomes `true` (via `llm:done` event or invoke rejection), the loop exits.
+5. After the loop: if `invokeError` was captured, an `error` event is yielded; otherwise a `done` event is yielded.
+6. All listeners are cleaned up in a `finally` block.
 
 ### useStoryBuilder
 
-Story builder logic, imports gameplay modules from shared code.
+Story builder logic, imports gameplay modules.
 
-**Location:** `app/composables/useStoryBuilder.ts`
+**Location:** `gui/src/composables/useStoryBuilder.ts`
 
-Uses `getAllModules()` from `#shared/gameplay` instead of a server API endpoint.
+Uses `getAllModules()` from `~/gameplay`.
+
+### useVignetteList
+
+Vignette list data and CRUD operations.
+
+**Location:** `gui/src/composables/useVignetteList.ts`
 
 ### useShortcutsDialog
 
 Shared state composable for the keyboard shortcuts dialog.
 
-**Location:** `app/composables/useShortcutsDialog.ts`
+**Location:** `gui/src/composables/useShortcutsDialog.ts`
 
 **Returns:** `{ open: Readonly<Ref<boolean>>, show: () => void, close: () => void, toggle: () => void }`
-
-- `open` — readonly reactive boolean controlling dialog visibility
-- `show()` — opens the dialog
-- `close()` — closes the dialog
-- `toggle()` — toggles dialog visibility
-
-Used by both `app.vue` (global `Ctrl+Shift+/` shortcut) and `AccountBox.vue` (menu item) to control the same dialog instance.
-
-```typescript
-const { open, show, close, toggle } = useShortcutsDialog();
-```
-
-### useAuthClient
-
-Authentication client wrapper.
-
-**Location:** `app/composables/useAuthClient.ts`
 
 ### useToast
 
 Toast notification system.
 
-**Location:** `app/composables/useToast.ts`
+**Location:** `gui/src/composables/useToast.ts`
 
 ## Components
 
-Reusable Vue components are located in `app/components/` and are auto-imported.
+Reusable Vue components are located in `gui/src/components/` and require **explicit imports**.
 
 ### StoryCard
 
 Displays story information in a card format.
 
-**Location:** `app/components/StoryCard.vue`
-
-**Props:**
-
-```typescript
-{
-  story: {
-    id: number;
-    title: string;
-    description: string | null;
-    coverArt: string | null;
-    author: {
-      name: string;
-    };
-  };
-}
-```
+**Location:** `gui/src/components/StoryCard.vue`
 
 ### AppSidebar
 
 Application navigation sidebar.
 
-**Location:** `app/components/AppSidebar.vue`
-
-**Note:** Vignette section, sessions section, and `createVignette()` have been removed. Gameplay navigation is handled client-side. The account box (footer) is extracted into the `AccountBox` component.
+**Location:** `gui/src/components/AppSidebar.vue`
 
 ### AccountBox
 
-User account section displayed in the sidebar footer. Shows user avatar/name, current active profile name, and an account menu (Profiles, Shortcuts, Settings, Sign out). Contains the `ProfilesDialog`. The "Shortcuts" menu item opens the shortcuts dialog via `useShortcutsDialog().show()`.
+User account section displayed in the sidebar footer. Contains a dropdown menu with items for Profiles, Settings, and Shortcuts. Mounts `ProfilesDialog` internally; the Settings menu item navigates to `/settings` via `router.push`.
 
-**Location:** `app/components/AccountBox.vue`
+**Location:** `gui/src/components/AccountBox.vue`
 
-**Props:** `{ user: UserShape | null; expanded: boolean }`
+**Props:** `{ expanded: boolean }`
 
-**Events:** `closeDrawer`
-
-Initialized via `useProfiles().init()` on mount.
+**Menu items:**
+- Profiles — opens `ProfilesDialog`
+- Settings — navigates to `/settings`
+- Shortcuts — opens the global shortcuts dialog
 
 ### ProfilesDialog
 
-Modal dialog for managing player profiles (create, edit, delete, switch active). Fields are `key: value` pairs in single text inputs. Tab on last non-empty field creates a new one.
+Modal dialog for managing player profiles.
 
-**Location:** `app/components/ProfilesDialog.vue`
-
-**Props:** `{ open, profiles, activeProfile, maxProfiles, defaultFields }`
-
-**Events:** `close`, `create`, `update`, `remove`, `setActive`
+**Location:** `gui/src/components/ProfilesDialog.vue`
 
 ### SuggestionPicker
 
 Provides AI-generated suggestions during gameplay.
 
-**Location:** `app/components/SuggestionPicker.vue`
+**Location:** `gui/src/components/SuggestionPicker.vue`
 
-Uses `streamLlmFull()` from `useLlmStream.ts` for LLM streaming.
+Uses `streamLlmFull()` from `useLlmStream.ts`.
 
 ### InspireDialog
 
 Inspiration dialog in the story builder.
 
-**Location:** `app/components/builder/InspireDialog.vue`
+**Location:** `gui/src/components/builder/InspireDialog.vue`
 
-Uses `streamLlmFull()` from `useLlmStream.ts` for LLM streaming.
+Uses `streamLlmFull()` from `useLlmStream.ts`.
 
 ### Game
 
 Main gameplay component — the single interactive surface for vignette play sessions.
 
-**Location:** `app/components/Game.vue`
-
-**Props:**
-
-```typescript
-interface GameProps {
-  /** Pre-built page entries rendered in the story body. */
-  pages: GamePage[];
-  /** Story title shown in the header input. */
-  title?: string;
-  /** Placeholder for the title input. */
-  titlePlaceholder?: string;
-  /** Whether the agent is currently streaming a response. */
-  streaming?: boolean;
-  /** Accumulated streaming text shown during generation. */
-  streamText?: string;
-}
-```
-
-**Events:**
-
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `prompt` | `{ text: string; mode: InputMode; pageId: number \| string \| null }` | User submitted a message in the chat bar |
-| `updateTitle` | `string` | Title input blurred with a new value |
-| `updatePage` | `{ pageId: number \| string; response?: string; system?: string \| null }` | User edited a page's prose response or system prompt |
-
-**Input modes** (cycled via Shift+Tab or the mode button): `write`, `steer`, `instruct`
-
-**Exposed:** `setPage(n: number)` — programmatic page navigation (used by parent).
+**Location:** `gui/src/components/Game.vue`
 
 ### ChatArea
 
 Chat/conversation display area.
 
-**Location:** `app/components/ChatArea.vue`
+**Location:** `gui/src/components/ChatArea.vue`
 
 ### GameDebugPanel
 
 Debug panel for gameplay state inspection.
 
-**Location:** `app/components/GameDebugPanel.vue`
+**Location:** `gui/src/components/GameDebugPanel.vue`
 
 ### ShortcutsDialog
 
-Teleport-ed modal dialog listing all keyboard shortcuts, mounted in `app.vue`.
+Modal dialog listing all keyboard shortcuts, mounted in `App.vue`.
 
-**Location:** `app/components/ShortcutsDialog.vue`
-
-**Features:**
-- Search bar to filter shortcuts by name (default mode)
-- "By keys" checkbox toggle to filter by key combination instead
-- Highlights matching keys or dims non-matching labels based on active filter mode
-- Escape key closes the dialog
-- Auto-focuses the search input when opened
-- Resets filter state on each open
-
-**Shortcut groups** (defined in the `SHORTCUTS` constant):
-- **Global** — shortcuts dialog toggle, Alt+N chord navigation (Home, Vignettes)
-- **Vignettes list** — j/k/Enter row navigation
-- **Game — input focus** — Ctrl+↑/↓ focus cycle, Ctrl+Enter chat bar
-- **Game — chat bar** — Shift+Tab mode cycle, Enter send, ↑ edit last response
-- **Game — editors** — Escape close, Ctrl+Enter save
-- **Game — slash commands** — /write, /steer, /instruct
-
-Uses `ShortcutRow` with the `highlight` prop to visually emphasize matching elements.
+**Location:** `gui/src/components/ShortcutsDialog.vue`
 
 ### ShortcutRow
 
 Presentational component that renders a keyboard shortcut as a row with a label and styled `<kbd>` keys.
 
-**Location:** `app/components/ShortcutRow.vue`
+**Location:** `gui/src/components/ShortcutRow.vue`
 
-**Props:**
+### GameSessionCard
 
-```typescript
-{
-  keys: string;                // Space-separated key tokens, e.g. "Ctrl Shift /"
-  label: string;               // Human-readable description of what the shortcut does
-  highlight?: 'keys' | 'label' | '';  // Controls visual emphasis when filtering (default: '')
-}
-```
+Vignette/session card for the list view.
 
-The `keys` string is split on spaces to produce individual `<kbd>` elements. When `highlight` is `'keys'`, the kbd elements are visually emphasized; when `'label'`, the label text is emphasized. Used by `ShortcutsDialog`.
+**Location:** `gui/src/components/GameSessionCard.vue`
 
 ### Creating New Components
 
-Create a new `.vue` file in `app/components/`:
+Create a new `.vue` file in `gui/src/components/`:
 
 ```vue
 <script setup lang="ts">
@@ -418,10 +305,13 @@ defineProps<Props>();
 </style>
 ```
 
-**Auto-import Usage:**
+**Import Usage:**
 
 ```vue
-<!-- No import needed - component is auto-imported -->
+<script setup lang="ts">
+import MyComponent from '~/components/MyComponent.vue';
+</script>
+
 <template>
   <div>
     <MyComponent title="Hello" subtitle="World" />
@@ -429,32 +319,15 @@ defineProps<Props>();
 </template>
 ```
 
-## Plugins
-
-### PowerSync Plugin
-
-**Location:** `app/plugins/powersync.client.ts`
-
-Initializes PowerSync on client-side only. Required for local SQLite access.
-
 ## Global Styles
 
-Global CSS is defined in `app/assets/css/app.css` and included via `nuxt.config.ts`.
+Global CSS is defined in `gui/src/assets/css/` and imported in `gui/src/main.ts`.
 
 **Included Styles:**
 - Open Props design tokens
 - CSS normalize/reset
 - Semantic tokens for dark mode (`--text-1`, `--surface-1`, etc.)
 - Brand gradient (`--brand-gradient`)
-
-### Configuring Global Styles
-
-```typescript
-// nuxt.config.ts
-export default defineNuxtConfig({
-  css: ['~/assets/css/app.css'],
-});
-```
 
 ## Styling Conventions
 
@@ -480,19 +353,9 @@ Reference design tokens via CSS custom properties:
 Use scoped styles in single-file components to avoid style conflicts:
 
 ```vue
-<template>
-  <div class="my-component">
-    <p class="text">Content</p>
-  </div>
-</template>
-
 <style scoped>
 .my-component {
   padding: var(--size-3);
-}
-
-.text {
-  color: var(--text-1);
 }
 </style>
 ```
@@ -501,8 +364,7 @@ Use scoped styles in single-file components to avoid style conflicts:
 
 Use kebab-case for CSS class names:
 
-```vue
-<style scoped>
+```css
 /* Good */
 .story-card {}
 .cover-art {}
@@ -511,7 +373,6 @@ Use kebab-case for CSS class names:
 /* Avoid PascalCase or camelCase for classes */
 .StoryCard {}    /* Avoid */
 .coverArt {}     /* Avoid */
-</style>
 ```
 
 ### Logical Properties
@@ -525,92 +386,49 @@ margin-block-start: var(--size-2);
 padding-inline: var(--size-3);
 ```
 
-### Responsive Design
-
-Use CSS Grid and Flexbox for responsive layouts:
-
-```vue
-<style scoped>
-.stories-grid {
-  display: grid;
-  grid-template-columns: 1fr; /* Mobile */
-  gap: var(--size-6);
-}
-
-@media (min-width: 768px) {
-  .stories-grid {
-    grid-template-columns: repeat(2, 1fr); /* Tablet */
-  }
-}
-
-@media (min-width: 1024px) {
-  .stories-grid {
-    grid-template-columns: repeat(3, 1fr); /* Desktop */
-  }
-}
-</style>
-```
-
-### Breakpoints
-
-Common breakpoints used in the project:
-
-| Breakpoint | Screen Width | Description |
-|------------|--------------|-------------|
-| Mobile | < 768px | Single column layouts |
-| Tablet | 768px - 1023px | Two column layouts |
-| Desktop | ≥ 1024px | Three+ column layouts |
-
 ## Auto-Imports
 
-### Components
+### Vue Composition API & Vue Router
 
-All components in `app/components/` are auto-imported:
+Auto-imported at build time by a custom Vite plugin (`gui/vite-plugins/auto-import.ts`, registered at `enforce: 'pre'` in `gui/vite.config.ts`). Type declarations live in `gui/src/env.d.ts` for TypeScript support.
 
-```vue
-<!-- No import needed -->
-<template>
-  <StoryCard :story="story" />
-</template>
-```
+**Never manually import these — it causes duplicate import conflicts:**
 
-### Composables
-
-Vue and Nuxt composables are auto-imported:
+- From `vue`: `ref`, `reactive`, `computed`, `watch`, `readonly`, `onMounted`, `onUnmounted`, `nextTick`
+- From `vue-router`: `useRoute`, `useRouter`
 
 ```typescript
 <script setup lang="ts">
-// No import needed
+// No import needed — injected by the Vite auto-import plugin
 const count = ref(0);
 const route = useRoute();
 const router = useRouter();
-const db = useLocalDb();
-
-const { data, pending, error } = await useFetch('/api/stories');
 </script>
 ```
 
-## Nuxt Configuration
+### Local DB Helpers
 
-The Nuxt configuration is defined in `nuxt.config.ts`:
+Declared in `gui/src/env.d.ts` (type-only declarations; runtime provided by `tauri-plugin-sql`):
 
 ```typescript
-// https://nuxt.com/docs/api/configuration/nuxt-config
-export default defineNuxtConfig({
-  compatibilityDate: '2024-11-01',
-  devtools: { enabled: true },
-  css: ['~/assets/css/app.css'],
-  vite: {
-    // PowerSync WASM worker settings
-  },
-});
+// No import needed
+const sessions = await select<{ id: string }>('SELECT id FROM local_sessions');
+await execute('DELETE FROM local_sessions WHERE id = ?', [id]);
+```
+
+### Components
+
+Components are **not** auto-imported — import explicitly:
+
+```typescript
+import StoryCard from '~/components/StoryCard.vue';
 ```
 
 ## Keyboard Shortcuts
 
 ### Global Shortcuts
 
-Registered in `app.vue` on `document`, so they work on every page.
+Registered in `App.vue` on `document`.
 
 | Shortcut | Behavior |
 |----------|----------|
@@ -618,13 +436,9 @@ Registered in `app.vue` on `document`, so they work on every page.
 | `Alt+N → H` | Navigate to Home (`/`) |
 | `Alt+N → V` | Navigate to Vignettes (`/vignettes`) |
 
-The `Ctrl+Shift+/` listener also matches `?` because pressing `/` with Shift on US keyboards produces `?`. The dialog is a `ShortcutsDialog` component controlled via `useShortcutsDialog().toggle()`.
-
-**Alt+N chord navigation:** Pressing `Alt+N` sets an internal `awaitingAltN` flag. On the next non-Alt keypress, the flag is cleared and the key is looked up in the `ALT_N_ROUTES` map (`{ h: '/', v: '/vignettes' }`). If a match is found, `navigateTo(route)` is called. Unrecognized keys are silently ignored.
-
 ### Vignettes List Shortcuts
 
-Registered in `app/pages/vignettes/index.vue` on `document` via `onMounted`, removed on `onUnmounted`. Only active while the vignettes list page is mounted.
+Registered in `gui/src/pages/vignettes/index.vue` on `document` via `onMounted`.
 
 | Shortcut | Behavior |
 |----------|----------|
@@ -632,46 +446,9 @@ Registered in `app/pages/vignettes/index.vue` on `document` via `onMounted`, rem
 | `k` or `↑` | Select previous vignette |
 | `Enter` | Open the selected vignette |
 
-Implementation uses a `focusedIndex` ref to track the currently highlighted row and a `rowRefs` array of `<HTMLElement>` template refs. `moveFocus(delta)` clamps the index and calls `.focus()` on the corresponding `<NuxtLink>` element. The focused row receives the `vignette-row--focused` CSS class (background change + slight upward translate) and a `:focus` outline.
-
-### Game Component Shortcuts
-
-The `Game` component registers its own global `keydown` listener on mount (`onGlobalKeydown`) that handles focus cycling and chat bar access. These shortcuts work from any input within the Game component.
-
-### Focus Cycle Shortcuts
-
-Three focus slots exist in top-to-bottom order: **chat input** → **prose editor** → **system prompt editor**.
-
-| Shortcut | Behavior |
-|----------|----------|
-| `Ctrl+Up` | Cycle focus upward: chat → prose → system. If a target editor is not yet open but has content to edit, it enters edit mode automatically. Unavailable targets (no content, streaming) are skipped. |
-| `Ctrl+Down` | Cycle focus downward: system → prose → chat. Same auto-open and skip logic as `Ctrl+Up`. |
-
-### Chat Bar Shortcut
-
-| Shortcut | Behavior |
-|----------|----------|
-| `Ctrl+Enter` | Focus the chat bar. If the prose editor or system prompt editor is currently active, it saves (blurs) that editor first, then focuses the chat bar. Works from any input in the Game component. |
-
-### Other Shortcuts
-
-| Shortcut | Context | Behavior |
-|----------|---------|----------|
-| `Shift+Tab` | Chat input focused | Cycle input mode (write → steer → instruct → write) |
-| `ArrowUp` | Chat input empty, response exists | Open prose editor for the current page |
-| `Escape` | Prose or system editor focused | Save (blur) the editor |
-| `/command ` | Chat input | Slash commands: `/steer`, `/remind`, `/write`, `/instruct` switch mode and strip the command prefix |
-
-### Implementation Details
-
-- The global listener (`onGlobalKeydown`) is registered on `document` in `onMounted` and cleaned up in `onUnmounted`.
-- `cycleFocus(direction)` determines the currently focused slot by comparing `document.activeElement` against the template refs (`chatField`, `editArea`, `editSystemArea`), then walks the `FOCUS_CYCLE` array in the requested direction.
-- `focusSlot(slot)` returns a boolean indicating whether the target accepted focus — editors that cannot be activated (no content, currently streaming) return `false` so the cycle continues to the next slot.
-- The inline `@keydown.ctrl.enter` handler that was previously on the prose editor textarea has been removed in favor of the single global handler.
-
 ## Related Documentation
 
 - [Project Structure](./project-structure.md) - File organization for frontend code
 - [Code Conventions](./code-conventions.md) - Component patterns and styling guidelines
-- [API Routes](./api-routes.md) - Backend endpoints used by the frontend
+- [API Routes](./api-routes.md) - Tauri commands used by the frontend
 - [Database Schema](./database-schema.md) - Local SQLite schema for gameplay state

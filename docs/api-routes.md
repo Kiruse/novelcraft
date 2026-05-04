@@ -1,477 +1,212 @@
 # API Routes
 
-This document describes the API routing system, endpoint conventions, available endpoints, and how to create new routes.
+This document describes the Tauri commands available in Novelcraft. Since this is a desktop app with no server, all "API" functionality is exposed as Tauri commands invoked from the frontend webview via `@tauri-apps/api/core`.
 
 ## Overview
 
-The application uses Nuxt's file-based routing for API endpoints. API routes are located in `server/api/` and are automatically mapped to HTTP endpoints based on the file path and naming convention.
+The application uses Tauri commands as its IPC layer. Commands are defined in `engine/src/src/commands/` and registered in `engine/src/src/lib.rs`. The frontend calls them via `invoke()`.
 
 ### Architecture
 
-The server API is **pure CRUD** — it handles only auth, user data, and shareable story metadata. There are no gameplay, session, or vignette endpoints on the server. Gameplay state (vignettes, sessions, module runtime) is managed entirely client-side via PowerSync local SQLite.
+There is no HTTP server. All communication between the Vue frontend and Rust backend goes through Tauri's IPC:
 
-The sole AI endpoint is `POST /api/llm/prompt`, a generic LLM proxy that streams SSE events.
+- **LLM operations** — streaming proxy to OpenAI-compatible LLM APIs
+- **File operations** — export/import sessions, native file/folder pickers
+- **Data storage** — local SQLite via `tauri-plugin-sql` (no server database)
 
-### Endpoint Conventions
+### Plugin Permissions
 
-#### File Naming Pattern
+Tauri v2 plugin permissions are configured in `engine/capabilities/default.json`. This capability grants the main window access to the `sql`, `dialog`, and `fs` plugins (load, execute, select, open, save, read, write, etc.). When adding a new Tauri plugin, its permissions must be added here.
 
-API route files follow the pattern `[resource].[method].ts`:
-
-- **`[resource]`**: The resource name (e.g., `stories`, `user`)
-- **`[method]`**: The HTTP method in lowercase (e.g., `get`, `post`, `put`, `delete`, `patch`)
-
-#### Examples
-
-| File Path | HTTP Endpoint | Method |
-|-----------|---------------|--------|
-| `server/api/stories.get.ts` | `/api/stories` | GET |
-| `server/api/stories.post.ts` | `/api/stories` | POST |
-| `server/api/stories/[author]/[id].get.ts` | `/api/stories/:author/:id` | GET |
-| `server/api/user/me.get.ts` | `/api/user/me` | GET |
-
-#### Dynamic Routes
-
-Use brackets `[param]` for URL parameters:
+### Calling Commands from Frontend
 
 ```typescript
-// server/api/stories/[author]/[id].get.ts
-export default defineEventHandler(async (event) => {
-  const author = getRouterParam(event, "author");
-  const id = getRouterParam(event, "id");
-  // Use parameters
-});
+import { invoke } from '@tauri-apps/api/core';
+
+// Simple command
+const models = await invoke<Record<string, ModelConfig>>('list_models');
+
+// Command with parameters
+await invoke('save_models', { models: updatedModels });
+
+// LLM streaming (use the composable — never call invoke('prompt', ...) directly)
+// import { streamLlmFull } from '~/composables/useLlmStream';
 ```
 
-## Auto-Imports
-
-The following are auto-imported in API route files:
-
-- **`db`**: Database instance from `~/server/db/index.ts`
-- **`defineEventHandler`**: Nuxt event handler function
-- **Database queries**: Tables from `~/server/db/schema` (e.g., `stories`)
-
-## Available Endpoints
-
-### Story CRUD
-
-#### GET /api/stories
-
-Fetches all stories ordered alphabetically by title.
-
-**File:** `server/api/stories.get.ts`
-
-**Query Parameters:** None
-
-**Response:**
-
-```typescript
-{
-  stories: Array<{
-    id: number;
-    storyId: string;
-    authorId: string;
-    version: number;
-    title: string;
-    description: string | null;
-    coverArt: string | null;
-    genre: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-    author: {
-      id: string;
-      name: string;
-    };
-  }>
-}
-```
-
-#### POST /api/stories
-
-Creates a new story.
-
-**File:** `server/api/stories.post.ts`
-
-**Request Body:** Validated against `insertStorySchema`
-
-**Response:** Created story object
-
-#### GET /api/stories/[author]/[id]
-
-Fetches story details by author and ID.
-
-**File:** `server/api/stories/[author]/[id].get.ts`
-
-**Path Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `author` | string | Yes | Author user ID |
-| `id` | string | Yes | Story ID |
-
-**Response:**
-
-```typescript
-{
-  story: {
-    id: number;
-    storyId: string;
-    authorId: string;
-    version: number;
-    title: string;
-    description: string | null;
-    coverArt: string | null;
-    genre: string | null;
-    modules: Record<string, unknown>;
-    createdAt: Date;
-    updatedAt: Date;
-    author: {
-      id: string;
-      name: string;
-      image: string | null;
-    };
-  }
-}
-```
-
-#### PUT /api/stories/draft
-
-Updates a story draft.
-
-**File:** `server/api/stories/draft.put.ts`
-
-#### POST /api/stories/publish
-
-Publishes a new story version.
-
-**File:** `server/api/stories/publish.post.ts`
+## Available Commands
 
 ### LLM Proxy
 
-#### POST /api/llm/prompt
+#### `prompt`
 
-Streams an LLM response via Server-Sent Events (SSE). This is the only server-side AI endpoint.
+Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames, and emits events back to the frontend.
 
-**File:** `server/api/llm/prompt.post.ts`
+**File:** `engine/src/src/commands/llm.rs`
 
-**Request Body:**
+**Parameters:**
 
 ```typescript
 {
-  model?: string;        // Model ID (resolved via resolveModel())
-  persona: string;       // System persona (e.g., PERSONA_PLATFORM)
-  messages: Array<{
-    author: string;      // 'system' | 'user' | 'agent'
-    content: string;
-  }>;
+  request: {
+    model?: string;        // Model ID (e.g., 'qwen/qwen3.5-9b')
+    persona: string;       // System persona (e.g., PERSONA_PLATFORM)
+    messages: Array<{
+      author: string;      // 'system' | 'user' | 'agent'
+      content: string;
+    }>;
+    context?: Record<string, unknown>;  // Optional additional context
+  }
 }
 ```
 
-**Response:** SSE stream with events:
+**Returns:** `void` (emits events; does not resolve until after `llm:done` is emitted)
 
-| Event | Data | Description |
-|-------|------|-------------|
-| `text` | string | Text chunk from the LLM |
-| `reasoning` | string | Reasoning/thinking chunk (if supported) |
-| `done` | — | Stream completed |
-| `error` | string | Error message |
+**Events emitted:**
 
-**Frontend usage:** Always use `streamLlmFull()` or `streamLlm()` from `app/composables/useLlmStream.ts`. Never parse SSE inline.
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `llm:text` | `string` | Text content chunk from the LLM |
+| `llm:reasoning` | `string` | Reasoning/thinking chunk (if supported) |
+| `llm:error` | `string` | Error message |
+| `llm:done` | — | Stream completed |
 
-### Auth & User
+**Frontend usage:** Always use `streamLlmFull()` or `streamLlm()` from `gui/src/composables/useLlmStream.ts`. The composable calls `invoke('prompt', ...)` without awaiting (fire-and-forget) because the Rust command resolves only after `llm:done` has been emitted. Never listen to Tauri events directly.
 
-#### ALL /api/auth/[...all]
+#### `list_models`
 
-Better-Auth catch-all handler for authentication (login, signup, signout, etc.).
+Returns the configured model registry.
 
-**File:** `server/api/auth/[...all].ts`
+**File:** `engine/src/src/commands/llm.rs`
 
-#### GET /api/user/me
+**Parameters:** None
 
-Returns the currently authenticated user.
-
-**File:** `server/api/user/me.get.ts`
-
-**Authentication:** Required (Better-Auth session)
-
-#### POST /api/user/redeem-author
-
-Redeems an author role for the current user.
-
-**File:** `server/api/user/redeem-author.post.ts`
-
-**Authentication:** Required
-
-#### GET /api/user/stories
-
-Returns stories authored by the currently authenticated user.
-
-**File:** `server/api/user/stories.get.ts`
-
-**Authentication:** Required
-
-## Creating New API Routes
-
-### Simple List Endpoint
+**Returns:** `Record<string, ModelConfig>`
 
 ```typescript
-// server/api/my-resource.get.ts
-import { db } from "../db";
-import { myTable } from "../db/schema";
-
-export default defineEventHandler(async (event) => {
-  const data = await db.select().from(myTable);
-  return { data };
-});
+interface ModelConfig {
+  base_url: string;
+  api_key?: string;
+}
 ```
 
-### Dynamic Route Parameter
+#### `save_models`
+
+Persists model configuration to disk (`{app_data_dir}/models.json`).
+
+**File:** `engine/src/src/commands/llm.rs`
+
+**Parameters:**
 
 ```typescript
-// server/api/my-resource/[id].get.ts
-import { db } from "../db";
-import { myTable } from "../db/schema";
-import { eq } from "drizzle-orm";
-
-export default defineEventHandler(async (event) => {
-  const id = getRouterParam(event, "id");
-
-  if (!id) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: "ID is required",
-    });
-  }
-
-  const data = await db.select().from(myTable).where(eq(myTable.id, Number(id)));
-
-  if (!data.length) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: "Resource not found",
-    });
-  }
-
-  return { data: data[0] };
-});
+{
+  models: Record<string, ModelConfig>
+}
 ```
 
-### POST Endpoint with Body
+**Returns:** `void`
+
+### File Operations
+
+#### `export_session`
+
+Writes a session to a JSON file on disk.
+
+**File:** `engine/src/src/commands/fs.rs`
+
+**Parameters:**
 
 ```typescript
-// server/api/stories.post.ts
-import { db } from "../db";
-import { stories } from "../db/schema";
-import { insertStorySchema } from "../db/schema/app";
-
-export default defineEventHandler(async (event) => {
-  const body = await readBody(event);
-
-  // Validate using drizzle-zod
-  const validated = insertStorySchema.parse(body);
-
-  const result = await db.insert(stories).values(validated).returning();
-  return result[0];
-});
+{
+  session_id: string;
+  file_path: string;
+  data: ExportData;
+}
 ```
 
-### PUT/PATCH Endpoint
+**Returns:** `void`
+
+#### `import_session`
+
+Reads a session from a JSON file on disk.
+
+**File:** `engine/src/src/commands/fs.rs`
+
+**Parameters:**
 
 ```typescript
-// server/api/my-resource/[id].put.ts
-import { db } from "../db";
-import { myTable } from "../db/schema";
-import { eq } from "drizzle-orm";
-
-export default defineEventHandler(async (event) => {
-  const id = getRouterParam(event, "id");
-  const body = await readBody(event);
-
-  if (!id) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: "ID is required",
-    });
-  }
-
-  const result = await db
-    .update(myTable)
-    .set(body)
-    .where(eq(myTable.id, Number(id)))
-    .returning();
-
-  if (!result.length) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: "Resource not found",
-    });
-  }
-
-  return result[0];
-});
+{
+  file_path: string;
+}
 ```
 
-### DELETE Endpoint
+**Returns:** `ExportData`
+
+#### `pick_file`
+
+Opens a native file picker dialog.
+
+**File:** `engine/src/src/commands/fs.rs`
+
+**Parameters:**
 
 ```typescript
-// server/api/my-resource/[id].delete.ts
-import { db } from "../db";
-import { myTable } from "../db/schema";
-import { eq } from "drizzle-orm";
-
-export default defineEventHandler(async (event) => {
-  const id = getRouterParam(event, "id");
-
-  if (!id) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: "ID is required",
-    });
-  }
-
-  const result = await db
-    .delete(myTable)
-    .where(eq(myTable.id, Number(id)))
-    .returning();
-
-  if (!result.length) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: "Resource not found",
-    });
-  }
-
-  return { success: true };
-});
+{
+  filters?: Array<{ name: string; extensions: string[] }>;
+}
 ```
 
-## Query Parameters
+**Returns:** `string | null` (selected file path, or null if cancelled)
 
-### Reading Query Parameters
+#### `pick_folder`
+
+Opens a native folder picker dialog.
+
+**File:** `engine/src/src/commands/fs.rs`
+
+**Parameters:** None
+
+**Returns:** `string | null` (selected folder path, or null if cancelled)
+
+## Listening for Events
+
+For long-running operations (LLM streaming), use `streamLlmFull()` from `gui/src/composables/useLlmStream.ts`. It handles event registration, fire-and-forget invocation of `invoke('prompt', ...)`, queue draining, and cleanup automatically.
 
 ```typescript
-// server/api/stories.get.ts
-export default defineEventHandler(async (event) => {
-  const query = getQuery(event);
+import { streamLlmFull } from '~/composables/useLlmStream';
 
-  const limit = query.limit ? Number(query.limit) : 10;
-  const offset = query.offset ? Number(query.offset) : 0;
-
-  const data = await db.select()
-    .from(stories)
-    .limit(limit)
-    .offset(offset);
-
-  return { data };
-});
+for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
+  if (event.type === 'text') { /* append text */ }
+  if (event.type === 'reasoning') { /* append reasoning */ }
+  if (event.type === 'error') { /* handle error */ }
+  if (event.type === 'done') { /* stream complete */ }
+}
 ```
 
-## Authentication
+**Rule:** Always use `streamLlmFull()` from `gui/src/composables/useLlmStream.ts` for LLM streaming. Never duplicate event listening logic in components.
 
-### Accessing User Session
+## Adding New Commands
+
+### In Rust
+
+1. Create a new function with `#[tauri::command]` in `engine/src/src/commands/*.rs`
+2. Register it in `engine/src/src/lib.rs` via `tauri::generate_handler![]`
+
+```rust
+#[tauri::command]
+async fn my_command(param: String) -> Result<String, String> {
+    Ok(format!("Received: {}", param))
+}
+```
+
+### From Frontend
 
 ```typescript
-export default defineEventHandler(async (event) => {
-  const session = await getSession(event);
-
-  if (!session) {
-    throw createError({
-      statusCode: 401,
-      statusMessage: "Unauthorized",
-    });
-  }
-
-  // Authenticated logic here
-});
+const result = await invoke<string>('my_command', { param: 'hello' });
 ```
-
-### Protected Routes
-
-```typescript
-export default defineEventHandler(async (event) => {
-  const session = await getSession(event);
-
-  if (!session) {
-    throw createError({
-      statusCode: 401,
-      statusMessage: "Unauthorized",
-    });
-  }
-
-  // Protected logic here
-});
-```
-
-## Error Handling
-
-### Using createError
-
-```typescript
-export default defineEventHandler(async (event) => {
-  if (!param) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: "Parameter is required",
-    });
-  }
-});
-```
-
-### Custom Error Responses
-
-```typescript
-export default defineEventHandler(async (event) => {
-  try {
-    const result = await someOperation();
-    return result;
-  } catch (error) {
-    throw createError({
-      statusCode: 500,
-      statusMessage: error.message || "Internal server error",
-    });
-  }
-});
-```
-
-## Database Queries with Relations
-
-### Query with Single Relation
-
-```typescript
-export default defineEventHandler(async (event) => {
-  const story = await db.query.stories.findFirst({
-    where: eq(stories.id, 1),
-    with: {
-      author: true,
-    },
-  });
-
-  return { story };
-});
-```
-
-## Response Formatting
-
-### Consistent Response Structure
-
-```typescript
-// Success response
-return { stories: data };
-
-// Error response (Nuxt handles this)
-throw createError({
-  statusCode: 404,
-  statusMessage: "Resource not found",
-});
-```
-
-### Date Serialization
-
-Dates from Drizzle queries are automatically serialized to ISO strings by Nuxt.
 
 ## Related Documentation
 
-- [Code Conventions](./code-conventions.md) - Database query patterns and async functions
-- [Database Schema](./database-schema.md) - Table definitions and relation types
-- [Project Structure](./project-structure.md) - File organization for API routes
-- [Frontend Architecture](./frontend-architecture.md) - How the frontend consumes these endpoints
+- [Code Conventions](./code-conventions.md) - Import patterns and async functions
+- [Database Schema](./database-schema.md) - Local SQLite table definitions
+- [Project Structure](./project-structure.md) - File organization for commands
+- [Frontend Architecture](./frontend-architecture.md) - How the frontend uses these commands

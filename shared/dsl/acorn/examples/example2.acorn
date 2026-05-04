@@ -1,3 +1,0 @@
-use true if some_variable < 10.
-use true if some_variable % 2 == 0.
-use false.
