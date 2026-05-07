@@ -188,13 +188,34 @@ async function initExistingVignette(vignetteId: string) {
   loaded.value = true;
 }
 
-onMounted(async () => {
+function resetState() {
+  loaded.value = false;
+  disposition.value = '';
+  suggesting.value = false;
+  showPicker.value = false;
+  pickerRef.value = null;
+  suggestions.value = [];
+  completedSet.value = new Set();
+  selectedSuggestion.value = null;
+  selectedIndex.value = null;
+  streaming.value = false;
+  streamText.value = '';
+  title.value = 'Untitled Vignette';
+  activeSessionId.value = null;
+  pages.value = [];
+}
+
+async function loadVignette() {
+  resetState();
   if (id.value === 'new') {
     await initNewVignette();
   } else {
     await initExistingVignette(id.value);
   }
-});
+}
+
+onMounted(loadVignette);
+watch(id, loadVignette);
 
 async function saveTitle() {
   const newTitle = title.value.trim() || 'Untitled Vignette';
