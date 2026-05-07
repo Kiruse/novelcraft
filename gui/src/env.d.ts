@@ -23,8 +23,6 @@ declare global {
   const useShortcutsDialog: typeof import('~/composables/useShortcutsDialog')['useShortcutsDialog'];
   const useToast: typeof import('~/composables/useToast')['useToast'];
   const useStoryBuilder: typeof import('~/composables/useStoryBuilder')['useStoryBuilder'];
-  const select: typeof import('~/composables/useLocalDb')['select'];
-  const execute: typeof import('~/composables/useLocalDb')['execute'];
 }
 
 export {};

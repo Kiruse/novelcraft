@@ -12,6 +12,8 @@ pub fn run() {
       llm_cmds::prompt,
       llm_cmds::list_models,
       llm_cmds::save_models,
+      llm_cmds::ping_hosts,
+      llm_cmds::ping_host,
       fs_cmds::export_session,
       fs_cmds::import_session,
       fs_cmds::pick_file,

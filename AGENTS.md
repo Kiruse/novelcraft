@@ -37,7 +37,9 @@ novelcraft/
 ├── gui/                    # Vue 3 frontend (Vite + Vue Router)
 │   ├── src/
 │   │   ├── main.ts         # App entry, mounts Vue + Router
-│   │   ├── App.vue         # Root component
+│   │   ├── App.vue         # Root component — switches between Onboarding and Main
+│   │   ├── Main.vue        # Main app shell (sidebar, router view, shortcuts, dialogs)
+│   │   ├── Onboarding.vue  # Step-based first-run onboarding flow
 │   │   ├── env.d.ts        # Global type declarations & auto-imports
 │   │   ├── pages/          # Vue Router pages
 │   │   ├── components/     # Vue components
@@ -96,7 +98,7 @@ Models are configured in Rust, persisted to disk as JSON.
 
 - **Rust side**: `engine/src/src/commands/llm.rs` — `init_models()` loads from `{app_data_dir}/models.json` or falls back to defaults
 - **Frontend side**: Call `invoke('list_models')` to read, `invoke('save_models', { models })` to write
-- Each model entry maps a model ID → `{ base_url, api_key? }`
+- Each model entry maps a **usage ID** (e.g. `"storyteller"`, `"suggestions"`) → `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
 - Default models point to `http://localhost:1234/v1` (local LLM server)
 
 ### Agent / LLM Integration

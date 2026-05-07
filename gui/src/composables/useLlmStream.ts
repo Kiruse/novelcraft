@@ -26,7 +26,7 @@ export interface StreamLlmOptions {
   persona: string;
   messages: Array<{ author: string; content: string }>;
   model?: string;
-  context?: Record<string, unknown>;
+  context?: Context;
 }
 
 export async function* streamLlm(options: StreamLlmOptions): AsyncGenerator<string> {
@@ -55,7 +55,7 @@ export async function* streamLlmFull({
 
   const archetype = new ConversationalArchetype({
     persona,
-    context: context as Context | undefined,
+    context,
   });
 
   try {

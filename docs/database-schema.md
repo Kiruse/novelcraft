@@ -6,7 +6,7 @@ This document describes the local SQLite database schema used for all gameplay s
 
 NovelCraft is a fully offline desktop app. All data lives in a **single local SQLite database** accessed via `tauri-plugin-sql`. There is no server database, no PostgreSQL, no sync.
 
-- **Local database** (SQLite via `tauri-plugin-sql`) — gameplay state: vignettes/sessions, pages, module runtime, profiles
+- **Local database** (SQLite via `tauri-plugin-sql`) — gameplay state: vignettes/sessions, pages, module runtime, profiles, onboarding
 - **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
 - **Access**: Raw SQL through `select<T>()` and `execute()` helpers from `gui/src/composables/useLocalDb.ts`
 
@@ -85,6 +85,20 @@ Stores user-defined player profiles. Profile data is local-only. The active prof
 - Only one profile may be active at a time
 - Default fields prepopulated: `name`, `appearance`, `interests`, `favorite color`
 - Managed via `gui/src/composables/useProfiles.ts`
+
+### local_onboarding
+
+Stores whether the first-run onboarding has been completed. Single-row table.
+
+**Columns:**
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `completed` | integer (boolean) | NOT NULL, default 0 | Whether onboarding is complete (0 = not done, 1 = done) |
+
+**Business rules:**
+- Exactly one row — created on first check if not present
+- Managed via `gui/src/composables/useOnboarding.ts`
 
 ## Querying Local Database
 

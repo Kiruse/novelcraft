@@ -1,7 +1,7 @@
 import { unindent } from '@stegakir/aikit/utils';
 
-/** Default model identifier. */
-export const DEFAULT_MODEL = 'zai-org/glm-4.6v-flash';
+/** Default model usage ID. */
+export const DEFAULT_MODEL = 'storyteller';
 
 /**
  * Platform-wide base persona. Always active as the persona parameter.

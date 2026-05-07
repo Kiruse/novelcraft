@@ -42,7 +42,6 @@
 import { SuggestionParser } from '~/utils/suggestionParser';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
 import Collapsible from '~/components/Collapsible.vue';
-import { DEFAULT_MODEL } from '~/prompts';
 import { streamLlmFull } from '~/composables/useLlmStream';
 
 export interface SuggestionPickerSuggestion extends ParsedSuggestion {}
@@ -115,7 +114,7 @@ async function generate() {
     const stream = streamLlmFull({
       persona: props.persona,
       messages: [{ author: 'user', content: props.prompt }],
-      model: props.model ?? DEFAULT_MODEL,
+      model: props.model ?? 'suggestions',
     });
 
     for await (const event of stream) {

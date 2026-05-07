@@ -70,11 +70,37 @@ Story creation and editing interface.
 
 ### Settings (`gui/src/pages/settings.vue`)
 
-Full page for configuring LLM models. Loads models on mount via `invoke('list_models')`, supports add/edit/delete with Model ID, Base URL, and API Key fields. Persists changes immediately via `invoke('save_models', { models })`. Delete confirmation uses a Teleport overlay.
+Thin settings page that renders `<ModelsConfigurator />` inside the settings layout. All model configuration logic is handled by `ModelsConfigurator`.
 
 **Route:** `/settings`
 
+### Onboarding (`gui/src/Onboarding.vue`)
+
+Step-based first-run onboarding flow rendered by `App.vue` when onboarding is not yet complete.
+
+**Location:** `gui/src/Onboarding.vue`
+
+**Steps:**
+
+| Step | Content |
+|------|---------|
+| 0 | Welcome page — app description and alpha disclaimer (yellow left-border callout) |
+| 1 | Model configuration — renders `<ModelsConfigurator />` |
+
+**Features:**
+- Footer with step dot indicators, Back/Next/Get Started buttons
+- Fade transitions between steps
+- Completing onboarding calls `useOnboarding().complete()` and transitions to the main app
+
 ### Creating New Pages
+
+### App Root (`gui/src/App.vue`)
+
+Top-level component that switches between onboarding and the main application. Uses top-level await on `useOnboarding()` to check completion state. Renders `<Onboarding />` if not complete, `<Main />` otherwise.
+
+### Main Shell (`gui/src/Main.vue`)
+
+Contains the previous `App.vue` content: sidebar, router view, global keyboard shortcuts (`Ctrl+Shift+/`, `Alt+N` navigation), and global dialogs (`ShortcutsDialog`, `HostLivenessDialog`).
 
 Create a new `.vue` file in `gui/src/pages/` and register it in `gui/src/router/index.ts`:
 
@@ -144,7 +170,7 @@ Centralized LLM streaming client built on `ConversationalArchetype` from `@stega
 {
   persona: string;
   messages: Array<{ author: string; content: string }>;
-  model?: string;        // defaults to DEFAULT_MODEL from ~/prompts
+  model?: string;        // Usage ID (defaults to DEFAULT_MODEL from ~/prompts, currently 'storyteller')
   context?: Record<string, unknown>;  // passed to ConversationalArchetype as context
 }
 ```
@@ -204,6 +230,40 @@ Shared state composable for the keyboard shortcuts dialog.
 
 **Returns:** `{ open: Readonly<Ref<boolean>>, show: () => void, close: () => void, toggle: () => void }`
 
+### useHostLiveness
+
+Singleton composable that checks which configured LLM hosts are unreachable. Uses module-level refs so all callers share the same state.
+
+**Location:** `gui/src/composables/useHostLiveness.ts`
+
+**Returns:** `{ unreachableHosts, checked, checkHosts, isHostUnreachable, dismiss }`
+
+- `unreachableHosts` — `Readonly<Ref<UnreachableHost[]>>` — list of hosts that failed the liveness check
+- `checked` — `Readonly<Ref<boolean>>` — whether at least one check has been performed
+- `checkHosts()` — calls `invoke('ping_hosts')` and populates `unreachableHosts`
+- `isHostUnreachable(baseUrl: string)` — returns `true` if the given URL is in the unreachable list
+- `dismiss()` — clears the unreachable hosts list
+
+```typescript
+interface UnreachableHost {
+  url: string;
+  error: string;
+}
+```
+
+### useOnboarding
+
+Singleton composable that tracks whether first-run onboarding has been completed. Uses module-level state so all callers share the same instance.
+
+**Location:** `gui/src/composables/useOnboarding.ts`
+
+**Usage:** `await useOnboarding()` — must be awaited because it queries SQLite on first call.
+
+**Returns:** `{ completed: Readonly<Ref<boolean>>, complete: () => Promise<void> }`
+
+- `completed` — `true` once onboarding is done (checked against `local_onboarding` table on first call)
+- `complete()` — writes `completed = 1` to `local_onboarding` and sets the reactive ref to `true`
+
 ### useToast
 
 Toast notification system.
@@ -246,7 +306,7 @@ Bridges the Tauri LLM proxy to the Vercel AI SDK (`@ai-sdk/provider`) by impleme
 ```typescript
 import { createTauriModel } from '~/utils/tauriLanguageModel';
 
-const model = createTauriModel('qwen/qwen3.5-9b');
+const model = createTauriModel('storyteller');
 // Use with ConversationalArchetype from @stegakir/aikit
 ```
 
@@ -325,11 +385,122 @@ Modal dialog listing all keyboard shortcuts, mounted in `App.vue`.
 
 **Location:** `gui/src/components/ShortcutsDialog.vue`
 
+### HostLivenessDialog
+
+Modal dialog that automatically checks LLM host liveness on mount. Displays a list of unreachable hosts with their URL and error message. Provides "Dismiss" (clears the unreachable list via `useHostLiveness().dismiss()`) and "Go to Settings" (navigates to `/settings`) buttons. Mounted in `App.vue` alongside `ShortcutsDialog`.
+
+**Location:** `gui/src/components/HostLivenessDialog.vue`
+
 ### ShortcutRow
 
 Presentational component that renders a keyboard shortcut as a row with a label and styled `<kbd>` keys.
 
 **Location:** `gui/src/components/ShortcutRow.vue`
+
+### Spinner
+
+Reusable CSS-only loading spinner with size variants and accessible labeling.
+
+**Location:** `gui/src/components/Spinner.vue`
+
+**Props:**
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `size` | `'sm' \| 'md'` | `'sm'` | Spinner size |
+| `label` | `string` | `'Loading'` | Accessible `aria-label` for screen readers |
+
+Extracted from the inline `.ping-spinner` that previously lived in the settings page.
+
+### Tooltip
+
+Reusable floating tooltip component built on Floating UI. Renders tooltip content via `<Teleport to="body">` and positions it relative to an anchor element using `computePosition` with `offset` and `shift` middleware. Uses `autoUpdate` for dynamic repositioning while visible.
+
+**Location:** `gui/src/components/Tooltip.vue`
+
+**Note on Floating UI packages:** `@floating-ui/vue` is installed as a dependency, but `Tooltip.vue` imports directly from `@floating-ui/dom` (`computePosition`, `offset`, `shift`, `autoUpdate`) to avoid Vue 3.5 `Ref` type invariance issues with the Vue adapter.
+
+**Props:**
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `anchor` | `() => HTMLElement \| null \| undefined` | required | Getter function returning the target element to position against |
+| `visible` | `boolean` | `true` | Controls tooltip visibility |
+
+**Slots:**
+
+| Slot | Description |
+|------|-------------|
+| default | Tooltip content |
+
+**Behavior:**
+
+- Renders into `<Teleport to="body">` with `pointer-events: none` so it doesn't interfere with pointer events
+- Positioning uses `placement: 'bottom-start'` with `offset(4)` and `shift({ padding: 4 })` middleware
+- `autoUpdate` is started when `visible` becomes `true` (after `nextTick`) and cleaned up when `visible` becomes `false` or the component unmounts
+- Styled with Open Props tokens: red background (`--red-7`), white text (`--gray-0`), small font (`--font-size-0`), compact padding, rounded corners
+
+**Usage:**
+
+```vue
+<script setup lang="ts">
+import Tooltip from '~/components/Tooltip.vue';
+const urlInputRef = ref<HTMLElement | null>(null);
+const pingError = ref<string | null>(null);
+</script>
+
+<template>
+  <input ref="urlInputRef" />
+  <Tooltip :anchor="() => urlInputRef" :visible="!!pingError">
+    {{ pingError }}
+  </Tooltip>
+</template>
+```
+
+### ModelConfigBox
+
+Encapsulated LLM model configuration card. Handles all edit state, save/cancel logic, and debounced liveness checking for a single model entry. Used by the settings page to render each configured model.
+
+**Location:** `gui/src/components/ModelConfigBox.vue`
+
+**Props:**
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `id` | `string` | Model usage ID (e.g. `"storyteller"`, `"suggestions"`) |
+| `config` | `ModelConfig` | Current model configuration (`model_id`, `base_url`, `api_key?`) |
+| `initiallyUnreachable` | `boolean` | Whether the host was unreachable at page load (from `useHostLiveness`) |
+
+**Events:**
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `save` | `ModelConfig` | Emitted when the user saves an edited model configuration |
+
+**Behavior:**
+
+- Uses `v-model` for expanded/collapsed state (wraps `Collapsible` internally)
+- Internally manages `pinging` and `pingError` refs for liveness checking
+- On `base_url` change, a debounced (1s) ping runs via `invoke('ping_host')`
+- Shows a red border on the URL input when `pingError` is set
+- Shows a `Tooltip` below the Base URL input when `pingError` is set, displaying the error message
+- Shows a `Spinner` in front of Save/Cancel buttons while a ping is in flight
+- Disables the Save button (`:disabled="pinging"`) while a ping is in progress — the button renders at 50% opacity with a `not-allowed` cursor. Re-enabled once the ping completes regardless of result.
+- Shows a red border on the whole box when `initiallyUnreachable` is `true` and no local ping error exists yet
+- Edit fields: Model ID, Base URL, API Key (the Usage ID is read-only, used as the HashMap key)
+
+### ModelsConfigurator
+
+Reusable section component for LLM model configuration. Contains the models list with a `ModelConfigBox` for each model, model path display (with a "Your model configuration is saved to:" description prefix followed by the path in monospace font), and save logic. Extracted from `settings.vue` so it can be shared with the onboarding flow.
+
+**Location:** `gui/src/components/ModelsConfigurator.vue`
+
+**Behavior:**
+- Loads models on mount via `invoke('list_models')` and saves via `invoke('save_models', { models })`
+- The set of usage IDs is fixed (`storyteller`, `suggestions`) and cannot be added or removed
+- Each model is rendered as a `ModelConfigBox` component
+- The models path hint displays a description prefix "Your model configuration is saved to:" followed by the path in monospace font, with a guaranteed separator between directory and filename
+- Used by both `settings.vue` (settings page) and `Onboarding.vue` (step 1)
 
 ### GameSessionCard
 
@@ -488,7 +659,7 @@ import StoryCard from '~/components/StoryCard.vue';
 
 ### Global Shortcuts
 
-Registered in `App.vue` on `document`.
+Registered in `Main.vue` on `document`.
 
 | Shortcut | Behavior |
 |----------|----------|

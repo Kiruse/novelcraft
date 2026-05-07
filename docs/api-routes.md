@@ -48,7 +48,7 @@ Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-comp
 ```typescript
 {
   request: {
-    model?: string;        // Model ID (e.g., 'qwen/qwen3.5-9b')
+    model?: string;        // Usage ID (e.g., 'storyteller', 'suggestions')
     persona?: string;      // Optional system persona (e.g., PERSONA_PLATFORM)
     messages: Array<{
       author: string;      // 'system' | 'user' | 'ai' | 'tool'
@@ -72,6 +72,8 @@ Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-comp
 ```
 
 **Returns:** `void` (emits events; does not resolve until after `llm:done` is emitted)
+
+**Model resolution:** The `model` field in the request is a **usage ID** (e.g. `"storyteller"`, `"suggestions"`). The Rust backend looks up the corresponding `ModelConfig` in the in-memory model registry (loaded from `{app_data_dir}/models.json`). The actual LLM API model identifier (`config.model_id`, e.g. `"zai-org/glm-4.6v-flash"`) is then sent as the `"model"` field in the API request body.
 
 **Events emitted:**
 
@@ -123,10 +125,13 @@ Returns the configured model registry.
 
 ```typescript
 interface ModelConfig {
-  base_url: string;
-  api_key?: string;
+  model_id: string;       // Actual LLM API model identifier (e.g., 'zai-org/glm-4.6v-flash')
+  base_url: string;       // API base URL (e.g., 'http://localhost:1234/v1')
+  api_key?: string;       // Optional API key
 }
 ```
+
+The `Record<string, ModelConfig>` returned by `list_models` uses **usage IDs** as keys (e.g. `"storyteller"`, `"suggestions"`). Each value contains the actual LLM API model identifier in `model_id`.
 
 #### `save_models`
 
@@ -143,6 +148,50 @@ Persists model configuration to disk (`{app_data_dir}/models.json`).
 ```
 
 **Returns:** `void`
+
+#### `ping_hosts`
+
+Checks liveness of all unique LLM host URLs configured in the model registry. Extracts `base_url` values from all model configs, sends a GET request to `{base_url}/models` with a 5-second timeout per host, and returns a list of hosts that did not respond with a 2xx status code. If a model config includes an `api_key`, it is sent as a `Bearer` token in the `Authorization` header.
+
+**File:** `engine/src/src/commands/llm.rs`
+
+**Parameters:** None
+
+**Returns:** `Vec<UnreachableHost>`
+
+```typescript
+interface UnreachableHost {
+  url: string;    // The base_url that failed to respond
+  error: string;  // Error description (timeout, connection refused, non-2xx status, etc.)
+}
+```
+
+**Implementation notes:**
+
+- The `MutexGuard` on the model registry is dropped before any async HTTP operations to satisfy Rust's `Send` bounds.
+- Hosts are deduplicated — if multiple model configs share the same `base_url`, only one probe is sent.
+- A host that responds with any 2xx status is considered reachable and omitted from the result.
+
+#### `ping_host`
+
+Checks liveness of a single LLM host URL. Sends a GET request to `{url}/models` with a 5-second timeout. Uses the same probe logic as `ping_hosts` but for a single URL instead of scanning the entire model registry.
+
+**File:** `engine/src/src/commands/llm.rs`
+
+**Parameters:**
+
+```typescript
+{
+  request: {
+    url: string;       // Base URL to probe (e.g., 'http://localhost:1234/v1')
+    api_key?: string;  // Optional API key sent as Bearer token
+  }
+}
+```
+
+**Returns:** `Option<string>` — `null` if the host is reachable (2xx response), or an error string describing the failure (timeout, connection refused, non-2xx status, etc.).
+
+**Frontend usage:** Called from the settings page with a 600ms debounce when the `base_url` field is edited, to provide immediate feedback on whether the entered URL is reachable.
 
 ### File Operations
 

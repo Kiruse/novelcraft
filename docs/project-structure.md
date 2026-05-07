@@ -27,13 +27,15 @@ novelcraft/
 ├── gui/                              # Vue 3 frontend (Vite + Vue Router)
 │   ├── src/
 │   │   ├── main.ts                   # App entry, mounts Vue + Router
-│   │   ├── App.vue                   # Root component
+│   │   ├── App.vue                   # Root component — switches between Onboarding and Main
+│   │   ├── Main.vue                  # Main app shell (sidebar, router view, shortcuts, dialogs)
+│   │   ├── Onboarding.vue            # Step-based first-run onboarding flow
 │   │   ├── env.d.ts                  # Global type declarations for auto-imports (TS only)
 │   │   ├── vite-env.d.ts             # Vite client type declarations
 │   │   ├── pages/                    # Vue Router pages
 │   │   │   ├── index.vue             # Home page (hero, recent vignettes, empty state)
 │   │   │   ├── builder.vue           # Story builder page
-│   │   │   ├── settings.vue          # LLM model configuration page
+│   │   │   ├── settings.vue          # Settings page — renders ModelsConfigurator component
 │   │   │   └── vignettes/
 │   │   │       ├── index.vue         # Vignette list (reads from local SQLite)
 │   │   │       └── [id].vue          # Vignette play page (local SQLite)
@@ -47,6 +49,7 @@ novelcraft/
 │   │   │   ├── GameDebugPanel.vue    # Gameplay debug panel
 │   │   │   ├── ShortcutRow.vue       # Keyboard shortcut row (label + kbd keys, optional highlight)
 │   │   │   ├── ShortcutsDialog.vue   # Keyboard shortcuts modal dialog (search, filter)
+│   │   │   ├── HostLivenessDialog.vue# LLM host liveness check modal (auto-checks on mount)
 │   │   │   ├── SuggestionPicker.vue  # AI suggestion picker (uses useLlmStream)
 │   │   │   ├── GameSessionCard.vue   # Vignette/session card
 │   │   │   ├── MobileHeader.vue      # Mobile navigation header
@@ -54,6 +57,10 @@ novelcraft/
 │   │   │   ├── ToastItem.vue         # Individual toast notification
 │   │   │   ├── Chevron.vue           # Chevron icon component
 │   │   │   ├── Collapsible.vue       # Collapsible wrapper component
+│   │   │   ├── Spinner.vue           # Reusable CSS spinner (sm/md, accessible label)
+│   │   │   ├── ModelConfigBox.vue    # LLM model config card (edit, save, cancel, debounced ping)
+│   │   │   ├── ModelsConfigurator.vue # Models list section (ModelConfigBox per model, save logic)
+│   │   │   ├── Tooltip.vue           # Floating tooltip (Floating UI dom, Teleport to body)
 │   │   │   └── builder/
 │   │   │       └── InspireDialog.vue # Inspiration dialog (uses useLlmStream)
 │   │   ├── composables/              # Vue composables
@@ -61,6 +68,8 @@ novelcraft/
 │   │   │   ├── useProfiles.ts        # Player profiles CRUD (local SQLite)
 │   │   │   ├── useLlmStream.ts       # Centralized LLM streaming client
 │   │   │   ├── useShortcutsDialog.ts # Shared state for ShortcutsDialog (open/show/close/toggle)
+│   │   │   ├── useHostLiveness.ts    # LLM host liveness checking (singleton state)
+│   │   │   ├── useOnboarding.ts      # Onboarding completion state (singleton, local SQLite)
 │   │   │   ├── useStoryBuilder.ts    # Story builder logic
 │   │   │   ├── useVignetteList.ts    # Vignette list data & operations
 │   │   │   └── useToast.ts           # Toast notification system
@@ -123,7 +132,9 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 
 **`gui/src/`**
 - `main.ts` — App entry, mounts Vue + Router
-- `App.vue` — Root component, mounts `<ShortcutsDialog />`, registers global keyboard shortcuts
+- `App.vue` — Root component; uses top-level await on `useOnboarding()` to switch between `Onboarding.vue` and `Main.vue`
+- `Main.vue` — Main app shell: sidebar, router view, keyboard shortcuts, global dialogs
+- `Onboarding.vue` — Step-based first-run onboarding (welcome, model configuration)
 - `env.d.ts` — Global type declarations for auto-imported identifiers (`select()`, `execute()`, Vue composition API, vue-router) — provides TypeScript support only; runtime injection is handled by the Vite auto-import plugin
 - `prompts.ts` — Prompts and personas — single source of truth for the entire app
 
@@ -144,6 +155,7 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 - Key composables:
   - `useLocalDb` — SQLite wrapper via tauri-plugin-sql (exports `select<T>()` and `execute()`)
   - `useLlmStream` — Centralized LLM streaming (never duplicate Tauri event listening)
+  - `useHostLiveness` — LLM host liveness checking with singleton state (ping_hosts via Tauri)
   - `useStoryBuilder` — Story builder logic (imports modules from `~/gameplay`)
   - `useVignetteList` — Vignette list data and CRUD operations
 

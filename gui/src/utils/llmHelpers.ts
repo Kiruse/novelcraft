@@ -1,9 +1,6 @@
 import type { GamePage } from '~/utils/msgUtils';
 import type { Profile } from '~/composables/useProfiles';
-
-export interface Context {
-  [key: string]: string | Context | Record<string, string | unknown> | undefined;
-}
+import { Context } from '@stegakir/aikit/archetypes/conversational';
 
 export interface LlmMessage {
   author: string;
@@ -75,11 +72,11 @@ export function buildMessages({
   };
 }
 
-function getProfileContext(profile?: Profile) {
+function getProfileContext(profile?: Profile): Context {
   if (!profile) return {};
   const fields = Object.entries(profile.fields).filter(([, v]) => v.trim());
   if (fields.length === 0) return {};
   return {
-    user: Object.fromEntries(fields) as Record<string, unknown>,
+    user: Object.fromEntries(fields),
   };
 }

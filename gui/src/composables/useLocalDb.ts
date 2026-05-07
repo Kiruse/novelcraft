@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS local_profiles (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS local_onboarding (
+  completed INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 let db: Database | null = null;

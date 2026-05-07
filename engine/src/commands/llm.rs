@@ -12,6 +12,7 @@ static CLIENT: OnceCell<Client> = OnceCell::const_new();
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
   pub base_url: String,
+  pub model_id: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub api_key: Option<String>,
 }
@@ -99,16 +100,18 @@ pub async fn init_models(app: &AppHandle) {
   let path = models_config_path(app);
   let default_models: HashMap<String, ModelConfig> = HashMap::from([
     (
-      "qwen/qwen3.5-9b".into(),
+      "storyteller".into(),
       ModelConfig {
         base_url: "http://localhost:1234/v1".into(),
+        model_id: "zai-org/glm-4.6v-flash".into(),
         api_key: None,
       },
     ),
     (
-      "zai-org/glm-4.6v-flash".into(),
+      "suggestions".into(),
       ModelConfig {
         base_url: "http://localhost:1234/v1".into(),
+        model_id: "zai-org/glm-4.6v-flash".into(),
         api_key: None,
       },
     ),
@@ -183,7 +186,7 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
   }
 
   let mut body = serde_json::json!({
-    "model": request.model,
+    "model": config.model_id,
     "messages": api_messages,
     "stream": true,
     "stream_options": { "include_usage": true },
@@ -354,6 +357,101 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
   );
 
   Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnreachableHost {
+  pub url: String,
+  pub error: String,
+}
+
+#[tauri::command]
+pub async fn ping_hosts() -> Result<Vec<UnreachableHost>, String> {
+  let unique_hosts: Vec<(String, String, Option<String>)> = {
+    let models = MODELS
+      .get()
+      .ok_or("Models not initialized")?
+      .lock()
+      .map_err(|e| e.to_string())?;
+
+    let mut seen = std::collections::HashSet::new();
+    let mut hosts = Vec::new();
+
+    for config in models.values() {
+      if seen.insert(config.base_url.clone()) {
+        hosts.push((
+          config.base_url.clone(),
+          config.model_id.clone(),
+          config.api_key.clone(),
+        ));
+      }
+    }
+
+    hosts
+  };
+
+  let client = CLIENT.get().ok_or("Client not initialized")?.clone();
+
+  let mut unreachable = Vec::new();
+
+  for (base_url, _model_id, api_key) in &unique_hosts {
+    let url = base_url.trim_end_matches('/');
+    let mut req = client.get(format!("{}/models", url));
+    if let Some(key) = api_key {
+      req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let result = req
+      .timeout(std::time::Duration::from_secs(5))
+      .send()
+      .await;
+
+    match result {
+      Ok(resp) if resp.status().is_success() => {}
+      Ok(resp) => {
+        unreachable.push(UnreachableHost {
+          url: base_url.clone(),
+          error: format!("HTTP {}", resp.status()),
+        });
+      }
+      Err(e) => {
+        unreachable.push(UnreachableHost {
+          url: base_url.clone(),
+          error: e.to_string(),
+        });
+      }
+    }
+  }
+
+  Ok(unreachable)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PingHostRequest {
+  pub url: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub api_key: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ping_host(request: PingHostRequest) -> Result<Option<String>, String> {
+  let client = CLIENT.get().ok_or("Client not initialized")?.clone();
+
+  let url = request.url.trim_end_matches('/');
+  let mut req = client.get(format!("{}/models", url));
+  if let Some(key) = &request.api_key {
+    req = req.header("Authorization", format!("Bearer {}", key));
+  }
+
+  let result = req
+    .timeout(std::time::Duration::from_secs(5))
+    .send()
+    .await;
+
+  match result {
+    Ok(resp) if resp.status().is_success() => Ok(None),
+    Ok(resp) => Ok(Some(format!("HTTP {}", resp.status()))),
+    Err(e) => Ok(Some(e.to_string())),
+  }
 }
 
 #[tauri::command]
