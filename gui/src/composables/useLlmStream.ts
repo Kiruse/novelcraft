@@ -1,10 +1,25 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { ConversationalArchetype } from '@stegakir/aikit/archetypes/conversational';
+import type { Context } from '@stegakir/aikit/archetypes/conversational';
+import { Conversation, MemoryMessageStore, message } from '@stegakir/aikit';
+import { createTauriModel } from '~/utils/tauriLanguageModel';
 import { DEFAULT_MODEL } from '~/prompts';
+
+export interface LlmUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface LlmDonePayload {
+  finish_reason: string;
+  usage?: LlmUsage;
+}
 
 export interface StreamEvent {
   type: 'text' | 'reasoning' | 'done' | 'error';
   data: string;
+  finishReason?: string;
+  usage?: LlmUsage;
 }
 
 export interface StreamLlmOptions {
@@ -28,77 +43,56 @@ export async function* streamLlmFull({
   model = DEFAULT_MODEL,
   context,
 }: StreamLlmOptions): AsyncGenerator<StreamEvent> {
-  const unlisteners: UnlistenFn[] = [];
-  const queue: StreamEvent[] = [];
-  let done = false;
+  const store = new MemoryMessageStore();
+  const conversation = new Conversation(store, crypto.randomUUID());
 
-  unlisteners.push(
-    await listen<string>('llm:text', (e) => {
-      queue.push({ type: 'text', data: e.payload });
-    }),
-  );
+  for (const msg of messages) {
+    await conversation.push(message({
+      author: msg.author,
+      content: msg.content,
+    }));
+  }
 
-  unlisteners.push(
-    await listen<string>('llm:reasoning', (e) => {
-      queue.push({ type: 'reasoning', data: e.payload });
-    }),
-  );
-
-  unlisteners.push(
-    await listen<string>('llm:error', (e) => {
-      queue.push({ type: 'error', data: e.payload });
-    }),
-  );
-
-  unlisteners.push(
-    await listen<string>('llm:done', () => {
-      done = true;
-    }),
-  );
-
-  const cleanup = () => {
-    unlisteners.forEach(un => un());
-  };
-
-  let invokeError: string | null = null;
-
-  const invokePromise = invoke('prompt', {
-    request: { model, messages, persona, context },
-  }).catch((err) => {
-    invokeError = err instanceof Error ? err.message : String(err);
-    done = true;
+  const archetype = new ConversationalArchetype({
+    persona,
+    context: context as Context | undefined,
   });
 
   try {
-    while (!done || queue.length > 0) {
-      const event = queue.shift();
-      if (!event) {
-        if (done) break;
-        await new Promise((resolve) => setTimeout(resolve, 16));
-        continue;
+    const result = await archetype.prompt({
+      model: createTauriModel(model),
+      conversation,
+    });
+
+    for await (const part of result) {
+      switch (part.type) {
+        case 'text-delta':
+          yield { type: 'text', data: part.text };
+          break;
+        case 'reasoning-delta':
+          yield { type: 'reasoning', data: part.text };
+          break;
+        case 'finish':
+          yield {
+            type: 'done',
+            data: '',
+            finishReason: part.rawFinishReason,
+            usage: {
+              prompt_tokens: part.totalUsage.inputTokens ?? 0,
+              completion_tokens: part.totalUsage.outputTokens ?? 0,
+              total_tokens: part.totalUsage.totalTokens ?? 0,
+            },
+          };
+          break;
+        case 'error':
+          yield { type: 'error', data: String(part.error) };
+          break;
       }
-
-      if (event.type === 'error') {
-        yield event;
-        cleanup();
-        await invokePromise;
-        return;
-      }
-
-      yield event;
-    }
-
-    if (invokeError) {
-      yield { type: 'error', data: invokeError };
-    } else {
-      yield { type: 'done', data: '' };
     }
   } catch (err) {
     yield {
       type: 'error',
       data: err instanceof Error ? err.message : String(err),
     };
-  } finally {
-    cleanup();
   }
 }

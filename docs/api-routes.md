@@ -49,12 +49,24 @@ Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-comp
 {
   request: {
     model?: string;        // Model ID (e.g., 'qwen/qwen3.5-9b')
-    persona: string;       // System persona (e.g., PERSONA_PLATFORM)
+    persona?: string;      // Optional system persona (e.g., PERSONA_PLATFORM)
     messages: Array<{
-      author: string;      // 'system' | 'user' | 'agent'
+      author: string;      // 'system' | 'user' | 'ai' | 'tool'
       content: string;
+      tool_call_id?: string;   // For tool result messages
+      tool_calls?: Array<{    // For assistant messages with tool calls
+        id: string;
+        type: string;
+        function: { name: string; arguments: string };
+      }>;
     }>;
     context?: Record<string, unknown>;  // Optional additional context
+    request_id?: string;    // Optional — scopes events to llm:{event}:{request_id}
+    tools?: Array<{         // Optional — function/tool calling support
+      name: string;
+      description?: string;
+      parameters?: unknown; // JSON Schema
+    }>;
   }
 }
 ```
@@ -63,14 +75,41 @@ Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-comp
 
 **Events emitted:**
 
+All events use the base name unless `request_id` is provided, in which case they are scoped as `llm:{event}:{request_id}`.
+
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `llm:text` | `string` | Text content chunk from the LLM |
 | `llm:reasoning` | `string` | Reasoning/thinking chunk (if supported) |
+| `llm:tool_call` | `LlmToolCallDelta` | Tool/function call streaming delta |
 | `llm:error` | `string` | Error message |
-| `llm:done` | — | Stream completed |
+| `llm:done` | `LlmDonePayload` | Stream completed |
+
+**Event payload types:**
+
+```typescript
+interface LlmToolCallDelta {
+  index: number;
+  id?: string;
+  name?: string;
+  arguments_delta: string;
+}
+
+interface LlmDonePayload {
+  finish_reason: string;   // "stop" | "length" | "tool_calls" | "content_filter" | "error"
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+```
+
+**Backward compatibility:** All new fields (`persona` made optional, `request_id`, `tools`, `tool_call_id`, `tool_calls` on messages) use `#[serde(default)]` and are optional. Existing callers passing the old shape work unchanged. Events without `request_id` retain the same names as before.
 
 **Frontend usage:** Always use `streamLlmFull()` or `streamLlm()` from `gui/src/composables/useLlmStream.ts`. The composable calls `invoke('prompt', ...)` without awaiting (fire-and-forget) because the Rust command resolves only after `llm:done` has been emitted. Never listen to Tauri events directly.
+
+For AI SDK integration (e.g., `ConversationalArchetype` from `@stegakir/aikit`), use `createTauriModel(modelId)` from `gui/src/utils/tauriLanguageModel.ts` — this implements `LanguageModelV3` and handles scoped event routing automatically.
 
 #### `list_models`
 
@@ -178,11 +217,13 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'text') { /* append text */ }
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* stream complete */ }
+  if (event.type === 'done') {
+    console.log('Finish:', event.finishReason, 'Usage:', event.usage);
+  }
 }
 ```
 
-**Rule:** Always use `streamLlmFull()` from `gui/src/composables/useLlmStream.ts` for LLM streaming. Never duplicate event listening logic in components.
+**Rule:** Always use `streamLlmFull()` from `gui/src/composables/useLlmStream.ts` for LLM streaming. Never duplicate event listening logic in components. For AI SDK integration, use `createTauriModel()` from `~/utils/tauriLanguageModel` instead.
 
 ## Adding New Commands
 

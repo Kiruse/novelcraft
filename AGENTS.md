@@ -12,7 +12,7 @@ NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, n
 - **Vue 3 frontend** (`gui/src/`) runs in a webview via Vite — manages gameplay state, LLM orchestration, and all UI
 - **Local SQLite** via `tauri-plugin-sql` — all gameplay data (sessions, pages, profiles, module runtime) lives in a local `.db` file
 - **No server, no auth, no PostgreSQL** — single-user desktop application
-- **LLM calls** go through Rust Tauri commands — the webview calls `invoke('prompt', ...)` (fire-and-forget, via `useLlmStream`), Rust streams from the LLM provider and emits events (`llm:text`, `llm:reasoning`, `llm:error`, `llm:done`) back to the frontend
+- **LLM calls** go through Rust Tauri commands — `useLlmStream` internally uses `ConversationalArchetype` from `@stegakir/aikit` with `createTauriModel()` (which implements `LanguageModelV3` from `@ai-sdk/provider`). The AI SDK bridge calls `invoke('prompt', ...)` and maps Tauri events (`llm:text`, `llm:reasoning`, `llm:tool_call`, `llm:error`, `llm:done`) to AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
 - **Story sharing** is file-based — export/import JSON files via native file dialogs
 - **Build orchestration** is via a root `justfile` — no top-level `package.json`
 
@@ -103,13 +103,16 @@ Models are configured in Rust, persisted to disk as JSON.
 
 **All LLM calls go through the Rust backend via Tauri commands.**
 
-- **`invoke('prompt', { request })`** — takes `{ model, messages[], persona, context? }` and streams the response. The invoke is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted.
+- **`invoke('prompt', { request })`** — takes `{ model, messages[], persona?, context?, request_id?, tools? }` and streams the response. The invoke is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted.
 - Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames, and emits Tauri events:
   - `llm:text` — text content chunk
   - `llm:reasoning` — reasoning/thinking chunk
+  - `llm:tool_call` — tool/function call streaming delta (`{ index, id?, name?, arguments_delta }`)
   - `llm:error` — error message
-  - `llm:done` — stream complete
-- **Frontend composable**: `gui/src/composables/useLlmStream.ts` wraps this into async generators. It calls `invoke('prompt', ...)` without awaiting, starts a polling loop immediately, and drains event queues as they arrive. If the Rust command rejects, the invoke promise's `.catch()` sets `done = true` and records the error, which is yielded as an error event after the loop exits.
+  - `llm:done` — stream complete (payload: `{ finish_reason, usage? }`)
+- Events are scoped with `request_id` when provided: `llm:{event}:{request_id}`. This enables concurrent LLM streams without event collisions.
+- **Frontend composable**: `gui/src/composables/useLlmStream.ts` creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. The AI SDK stream parts are mapped to `StreamEvent` objects (`text`, `reasoning`, `error`, `done`). Tool-related parts are handled transparently by `ConversationalArchetype`'s internal `ToolLoopAgent`.
+- **AI SDK bridge**: `gui/src/utils/tauriLanguageModel.ts` — `createTauriModel(modelId)` returns a `LanguageModelV3` implementation that bridges Tauri events to Vercel AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
 
 **Prompts and personas** are defined in `gui/src/prompts.ts`.
 Always import from `~/prompts` & maintain them there as a single source of truth.
@@ -143,9 +146,11 @@ await execute('INSERT INTO local_pages (id, session_id, response, created_at) VA
 All LLM streaming goes through `gui/src/composables/useLlmStream.ts`.
 
 - `streamLlm(options)` — async generator yielding text chunks only
-- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`)
+- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`). Done events include `finishReason` and `usage` fields.
+- `StreamLlmOptions` accepts optional `model` and `context` parameters. The `context` is passed to `ConversationalArchetype` as the context parameter.
 - Replaces any inline Tauri event listening — never duplicate event logic in components
-- The `invoke('prompt', ...)` call is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted. The polling loop starts immediately and drains event queues as they arrive.
+- Internally creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. AI SDK `TextStreamPart` events are mapped to `StreamEvent` objects (`text-delta` → text, `reasoning-delta` → reasoning, `finish` → done with usage, `error` → error). Tool-related parts are handled transparently by `ConversationalArchetype`'s internal `ToolLoopAgent`.
+- Request ID scoping is managed internally by `TauriLanguageModel.doStream()` — no need to pass `requestId` from callers.
 
 ```typescript
 import { streamLlmFull } from '~/composables/useLlmStream';
@@ -154,7 +159,7 @@ for await (const event of streamLlmFull({ persona, messages })) {
   if (event.type === 'text') { /* append text */ }
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* stream complete */ }
+  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
 }
 ```
 
@@ -278,7 +283,7 @@ await execute('DELETE FROM local_sessions WHERE id = ?', [sessionId]);
 
 | Command | Parameters | Returns | Description |
 |---------|-----------|---------|-------------|
-| `prompt` | `{ request: { model, messages[], persona, context? } }` | `void` (emits events) | Stream LLM response |
+| `prompt` | `{ request: { model, messages[], persona?, context?, request_id?, tools? } }` | `void` (emits events) | Stream LLM response |
 | `list_models` | none | `Record<string, ModelConfig>` | Get configured models |
 | `save_models` | `{ models: Record<string, ModelConfig> }` | `void` | Save model configuration |
 
@@ -322,11 +327,11 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'text') { /* append text */ }
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* stream complete */ }
+  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
 }
 ```
 
-**Do not use `listen('llm:*', ...)` directly** — always go through `useLlmStream`.
+**Do not use `listen('llm:*', ...)` directly** — always go through `useLlmStream`. For AI SDK integration, use `createTauriModel()` from `~/utils/tauriLanguageModel` instead.
 
 **Detailed docs:** [API Routes](./docs/api-routes.md)
 
@@ -378,6 +383,7 @@ import { streamLlmFull } from '~/composables/useLlmStream';
 for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
   if (event.type === 'text') { /* append text */ }
   if (event.type === 'error') { /* handle error */ }
+  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
 }
 ```
 
@@ -479,7 +485,8 @@ All build and development commands are in the root `justfile`.
 | `@tauri-apps/plugin-sql` | SQLite database access |
 | `@tauri-apps/plugin-dialog` | Native file dialogs |
 | `@tauri-apps/plugin-fs` | File system access |
-| `@stegakir/aikit` | AI/LLM utilities |
+| `@stegakir/aikit` | AI/LLM utilities (`ConversationalArchetype`, `Conversation`, `MemoryMessageStore`) |
+| `@ai-sdk/provider` | Vercel AI SDK types (LanguageModelV3 interface) |
 | `open-props` | CSS design tokens |
 | `marked` | Markdown rendering |
 | `zod` | Runtime validation |

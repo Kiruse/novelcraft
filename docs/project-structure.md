@@ -73,6 +73,7 @@ novelcraft/
 │   │   │   └── graphMapModule.ts     # Graph/map module
 │   │   ├── utils/                    # Frontend utilities
 │   │   │   ├── llmHelpers.ts         # LLM prompt building helpers (e.g. buildProfileContext)
+│   │   │   ├── tauriLanguageModel.ts # TauriLanguageModel (LanguageModelV3 bridge) & createTauriModel()
 │   │   │   ├── msgUtils.ts           # Message utilities
 │   │   │   └── suggestionParser.ts   # Suggestion parsing utilities
 │   │   ├── prompts.ts                # Prompts & personas (single source of truth)
@@ -155,6 +156,7 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 **`gui/src/utils/`**
 - Pure utility functions
 - `llmHelpers.ts` — `buildProfileContext()` and other LLM prompt helpers
+- `tauriLanguageModel.ts` — `TauriLanguageModel` class (implements `LanguageModelV3` from `@ai-sdk/provider`) and `createTauriModel()` factory function; bridges Tauri LLM proxy to Vercel AI SDK
 - `msgUtils.ts` — Message formatting and transformation
 - `suggestionParser.ts` — AI suggestion parsing
 

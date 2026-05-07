@@ -127,7 +127,7 @@ Wraps the `local_profiles` SQLite table for managing player profiles.
 
 ### useLlmStream
 
-Centralized LLM streaming client wrapping Tauri event emission.
+Centralized LLM streaming client built on `ConversationalArchetype` from `@stegakir/aikit` and `createTauriModel` from `~/utils/tauriLanguageModel`.
 
 **Location:** `gui/src/composables/useLlmStream.ts`
 
@@ -135,6 +135,30 @@ Centralized LLM streaming client wrapping Tauri event emission.
 
 - `streamLlm(options)` — async generator yielding text chunks only
 - `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`)
+- `LlmUsage` — token usage interface (`prompt_tokens`, `completion_tokens`, `total_tokens`)
+- `LlmDonePayload` — done event payload interface (`finish_reason`, `usage?`)
+
+**Options (`StreamLlmOptions`):**
+
+```typescript
+{
+  persona: string;
+  messages: Array<{ author: string; content: string }>;
+  model?: string;        // defaults to DEFAULT_MODEL from ~/prompts
+  context?: Record<string, unknown>;  // passed to ConversationalArchetype as context
+}
+```
+
+**StreamEvent fields:**
+
+```typescript
+{
+  type: 'text' | 'reasoning' | 'done' | 'error';
+  data: string;
+  finishReason?: string;   // populated on 'done' events
+  usage?: LlmUsage;        // populated on 'done' events
+}
+```
 
 ```typescript
 import { streamLlmFull } from '~/composables/useLlmStream';
@@ -143,24 +167,20 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'text') { /* append text */ }
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* stream complete */ }
+  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
 }
 ```
 
-**Rule:** Never listen to Tauri `llm:*` events directly — always use `useLlmStream`.
+**Rule:** Never listen to Tauri `llm:*` events directly — always use `useLlmStream`. For AI SDK integration, use `createTauriModel()` from `~/utils/tauriLanguageModel` instead.
 
-**Implementation notes:**
+**Internal architecture:**
 
-The `invoke('prompt', ...)` call to the Rust backend is **fire-and-forget** (the promise is not awaited). This is necessary because the Rust command does not resolve until *after* it has emitted `llm:done`, meaning the `llm:done` event would arrive before the polling loop could start if the invoke were awaited.
-
-The flow is:
-
-1. Event listeners for `llm:text`, `llm:reasoning`, `llm:error`, and `llm:done` are registered.
-2. `invoke('prompt', ...)` is called without awaiting. Its `.catch()` captures any Rust-side rejection into `invokeError` and sets `done = true`.
-3. A polling loop starts immediately, draining the text/reasoning queues and yielding events. Error events cause an early return.
-4. When `done` becomes `true` (via `llm:done` event or invoke rejection), the loop exits.
-5. After the loop: if `invokeError` was captured, an `error` event is yielded; otherwise a `done` event is yielded.
-6. All listeners are cleaned up in a `finally` block.
+1. A `MemoryMessageStore` and `Conversation` are created from the incoming `messages` array (each message is pushed via `message()` from `@stegakir/aikit`).
+2. A `ConversationalArchetype` is instantiated with the `persona` and optional `context`.
+3. `archetype.prompt()` is called with `createTauriModel(modelId)` as the model and the conversation. This triggers `TauriLanguageModel.doStream()` which internally manages Tauri IPC (event listeners, request ID scoping, SSE parsing).
+4. The resulting `TextStreamPart` stream is mapped to `StreamEvent` objects: `text-delta` → `{ type: 'text', data }`, `reasoning-delta` → `{ type: 'reasoning', data }`, `finish` → `{ type: 'done', data: '', finishReason, usage }`, `error` → `{ type: 'error', data }`.
+5. Tool-related stream parts (`tool-call`, `tool-result`) are handled transparently by `ConversationalArchetype`'s internal `ToolLoopAgent` — callers never see them.
+6. Request ID scoping for concurrent streams is managed internally by `TauriLanguageModel.doStream()` — no `requestId` parameter is exposed to callers.
 
 ### useStoryBuilder
 
@@ -189,6 +209,46 @@ Shared state composable for the keyboard shortcuts dialog.
 Toast notification system.
 
 **Location:** `gui/src/composables/useToast.ts`
+
+## Utilities
+
+### TauriLanguageModel
+
+Bridges the Tauri LLM proxy to the Vercel AI SDK (`@ai-sdk/provider`) by implementing the `LanguageModelV3` interface.
+
+**Location:** `gui/src/utils/tauriLanguageModel.ts`
+
+**Exports:**
+
+- `TauriLanguageModel` — class implementing `LanguageModelV3`
+- `createTauriModel(modelId: string): LanguageModelV3` — factory function
+
+**Purpose:** Enables using `ConversationalArchetype` from `@stegakir/aikit` with the Tauri LLM proxy. Used internally by `useLlmStream` — callers typically do not need to import this directly.
+
+**How it works:**
+
+- `doStream()`: Converts V3 prompt messages to Tauri format, generates a scoped `requestId` (UUID), registers scoped Tauri event listeners (`llm:text:{requestId}`, etc.), creates a `ReadableStream<LanguageModelV3StreamPart>` that bridges Tauri events to V3 stream parts. Handles text, reasoning, tool call streaming, finish with usage, errors, and abort signals.
+- `doGenerate()`: Collects the full stream and returns a `LanguageModelV3GenerateResult`.
+- Emits `-start` then `-delta` pairs (no delta data in start events) as required by the V3 spec.
+- Does not pass `persona` — designed for AI SDK callers that provide their own system messages.
+
+**Message conversion:**
+
+| V3 role | Tauri `author` | Notes |
+|---------|---------------|-------|
+| `system` | `system` | Direct content mapping |
+| `user` | `user` | Text parts joined |
+| `assistant` | `ai` | Text parts + `tool_calls` array |
+| `tool` | `tool` | Sets `tool_call_id`, joins result outputs |
+
+**Tool conversion:** Maps `LanguageModelV3FunctionTool` to Tauri's `LlmTool` format (`inputSchema` → `parameters`).
+
+```typescript
+import { createTauriModel } from '~/utils/tauriLanguageModel';
+
+const model = createTauriModel('qwen/qwen3.5-9b');
+// Use with ConversationalArchetype from @stegakir/aikit
+```
 
 ## Components
 

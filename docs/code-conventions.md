@@ -30,6 +30,7 @@ export { ... } from './systemPromptModule';
 
 **Utilities** (`gui/src/utils/`)
 - Use named exports
+- `tauriLanguageModel.ts` — `TauriLanguageModel` class (implements `LanguageModelV3` from `@ai-sdk/provider`) and `createTauriModel()` factory function
 
 ## Import Patterns
 

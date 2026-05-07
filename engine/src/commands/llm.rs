@@ -20,16 +20,71 @@ pub struct ModelConfig {
 pub struct LlmMessage {
   pub author: String,
   pub content: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tool_call_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tool_calls: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LlmTool {
+  pub name: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub description: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LlmToolCallDelta {
+  pub index: u32,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub name: Option<String>,
+  pub arguments_delta: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LlmDonePayload {
+  pub finish_reason: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub usage: Option<LlmUsage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LlmUsage {
+  pub prompt_tokens: u64,
+  pub completion_tokens: u64,
+  pub total_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LlmPromptRequest {
   pub model: String,
   pub messages: Vec<LlmMessage>,
-  pub persona: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub persona: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[allow(dead_code)]
   pub context: Option<serde_json::Value>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub request_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tools: Option<Vec<LlmTool>>,
+}
+
+fn emit_event(
+  app: &AppHandle,
+  base: &str,
+  request_id: &Option<String>,
+  payload: impl Serialize + Clone,
+) {
+  let event_name = match request_id {
+    Some(id) => format!("{}:{}", base, id),
+    None => base.to_string(),
+  };
+  let _ = app.emit(&event_name, payload);
 }
 
 fn models_config_path(app: &AppHandle) -> std::path::PathBuf {
@@ -90,10 +145,13 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
   };
 
   let mut api_messages: Vec<serde_json::Value> = Vec::new();
-  api_messages.push(serde_json::json!({
-    "role": "system",
-    "content": request.persona
-  }));
+
+  if let Some(persona) = &request.persona {
+    api_messages.push(serde_json::json!({
+      "role": "system",
+      "content": persona
+    }));
+  }
 
   for msg in &request.messages {
     let role = match msg.author.as_str() {
@@ -102,17 +160,51 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
       "ai" => "assistant",
       other => other,
     };
-    api_messages.push(serde_json::json!({
+
+    let mut api_msg = serde_json::json!({
       "role": role,
-      "content": msg.content
-    }));
+      "content": msg.content,
+    });
+
+    if role == "assistant" {
+      if let Some(tool_calls) = &msg.tool_calls {
+        if !tool_calls.is_empty() && msg.content.is_empty() {
+          api_msg["content"] = serde_json::Value::Null;
+        }
+        api_msg["tool_calls"] = serde_json::json!(tool_calls);
+      }
+    }
+
+    if let Some(tool_call_id) = &msg.tool_call_id {
+      api_msg["tool_call_id"] = serde_json::json!(tool_call_id);
+    }
+
+    api_messages.push(api_msg);
   }
 
-  let body = serde_json::json!({
+  let mut body = serde_json::json!({
     "model": request.model,
     "messages": api_messages,
     "stream": true,
+    "stream_options": { "include_usage": true },
   });
+
+  if let Some(tools) = &request.tools {
+    let api_tools: Vec<serde_json::Value> = tools
+      .iter()
+      .map(|t| {
+        let mut func = serde_json::json!({ "name": t.name });
+        if let Some(desc) = &t.description {
+          func["description"] = serde_json::json!(desc);
+        }
+        if let Some(params) = &t.parameters {
+          func["parameters"] = params.clone();
+        }
+        serde_json::json!({ "type": "function", "function": func })
+      })
+      .collect();
+    body["tools"] = serde_json::json!(api_tools);
+  }
 
   let response = client
     .post(format!("{}/chat/completions", config.base_url))
@@ -132,12 +224,14 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
   if !response.status().is_success() {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    let _ = app.emit("llm:error", body);
+    emit_event(&app, "llm:error", &request.request_id, &body);
     return Err(format!("LLM request failed: HTTP {}", status));
   }
 
   let mut stream = response.bytes_stream();
   let mut buffer = String::new();
+  let mut finish_reason: Option<String> = None;
+  let mut usage: Option<LlmUsage> = None;
 
   while let Some(chunk) = stream.next().await {
     let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
@@ -154,22 +248,91 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
         }
         let line = line.strip_prefix("data: ").unwrap_or(line);
         if line == "[DONE]" {
-          let _ = app.emit("llm:done", "");
+          emit_event(
+            &app,
+            "llm:done",
+            &request.request_id,
+            LlmDonePayload {
+              finish_reason: finish_reason.unwrap_or_else(|| "stop".to_string()),
+              usage,
+            },
+          );
           return Ok(());
         }
 
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+          if let Some(u) = parsed.get("usage").and_then(|u| u.as_object()) {
+            usage = Some(LlmUsage {
+              prompt_tokens: u
+                .get("prompt_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+              completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+              total_tokens: u
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            });
+          }
+
           if let Some(choices) = parsed.get("choices").and_then(|c| c.as_array()) {
             if let Some(choice) = choices.first() {
+              if let Some(fr) = choice.get("finish_reason").and_then(|fr| fr.as_str()) {
+                if !fr.is_empty() {
+                  finish_reason = Some(fr.to_string());
+                }
+              }
+
               if let Some(delta) = choice.get("delta") {
                 if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                   if !content.is_empty() {
-                    let _ = app.emit("llm:text", content);
+                    emit_event(&app, "llm:text", &request.request_id, content);
                   }
                 }
-                if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
+
+                if let Some(reasoning) =
+                  delta.get("reasoning_content").and_then(|r| r.as_str())
+                {
                   if !reasoning.is_empty() {
-                    let _ = app.emit("llm:reasoning", reasoning);
+                    emit_event(&app, "llm:reasoning", &request.request_id, reasoning);
+                  }
+                }
+
+                if let Some(tool_calls) =
+                  delta.get("tool_calls").and_then(|tc| tc.as_array())
+                {
+                  for tc in tool_calls {
+                    let index =
+                      tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+                    let id = tc
+                      .get("id")
+                      .and_then(|i| i.as_str())
+                      .map(String::from);
+                    let name = tc
+                      .get("function")
+                      .and_then(|f| f.get("name"))
+                      .and_then(|n| n.as_str())
+                      .map(String::from);
+                    let args_delta = tc
+                      .get("function")
+                      .and_then(|f| f.get("arguments"))
+                      .and_then(|a| a.as_str())
+                      .unwrap_or("");
+
+                    emit_event(
+                      &app,
+                      "llm:tool_call",
+                      &request.request_id,
+                      LlmToolCallDelta {
+                        index,
+                        id,
+                        name,
+                        arguments_delta: args_delta.to_string(),
+                      },
+                    );
                   }
                 }
               }
@@ -180,7 +343,16 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), Str
     }
   }
 
-  let _ = app.emit("llm:done", "");
+  emit_event(
+    &app,
+    "llm:done",
+    &request.request_id,
+    LlmDonePayload {
+      finish_reason: finish_reason.unwrap_or_else(|| "stop".to_string()),
+      usage,
+    },
+  );
+
   Ok(())
 }
 
@@ -191,6 +363,7 @@ pub async fn list_models(_app: AppHandle) -> Result<HashMap<String, ModelConfig>
     .ok_or("Models not initialized")?
     .lock()
     .map_err(|e| e.to_string())?;
+
   Ok(models.clone())
 }
 
