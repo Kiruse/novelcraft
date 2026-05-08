@@ -6,6 +6,10 @@
 
     <section class="settings-section settings-section--debug">
       <h2 class="section-title">Debug Zone</h2>
+      <label class="debug-toggle">
+        <input type="checkbox" v-model="isDebugMode" />
+        <span>Debug Mode</span>
+      </label>
       <button class="btn btn--ghost" @click="resetOnboarding">Reset Onboarding</button>
     </section>
   </div>
@@ -14,8 +18,10 @@
 <script setup lang="ts">
 import ModelsConfigurator from '~/components/ModelsConfigurator.vue';
 import { useOnboarding } from '~/composables/useOnboarding';
+import { useDebugMode } from '~/composables/useDebugMode';
 
 const { reset: resetOnboarding } = useOnboarding();
+const { isDebugMode } = useDebugMode();
 </script>
 
 <style scoped>
@@ -68,5 +74,18 @@ const { reset: resetOnboarding } = useOnboarding();
 .btn--ghost:hover {
   color: var(--text-1);
   background: var(--surface-3);
+}
+
+.debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2);
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: var(--font-size-2);
+}
+
+.debug-toggle input {
+  cursor: pointer;
 }
 </style>

@@ -15,7 +15,7 @@
         :key="i"
         class="suggestion-card"
         :class="{
-          'suggestion-card--complete': completed.has(i),
+          'suggestion-card--complete': i <= completed,
           'suggestion-card--selected': i === selectedIndex,
         }"
       >
@@ -23,7 +23,7 @@
         <span v-if="s.genre" class="suggestion-card-genre">{{ s.genre }}</span>
         <p class="suggestion-card-desc">{{ s.description || '…' }}</p>
         <button
-          v-if="completed.has(i)"
+          v-if="i <= completed"
           class="suggestion-card-use"
           @click="$emit('select', suggestions[i] as ParsedSuggestion)"
         >
@@ -59,8 +59,6 @@ const props = defineProps<{
   loading: boolean;
   /** Parsed suggestions so far. */
   suggestions: Partial<ParsedSuggestion>[];
-  /** Set of completed suggestion indices. */
-  completed: Set<number>;
   /** Index of the currently selected suggestion, or null. */
   selectedIndex: number | null;
 }>();
@@ -68,19 +66,18 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [suggestion: ParsedSuggestion];
   'update:suggestions': [suggestions: Partial<ParsedSuggestion>[]];
-  'update:completed': [completed: Set<number>];
   'update:reasoning': [reasoning: string];
   'update:error': [error: string];
   done: [];
 }>();
 
+const completed = ref<number>(NaN);
 const reasoning = ref('');
 const showReasoning = ref(false);
 const error = ref('');
 
 function clear() {
   emit('update:suggestions', []);
-  emit('update:completed', new Set());
   emit('update:reasoning', '');
   showReasoning.value = false;
   error.value = '';
@@ -106,7 +103,7 @@ async function generate() {
       }
     },
     onComplete(index: number) {
-      emit('update:completed', new Set([...props.completed, index]));
+      completed.value = index;
     },
   });
 

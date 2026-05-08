@@ -1,6 +1,7 @@
-import type { GamePage } from '~/utils/msgUtils';
-import type { Profile } from '~/composables/useProfiles';
 import { Context } from '@stegakir/aikit/archetypes/conversational';
+import { DeepReadonly } from 'vue';
+import type { Profile } from '~/composables/useProfiles';
+import { VignettePage } from '~/composables/useVignette';
 
 export interface LlmMessage {
   author: string;
@@ -9,9 +10,9 @@ export interface LlmMessage {
 
 export interface BuildMessagesOpts {
   title: string;
-  description: string | null | undefined;
+  description?: string | null;
   profile?: Profile;
-  pages: GamePage[];
+  pages: DeepReadonly<VignettePage[]>;
   pageIndex?: number;
   lastPageOverride?: { prompt?: string | null; response?: string | null };
 }

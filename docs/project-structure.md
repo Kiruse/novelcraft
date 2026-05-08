@@ -35,7 +35,7 @@ novelcraft/
 │   │   ├── pages/                    # Vue Router pages
 │   │   │   ├── index.vue             # Home page (hero, recent vignettes, empty state)
 │   │   │   ├── builder.vue           # Story builder page
-│   │   │   ├── settings.vue          # Settings page — renders ModelsConfigurator component
+│   │   │   ├── settings.vue          # Settings page — renders ModelsConfigurator component, Debug Zone (debug mode toggle)
 │   │   │   └── vignettes/
 │   │   │       ├── index.vue         # Vignette list (reads from local SQLite)
 │   │   │       └── [id].vue          # Vignette play page (local SQLite)
@@ -44,9 +44,10 @@ novelcraft/
 │   │   │   ├── AppSidebar.vue        # Navigation sidebar
 │   │   │   ├── AccountBox.vue        # User account box (avatar, profile, menu)
 │   │   │   ├── ProfilesDialog.vue    # Profile management modal dialog
-│   │   │   ├── Game.vue              # Main gameplay component
+│   │   │   ├── Game.vue              # Main gameplay component (disposition page 0, story pages, chat input, debug panel)
 │   │   │   ├── ChatArea.vue          # Chat/conversation display
-│   │   │   ├── GameDebugPanel.vue    # Gameplay debug panel
+│   │   │   ├── GameDebugPanel.vue    # Gameplay debug panel (module runtime state)
+│   │   │   ├── DebugPanel.vue        # LLM thoughts & token usage debug panel
 │   │   │   ├── ShortcutRow.vue       # Keyboard shortcut row (label + kbd keys, optional highlight)
 │   │   │   ├── ShortcutsDialog.vue   # Keyboard shortcuts modal dialog (search, filter)
 │   │   │   ├── HostLivenessDialog.vue# LLM host liveness check modal (auto-checks on mount)
@@ -72,7 +73,8 @@ novelcraft/
 │   │   │   ├── useOnboarding.ts      # Onboarding completion state (singleton, local SQLite)
 │   │   │   ├── useStoryBuilder.ts    # Story builder logic
 │   │   │   ├── useVignetteList.ts    # Vignette list data & operations
-│   │   │   └── useToast.ts           # Toast notification system
+│   │   │   ├── useToast.ts           # Toast notification system
+│   │   │   └── useDebugMode.ts       # Debug mode toggle (singleton, persisted to localStorage)
 │   │   ├── gameplay/                 # Game modules
 │   │   │   ├── index.ts              # Barrel export
 │   │   │   ├── gameplayModule.ts     # Core gameplay logic
@@ -158,6 +160,7 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
   - `useHostLiveness` — LLM host liveness checking with singleton state (ping_hosts via Tauri)
   - `useStoryBuilder` — Story builder logic (imports modules from `~/gameplay`)
   - `useVignetteList` — Vignette list data and CRUD operations
+  - `useDebugMode` — Debug mode toggle with singleton `debugMode` ref persisted to localStorage
 
 **`gui/src/gameplay/`**
 - Game modules used by the frontend

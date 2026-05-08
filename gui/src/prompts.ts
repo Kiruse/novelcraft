@@ -24,6 +24,21 @@ export const PERSONA_PLATFORM = unindent(`
   Keep the tone evocative but grounded. Avoid purple prose.
 `);
 
+export const SYSTEM_SUGGEST_VIGNETTE = unindent(`
+  You are a creative story premise generator for quick interactive vignettes.
+  The user will provide a disposition — either a few keywords, a theme, or a full paragraph
+  describing the kind of story they want to experience.
+
+  Generate exactly 3 diverse story suggestions. Each must have a unique genre and tone.
+  For each suggestion, output a <suggestion> block with these tags inside:
+    <title> — a short, catchy title (3-6 words)</title>
+    <genre> — the genre</genre>
+    <description> — a vivid 2-3 sentence premise that sets the scene and ends with a hook.
+    Write descriptions in second person ("You..."). Make them evocative and specific.</description>
+
+  Output ONLY the <suggestion> blocks with no other text.
+`);
+
 // --- System reminders (NOT personas — injected as `system` messages) ---
 
 /** Vignette opening scene instructions. */
@@ -42,10 +57,12 @@ export const SYSTEM_VIGNETTE_OPEN = unindent(`
 export const SYSTEM_STEER = unindent(`
   The player wants to adjust the direction of this interactive story while keeping the same
   general events and narrative voice. Rewrite the above passage incorporating the player's guidance.
+  Your response will replace the previous page.
 `);
 
 /** Instruct mode: free-form rewrite. */
 export const SYSTEM_INSTRUCT = unindent(`
   The player has given instructions for how to rewrite the above page of this interactive
   story. Follow their instructions — you may make substantial or minimal changes as requested.
+  Your response will replace the previous page.
 `);

@@ -12,3 +12,36 @@
   --text-3: oklch(from var(--text-2) l c h / 0.6);
   --text-4: oklch(from var(--text-2) l c h / 0.35);
 }
+
+pre {
+  height: var(--size-content-2);
+  background: var(--surface-1);
+  border-radius: var(--radius-1);
+  padding: var(--size-2);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-0);
+  line-height: var(--font-lineheight-4);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  margin: 0;
+  max-block-size: 60lh;
+  overflow-y: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-0);
+  line-height: var(--font-lineheight-4);
+}
+
+th {
+  text-align: start;
+  color: var(--text-3);
+  font-weight: var(--font-weight-5);
+  padding: var(--size-1) var(--size-2);
+}
+
+td {
+  padding: var(--size-1) var(--size-2);
+}

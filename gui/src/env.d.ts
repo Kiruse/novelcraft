@@ -18,11 +18,6 @@ declare global {
   const nextTick: typeof import('vue')['nextTick'];
   const useRoute: typeof import('vue-router')['useRoute'];
   const useRouter: typeof import('vue-router')['useRouter'];
-  const useVignetteList: typeof import('~/composables/useVignetteList')['useVignetteList'];
-  const useProfiles: typeof import('~/composables/useProfiles')['useProfiles'];
-  const useShortcutsDialog: typeof import('~/composables/useShortcutsDialog')['useShortcutsDialog'];
-  const useToast: typeof import('~/composables/useToast')['useToast'];
-  const useStoryBuilder: typeof import('~/composables/useStoryBuilder')['useStoryBuilder'];
 }
 
 export {};

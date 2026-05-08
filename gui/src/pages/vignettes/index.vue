@@ -11,7 +11,8 @@
         to="/vignettes/new"
         class="vignette-row vignette-row--new"
         :class="{ 'vignette-row--focused': focusedIndex === 0 }"
-        @keydown.enter.prevent="router.push('/vignettes/new')"
+        @click.prevent="createVignette"
+        @keydown.enter.prevent="createVignette"
       >
         <div class="vignette-row-info">
           <span class="vignette-row-title">+ New vignette</span>
@@ -19,7 +20,7 @@
         </div>
       </RouterLink>
 
-      <template v-if="allVignettes.length > 0">
+      <template v-if="allVignettes?.length">
         <div
           v-for="(v, i) in allVignettes"
           :key="v.id"
@@ -37,7 +38,7 @@
               <span v-if="v.description" class="vignette-row-disposition">{{ truncate(v.description, 120) }}</span>
             </div>
             <div class="vignette-row-meta">
-              <span class="vignette-row-date">{{ formatDate(v.updatedAt) }}</span>
+              <span class="vignette-row-date">{{ formatDate(v.updated_at) }}</span>
               <button
                 class="vignette-delete-btn"
                 aria-label="Delete vignette"
@@ -64,18 +65,25 @@
 </template>
 
 <script setup lang="ts">
-import { select, execute } from '~/composables/useLocalDb';
+import { useToast } from '~/composables/useToast';
+import { useVignettes } from '~/composables/useVignettes';
+import { getErrorDisplay } from '~/utils/msgUtils';
 
 const router = useRouter();
+const {
+  vignettes: allVignettes,
+  loadVignettes,
+  create,
+  remove,
+} = useVignettes();
+const toast = useToast();
 
-interface VignetteRow {
-  id: string;
-  title: string;
-  description: string | null;
-  updatedAt: string;
-}
+const focusedIndex = ref(-1);
+const rowRefs = ref<unknown[]>([]);
+const newVignetteRef = ref<unknown>(null);
+const pendingDeleteId = ref<string | null>(null);
 
-const allVignettes = ref<VignetteRow[]>([]);
+const totalRows = computed(() => 1 + (allVignettes.value?.length ?? 0));
 
 function resolveEl(raw: unknown): HTMLElement | null {
   if (!raw) return null;
@@ -83,13 +91,6 @@ function resolveEl(raw: unknown): HTMLElement | null {
   if (typeof raw === 'object' && raw !== null && '$el' in raw) return (raw as { $el: HTMLElement }).$el;
   return null;
 }
-
-const focusedIndex = ref(-1);
-const rowRefs = ref<unknown[]>([]);
-const newVignetteRef = ref<unknown>(null);
-const pendingDeleteId = ref<string | null>(null);
-
-const totalRows = computed(() => 1 + allVignettes.value.length);
 
 function moveFocus(delta: number) {
   if (totalRows.value === 0) return;
@@ -99,6 +100,11 @@ function moveFocus(delta: number) {
   } else {
     resolveEl(rowRefs.value[focusedIndex.value - 1])?.focus();
   }
+}
+
+async function createVignette() {
+  const id = await create();
+  router.push(`/vignettes/${id}`);
 }
 
 function onListKeydown(e: KeyboardEvent) {
@@ -111,28 +117,16 @@ function onListKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(async () => {
-  document.addEventListener('keydown', onListKeydown);
-  const rows = await select<VignetteRow>('SELECT * FROM local_sessions ORDER BY updated_at DESC');
-  allVignettes.value = rows.map(r => ({
-    id: r.id,
-    title: r.title,
-    description: r.description,
-    updatedAt: r.updatedAt,
-  }));
-});
-
-onUnmounted(() => {
-  document.removeEventListener('keydown', onListKeydown);
-});
-
 async function confirmDelete() {
   if (!pendingDeleteId.value) return;
   const id = pendingDeleteId.value;
   pendingDeleteId.value = null;
-  await execute('DELETE FROM local_pages WHERE session_id = ?', [id]);
-  await execute('DELETE FROM local_sessions WHERE id = ?', [id]);
-  allVignettes.value = allVignettes.value.filter(v => v.id !== id);
+  try {
+    await remove(id);
+  } catch (err) {
+    toast.error('Failed to delete vignette: ' + getErrorDisplay(err));
+    console.error('Vignette deletion failed:', err);
+  }
 }
 
 function formatDate(date: string): string {
@@ -150,6 +144,15 @@ function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return text.slice(0, max) + '…';
 }
+
+onMounted(async () => {
+  document.addEventListener('keydown', onListKeydown);
+  await loadVignettes();
+});
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onListKeydown);
+});
 </script>
 
 <style scoped>

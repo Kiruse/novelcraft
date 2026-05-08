@@ -1,5 +1,6 @@
 <template>
   <div class="game">
+    <div class="game-main">
     <!-- Title bar -->
     <div class="game-header">
       <RouterLink to="/" class="game-back">← Back</RouterLink>
@@ -15,7 +16,11 @@
     <!-- Story pages -->
     <div ref="bodyEl" class="game-body">
       <Transition name="page" mode="out-in">
-        <div v-if="currentEntry" :key="'page-' + currentEntry.id" class="story-page" :class="{ 'story-page--editing': editing }">
+        <div v-if="hasDispositionPage && currentPage === 0" key="page-disposition" class="story-page story-page--disposition">
+          <span class="disposition-label">Disposition</span>
+          <div class="story-prose" v-html="renderedDisposition" />
+        </div>
+        <div v-else-if="currentEntry" :key="'page-' + currentEntry.id" class="story-page" :class="{ 'story-page--editing': editing }">
           <!-- System prompt (steer notes) -->
           <div
             v-if="currentEntry.system && editing?.which !== 'system'"
@@ -94,10 +99,10 @@
         >
           ←
         </button>
-        <span class="page-indicator">{{ pages.length > 0 ? currentPage + 1 : 0 }} / {{ pages.length }}</span>
+        <span class="page-indicator">{{ currentPage + 1 }} / {{ totalPages }}</span>
         <button
           class="page-nav-btn"
-          :disabled="currentPage >= pages.length - 1 || streaming"
+          :disabled="currentPage >= totalPages - 1 || streaming"
           @click="setPage(currentPage + 1)"
         >
           →
@@ -132,14 +137,23 @@
         </button>
       </form>
     </div>
+    </div>
+
+    <DebugPanel v-if="isDebugMode" :thoughts="thoughts" :token-usage="tokenUsage" :prompt-debug="promptDebug" />
   </div>
 </template>
 
 <script setup lang="ts">
-import type { GamePage } from '~/utils/msgUtils';
+import type { DeepReadonly } from 'vue';
+import type { Vignette } from '~/composables/useVignette';
+import type { LlmUsage } from '~/composables/useLlmStream';
+import type { PromptDebug } from '~/composables/useGame';
 import { renderMarkdown, normalizeContent } from '~/utils/msgUtils';
+import DebugPanel from '~/components/DebugPanel.vue';
+import { useDebugMode } from '~/composables/useDebugMode';
 
 export type InputMode = 'write' | 'steer' | 'instruct';
+type FocusSlot = typeof FOCUS_CYCLE[number];
 
 interface EditState {
   which: 'system' | 'prose' | 'prompt';
@@ -174,22 +188,27 @@ const SLASH_MODE_COMMANDS: Record<string, InputMode> = {
   instruct: 'instruct',
 };
 
+const FOCUS_CYCLE = ['chat', 'prose', 'prompt', 'system'] as const;
+
 const props = withDefaults(defineProps<{
-  /** Pre-built page entries. */
-  pages: GamePage[];
-  /** Story title shown in the header. */
-  title?: string;
+  vignette: DeepReadonly<Vignette>;
   /** Placeholder for the title input. */
   titlePlaceholder?: string;
   /** Whether the agent is currently streaming. */
   streaming?: boolean;
   /** Accumulated streaming text. */
   streamText?: string;
+  /** Accumulated reasoning text. */
+  thoughts?: string;
+  /** Latest token usage from LLM. */
+  tokenUsage?: LlmUsage;
+  /** Last prompt debug data. */
+  promptDebug?: PromptDebug;
 }>(), {
-  title: '',
   titlePlaceholder: 'Untitled',
   streaming: false,
   streamText: '',
+  thoughts: '',
 });
 
 const emit = defineEmits<{
@@ -203,7 +222,15 @@ const emit = defineEmits<{
   updatePageIndex: [index: number];
 }>();
 
-const currentPage = ref(props.pages.length - 1);
+const { isDebugMode } = useDebugMode();
+
+const title = computed(() => props.vignette.meta.value.title);
+const pages = computed(() => props.vignette.pages.value);
+const hasDispositionPage = computed(() => !!props.vignette.meta.value.disposition?.trim());
+const totalPages = computed(() => pages.value.length + (hasDispositionPage.value ? 1 : 0));
+const realPageIndex = computed(() => hasDispositionPage.value ? currentPage.value - 1 : currentPage.value);
+
+const currentPage = ref(hasDispositionPage.value ? pages.value.length : pages.value.length - 1);
 const input = ref('');
 const mode = ref<InputMode>('write');
 
@@ -216,11 +243,10 @@ const quoteEl = ref<HTMLElement | null>(null);
 const bodyEl = ref<HTMLElement | null>(null);
 const chatField = ref<HTMLInputElement | null>(null);
 
-const currentEntry = computed(() =>
-  currentPage.value >= 0 && currentPage.value < props.pages.length
-    ? props.pages[currentPage.value]!
-    : null,
-);
+const currentEntry = computed(() => {
+  const idx = realPageIndex.value;
+  return idx >= 0 && idx < pages.value.length ? pages.value[idx]! : null;
+});
 
 const renderedResponse = computed(() => {
   const response = currentEntry.value?.response;
@@ -228,14 +254,21 @@ const renderedResponse = computed(() => {
   return renderMarkdown(response.trim());
 });
 
+const renderedDisposition = computed(() => {
+  const disposition = props.vignette.meta.value.disposition?.trim();
+  if (!disposition) return '';
+  return renderMarkdown(disposition);
+});
+
 const modeLabel = computed(() => MODE_LABELS[mode.value]);
 const modeHint = computed(() => MODE_HINTS[mode.value]);
 const modePlaceholder = computed(() => MODE_PLACEHOLDERS[mode.value]);
 
 // Auto-advance to new last page when on previous last page
-watch(() => props.pages.length, (len) => {
-  if (currentPage.value === len - 2)
-    currentPage.value = len - 1;
+watch(() => pages.value.length, (len) => {
+  const offset = hasDispositionPage.value ? 1 : 0;
+  if (currentPage.value === len - 2 + offset)
+    currentPage.value = len - 1 + offset;
 });
 
 // Cancel editing when navigating away from the current page
@@ -274,12 +307,12 @@ function onSubmit() {
   emit('prompt', {
     text: rawText,
     mode: mode.value,
-    pageIndex: currentPage.value,
+    pageIndex: realPageIndex.value,
   });
 }
 
 function onTab(e: KeyboardEvent) {
-  if (e.shiftKey) {
+  if (e.ctrlKey) {
     e.preventDefault();
     cycleMode();
   }
@@ -291,7 +324,7 @@ function cycleMode() {
 }
 
 function setPage(n: number) {
-  currentPage.value = Math.max(0, Math.min(props.pages.length - 1, n));
+  currentPage.value = Math.max(0, Math.min(totalPages.value - 1, n));
 }
 
 function scrollBody(direction: -1 | 1) {
@@ -303,16 +336,16 @@ function scrollBody(direction: -1 | 1) {
 function startEditingProse() {
   if (!currentEntry.value?.response) return;
   finishEditingSystem();
-  editing.value = {
+    editing.value = {
     which: 'prose',
     text: currentEntry.value.response,
-    pageIndex: currentPage.value,
+    pageIndex: realPageIndex.value,
   };
   nextTick(() => editArea.value?.focus());
 }
 
 function finishEditingProse() {
-  if (!editing.value) return;
+  if (editing.value?.which !== 'prose') return;
   const entry = currentEntry.value;
   if (entry && editing.value.text !== entry.response) {
     emit('updatePage', {
@@ -331,13 +364,13 @@ function startEditingPrompt() {
   editing.value = {
     which: 'prompt',
     text: entry.prompt,
-    pageIndex: currentPage.value,
+    pageIndex: realPageIndex.value,
   };
   nextTick(() => editPromptArea.value?.focus());
 }
 
 function finishEditingPrompt() {
-  if (!editing.value) return;
+  if (editing.value?.which !== 'prompt') return;
   const entry = currentEntry.value;
   if (entry && editing.value.text !== entry.prompt) {
     emit('updatePage', {
@@ -357,14 +390,14 @@ function startEditingSystem() {
   editing.value = {
     which: 'system',
     text: entry.system ?? '',
-    pageIndex: currentPage.value,
+    pageIndex: realPageIndex.value,
   };
   nextTick(() => editSystemArea.value?.focus());
 }
 
 function finishEditingSystem() {
   const entry = currentEntry.value;
-  if (!editing.value) return;
+  if (editing.value?.which !== 'system') return;
   if (!entry) return;
   const newValue = editing.value.text.trim() || null;
   if (newValue !== entry.system) {
@@ -375,10 +408,6 @@ function finishEditingSystem() {
   }
   editing.value = null;
 }
-
-type FocusSlot = 'chat' | 'prompt' | 'prose' | 'system';
-
-const FOCUS_CYCLE: FocusSlot[] = ['chat', 'prose', 'prompt', 'system'];
 
 function focusSlot(slot: FocusSlot): boolean {
   switch (slot) {
@@ -467,7 +496,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
   }
   if (e.key === 'ArrowRight') {
     e.preventDefault();
-    if (currentPage.value < props.pages.length - 1 && !props.streaming) setPage(currentPage.value + 1);
+    if (currentPage.value < totalPages.value - 1 && !props.streaming) setPage(currentPage.value + 1);
     return;
   }
 }
@@ -482,9 +511,17 @@ defineExpose({ setPage });
 .game {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
   block-size: 100%;
+}
+
+.game-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-inline-size: 0;
 }
 
 /* --- Title bar --- */
@@ -542,6 +579,18 @@ defineExpose({ setPage });
   padding: var(--size-6) 0;
   display: flex;
   flex-direction: column;
+}
+
+.story-page--disposition {
+  gap: var(--size-3);
+}
+
+.disposition-label {
+  font-size: var(--font-size-0);
+  font-weight: var(--font-weight-6);
+  text-transform: uppercase;
+  letter-spacing: var(--font-letterspacing-3);
+  color: var(--text-3);
 }
 
 .story-page {

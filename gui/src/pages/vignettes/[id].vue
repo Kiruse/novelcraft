@@ -1,13 +1,13 @@
 <template>
   <div v-if="!loaded" class="vignette-loading">Loading...</div>
   <div v-else class="vignette-page">
-    <template v-if="!activeSessionId">
+    <template v-if="pages.length === 0">
       <div class="vignette-compose">
         <input
-          v-model="title"
+          v-model="vignetteMeta.title"
           class="vignette-title-input"
           placeholder="Untitled Vignette"
-          @blur="saveTitle"
+          @blur="updateTitle(($event.target as HTMLInputElement).value)"
           @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
         />
         <p class="vignette-hint">
@@ -16,7 +16,7 @@
         </p>
 
         <textarea
-          v-model="disposition"
+          v-model="vignetteMeta.disposition"
           class="disposition-area"
           placeholder="A lonely lighthouse keeper on a storm-wracked island starts receiving radio messages from a ship that sank fifty years ago..."
           rows="6"
@@ -43,16 +43,14 @@
         <SuggestionPicker
           v-if="showPicker"
           ref="pickerRef"
-          :persona="VIGNETTE_SUGGEST_PERSONA"
+          :persona="SYSTEM_SUGGEST_VIGNETTE"
           :prompt="suggestionPrompt"
           :known-tags="['title', 'genre', 'description']"
           :loading="suggesting"
           :suggestions="suggestions"
-          :completed="completedSet"
-          :selected-index="selectedIndex"
+          :selected-index="selectedSuggestionIdx"
           @select="useSuggestion"
           @update:suggestions="suggestions = $event"
-          @update:completed="completedSet = $event"
           @done="suggesting = false"
         />
       </div>
@@ -60,11 +58,13 @@
 
     <template v-else>
       <Game
-        :pages="pages"
-        :title="title"
-        title-placeholder="Untitled Vignette"
+        :vignette="vignette"
         :streaming="streaming"
         :stream-text="streamText"
+        :thoughts="thoughts"
+        :token-usage="tokenUsage"
+        :prompt-debug="prompt"
+        title-placeholder="Untitled Vignette"
         @prompt="onPrompt"
         @update-title="updateTitle"
         @update-page="onUpdatePage"
@@ -74,159 +74,73 @@
 </template>
 
 <script setup lang="ts">
-import type { GamePage } from '~/utils/msgUtils';
 import type { InputMode } from '~/components/Game.vue';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
 import SuggestionPicker from '~/components/SuggestionPicker.vue';
 import Game from '~/components/Game.vue';
-import { unindent } from '@stegakir/aikit/utils';
 import {
-  PERSONA_PLATFORM,
   SYSTEM_VIGNETTE_OPEN,
   SYSTEM_STEER,
   SYSTEM_INSTRUCT,
+  SYSTEM_SUGGEST_VIGNETTE,
 } from '~/prompts';
-import { streamLlm, type StreamLlmOptions } from '~/composables/useLlmStream';
-import { buildMessages } from '~/utils/llmHelpers';
-import { useProfiles } from '~/composables/useProfiles';
-import { select, execute } from '~/composables/useLocalDb';
-import { useVignetteList } from '~/composables/useVignetteList';
+import { useVignette } from '~/composables/useVignette';
+import { useVignettes } from '~/composables/useVignettes';
+import { useGame } from '~/composables/useGame';
+import { getErrorDisplay } from '~/utils/msgUtils';
+import { useToast } from '~/composables/useToast';
 
 const route = useRoute();
 const id = computed(() => route.params.id as string);
 
-const disposition = ref('');
 const suggesting = ref(false);
 const showPicker = ref(false);
 const pickerRef = ref<{ generate: () => void } | null>(null);
 const suggestions = ref<Partial<ParsedSuggestion>[]>([]);
-const completedSet = ref<Set<number>>(new Set());
 const selectedSuggestion = ref<ParsedSuggestion | null>(null);
-const selectedIndex = ref<number | null>(null);
-const streaming = ref(false);
-const streamText = ref('');
-const loaded = ref(false);
+const selectedSuggestionIdx = ref<number | null>(null);
 
-const { activeProfile } = useProfiles();
+const toast = useToast();
 
-const VIGNETTE_SUGGEST_PERSONA = unindent(`
-  You are a creative story premise generator for quick interactive vignettes.
-  The user will provide a disposition — either a few keywords, a theme, or a full paragraph
-  describing the kind of story they want to experience.
+const vignette = useVignette(id);
+const { meta: vignetteMeta, pages } = vignette;
+const loaded = computed(() => vignette.status.value !== 'loading');
 
-  Generate exactly 3 diverse story suggestions. Each must have a unique genre and tone.
-  For each suggestion, output a <suggestion> block with these tags inside:
-    <title> — a short, catchy title (3-6 words)</title>
-    <genre> — the genre</genre>
-    <description> — a vivid 2-3 sentence premise that sets the scene and ends with a hook.
-    Write descriptions in second person ("You..."). Make them evocative and specific.</description>
-
-  Output ONLY the <suggestion> blocks with no other text.
-`);
-
-const title = ref('Untitled Vignette');
-const activeSessionId = ref<string | null>(null);
-const pages = ref<GamePage[]>([]);
-
-const suggestionPrompt = computed(() =>
-  disposition.value.trim()
-    ? `Here is my disposition:\n\n${disposition.value.trim()}\n\nGenerate 3 story suggestions based on this.`
-    : 'Generate 3 random creative story suggestions for interactive vignettes. Surprise me with variety.',
-);
-
-const canLockIn = computed(() => {
-  return disposition.value.trim().length > 0 || selectedIndex.value !== null;
+const { refresh: refreshVignettes } = useVignettes();
+const { status: gameStatus, streamText, thoughts, tokenUsage, prompt, run } = useGame({
+  meta: vignetteMeta,
+  pages,
 });
+
+const streaming = computed(() => gameStatus.value === 'streaming');
+const suggestionPrompt = computed(() => vignetteMeta.value.disposition.trim());
+
+const canLockIn = computed(() =>
+  vignetteMeta.value.disposition.trim().length > 0 || selectedSuggestionIdx.value !== null
+);
 
 let programmaticDisposition = false;
 
-interface SessionRow {
-  id: string;
-  title: string;
-  description: string | null;
-}
-
-interface PageRow {
-  id: string;
-  session_id: string;
-  system: string | null;
-  prompt: string | null;
-  response: string | null;
-}
-
-async function initNewVignette() {
-  const queryDisposition = route.query.disposition as string | undefined;
-  if (queryDisposition) {
-    disposition.value = queryDisposition;
-  }
-  loaded.value = true;
-}
-
-async function initExistingVignette(vignetteId: string) {
-  const sessionRows = await select<SessionRow>('SELECT * FROM local_sessions WHERE id = ?', [vignetteId]);
-  const session = sessionRows[0];
-  if (!session) {
-    loaded.value = true;
-    return;
-  }
-
-  title.value = session.title;
-  disposition.value = session.description ?? '';
-
-  const sessionPages = await select<PageRow>('SELECT * FROM local_pages WHERE session_id = ?', [session.id]);
-
-  if (sessionPages.length > 0) {
-    activeSessionId.value = session.id;
-    pages.value = sessionPages.map(p => ({
-      id: p.id,
-      system: p.system,
-      prompt: p.prompt,
-      response: p.response,
-    }));
-  }
-
-  loaded.value = true;
-}
-
 function resetState() {
-  loaded.value = false;
-  disposition.value = '';
+  suggestions.value = [];
   suggesting.value = false;
+  selectedSuggestion.value = null;
+  selectedSuggestionIdx.value = null;
   showPicker.value = false;
   pickerRef.value = null;
-  suggestions.value = [];
-  completedSet.value = new Set();
-  selectedSuggestion.value = null;
-  selectedIndex.value = null;
-  streaming.value = false;
-  streamText.value = '';
-  title.value = 'Untitled Vignette';
-  activeSessionId.value = null;
-  pages.value = [];
 }
 
-async function loadVignette() {
-  resetState();
-  if (id.value === 'new') {
-    await initNewVignette();
-  } else {
-    await initExistingVignette(id.value);
-  }
-}
-
-onMounted(loadVignette);
-watch(id, loadVignette);
-
-async function saveTitle() {
-  const newTitle = title.value.trim() || 'Untitled Vignette';
-  title.value = newTitle;
-  await persistSession({ title: newTitle });
+async function updateTitle(newTitle: string) {
+  vignetteMeta.value.title = newTitle.trim() || 'Untitled Vignette';
+  await vignette.save();
+  refreshVignettes();
 }
 
 function onDispositionInput() {
-  if (!programmaticDisposition && selectedIndex.value !== null) {
+  // Clear selected disposition suggestion when writing their own
+  if (!programmaticDisposition && selectedSuggestionIdx.value !== null) {
     selectedSuggestion.value = null;
-    selectedIndex.value = null;
+    selectedSuggestionIdx.value = null;
   }
 }
 
@@ -245,318 +159,197 @@ function useSuggestion(suggestion: ParsedSuggestion) {
   const idx = suggestions.value.findIndex(
     s => s.title === suggestion.title && s.description === suggestion.description,
   );
-  if (selectedIndex.value === idx) {
+  if (selectedSuggestionIdx.value === idx) {
     selectedSuggestion.value = null;
-    selectedIndex.value = null;
+    selectedSuggestionIdx.value = null;
   } else {
     selectedSuggestion.value = suggestion;
-    selectedIndex.value = idx;
+    selectedSuggestionIdx.value = idx;
     if (suggestion.description) {
       programmaticDisposition = true;
-      disposition.value = suggestion.description;
+      vignetteMeta.value = {
+        ...vignetteMeta.value,
+        title: suggestion.title,
+        disposition: suggestion.description,
+      };
       nextTick(() => { programmaticDisposition = false; });
     }
   }
 }
 
-async function persistSession(patch: { title?: string; description?: string }) {
-  if (!activeSessionId.value) return;
-
-  const sets: string[] = [];
-  const params: unknown[] = [];
-
-  if (patch.title !== undefined) {
-    sets.push('title = ?');
-    params.push(patch.title);
-  }
-  if (patch.description !== undefined) {
-    sets.push('description = ?');
-    params.push(patch.description);
-  }
-
-  if (sets.length === 0) return;
-  params.push(activeSessionId.value);
-  await execute(`UPDATE local_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
-}
-
-async function updateTitle(newTitle: string) {
-  newTitle = newTitle.trim() || 'Untitled Vignette';
-  title.value = newTitle;
-  await persistSession({ title: newTitle });
-  const { refresh: refreshVignettes } = useVignetteList();
-  refreshVignettes();
-}
-
 async function lockIn() {
-  const now = new Date().toISOString();
-  const sessionId = crypto.randomUUID();
+  try {
+    await vignette.save();
+    await vignette.push();
+    const response = await run({ promptId: 'create' });
+    const page = pages.value[pages.value.length - 1];
+    await vignette.fork({
+      pageIndex: pages.value.length - 1,
+      system: page.system ?? undefined,
+      prompt: page.prompt ?? undefined,
+      response,
+    });
+  } catch (err) {
+    toast.error('Failed to create vignette: ' + getErrorDisplay(err));
+    console.error('Vignette start failed:', err);
+  }
+}
 
-  if (selectedSuggestion.value?.title) {
-    title.value = selectedSuggestion.value.title;
+async function createPage(prompt: string, pageIndex: number) {
+  if (streaming.value) return;
+  if (pageIndex < 0 || pageIndex >= pages.value.length) {
+    console.warn(`createPage: index out of bounds, ${pageIndex} not in [0,${pages.value.length})`);
+    return;
   }
 
-  await execute(
-    'INSERT INTO local_sessions (id, story_id, title, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [sessionId, 'vignette', title.value, disposition.value.trim() || null, now, now],
-  );
+  prompt = prompt.trim();
 
-  activeSessionId.value = sessionId;
-  streaming.value = true;
-  streamText.value = '';
-
-  const tempId = `temp-${Date.now()}`;
-  pages.value.push({ id: tempId, system: null, prompt: null, response: null });
+  if (pageIndex < pages.value.length - 1) {
+    const page = pages.value[pageIndex]!;
+    await vignette.fork({
+      pageIndex,
+      system: page.system ?? undefined,
+      prompt: page.prompt ?? undefined,
+      response: page.response ?? undefined,
+    });
+  }
 
   try {
-    const { context, messages } = buildMessages({
-      title: title.value,
-      description: disposition.value.trim() || '',
-      profile: activeProfile.value ?? undefined,
-      pages: [],
+    const page = pages.value[pages.value.length - 1];
+    if (prompt) await vignette.push(prompt);
+    const prevResponse = prompt ? undefined : page.response;
+    const response = await run({
+      promptId: prompt ? 'prompt' : 'expand',
+      prependStreamText: prevResponse ?? undefined,
+      getMessages: msgs => {
+        // if (!prompt)
+        //   msgs.push({
+        //     author: 'user',
+        //     content: 'Please write more content.',
+        //   });
+        return msgs;
+      },
     });
-
-    let fullText = '';
-    const streamOpts: StreamLlmOptions = {
-      persona: PERSONA_PLATFORM,
-      messages,
-      context,
-    };
-    console.log('Lock in:', streamOpts);
-    const streamGen = streamLlm(streamOpts);
-    for await (const chunk of streamGen) {
-      fullText += chunk;
-      streamText.value += chunk;
-    }
-
-    const pageId = crypto.randomUUID();
-
-    await execute(
-      'INSERT INTO local_pages (id, session_id, system, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [pageId, sessionId, null, null, fullText, now],
-    );
-
-    const idx = pages.value.findIndex(p => p.id === tempId);
-    if (idx !== -1) {
-      pages.value[idx] = { id: pageId, system: null, prompt: null, response: fullText };
+    if (prompt) {
+      await vignette.fork({
+        pageIndex: pages.value.length - 1,
+        prompt,
+        response,
+      });
+    } else {
+      await vignette.fork({
+        pageIndex,
+        system: page.system,
+        prompt: page.prompt,
+        response,
+      });
     }
   } catch (err) {
-    console.error('Start failed:', err);
-    const idx = pages.value.findIndex(p => p.id === tempId);
-    if (idx !== -1) pages.value.splice(idx, 1);
-  } finally {
-    streaming.value = false;
-    streamText.value = '';
+    toast.error('Failed to create new page: ' + getErrorDisplay(err));
+    console.error('Create page failed:', err);
+  }
+}
+
+async function recreatePage(
+  pageIndex: number,
+  instruction: string,
+  mode: 'steer' | 'instruct',
+) {
+  if (streaming.value || pageIndex === -1) return;
+
+  const page = pages.value[pages.value.length - 1];
+
+  let system = page.system, systemChanged = false;
+
+  if (mode === 'steer') {
+    systemChanged = true;
+    if (!system) {
+      system = instruction;
+    } else {
+      system = `${system}\n${instruction}`;
+    }
+  }
+
+  try {
+    if (systemChanged) {
+      await vignette.fork({
+        pageIndex,
+        system: system ?? undefined,
+        prompt: page.prompt ?? undefined,
+        response: page.response ?? undefined,
+      });
+    }
+
+    const response = await run({
+      promptId: mode,
+      getMessages: (msgs) => {
+        if (pageIndex === 0) {
+          msgs.unshift({ author: 'system', content: SYSTEM_VIGNETTE_OPEN });
+        }
+        switch (mode) {
+          case 'steer': {
+            msgs.push({
+              author: 'system',
+              content: SYSTEM_STEER,
+            });
+            break;
+          }
+          case 'instruct': {
+            msgs.push(
+              {
+                author: 'system',
+                content: SYSTEM_INSTRUCT,
+              },
+              {
+                author: 'user',
+                content: instruction || '(no particular instructions)',
+              },
+            );
+            break;
+          }
+          default: console.error('Unknown recreate mode:', mode);
+        }
+        return msgs;
+      },
+    });
+
+    await vignette.fork({
+      pageIndex,
+      system: system ?? undefined,
+      prompt: page.prompt ?? undefined,
+      response,
+    });
+  } catch (err) {
+    toast.error('Failed to recreate page: ' + getErrorDisplay(err));
+    console.error('Recreate Page failed:', err);
   }
 }
 
 function onPrompt(payload: { text: string; mode: InputMode; pageIndex: number }) {
   switch (payload.mode) {
     case 'steer':
-      return regeneratePage(payload.pageIndex, payload.text, 'steer');
+      return recreatePage(payload.pageIndex, payload.text, 'steer');
     case 'instruct':
-      return regeneratePage(payload.pageIndex, payload.text, 'instruct');
+      return recreatePage(payload.pageIndex, payload.text, 'instruct');
     case 'write':
     default:
-      return sendWrite(payload.text);
-  }
-}
-
-async function sendWrite(text: string) {
-  if (streaming.value || !activeSessionId.value) return;
-
-  const isWriteMore = !text;
-  const systemNote = isWriteMore ? 'Continue the story — write more.' : null;
-
-  const tempId = `temp-${Date.now()}`;
-  pages.value.push({
-    id: tempId,
-    system: systemNote,
-    prompt: text || null,
-    response: null,
-  });
-
-  streaming.value = true;
-  streamText.value = '';
-
-  try {
-    const { context, messages } = buildMessages({
-      title: title.value,
-      description: disposition.value.trim() || null,
-      profile: activeProfile.value ?? undefined,
-      pages: pages.value,
-    });
-    const streamOpts: StreamLlmOptions = {
-      persona: PERSONA_PLATFORM,
-      messages,
-      context,
-    };
-    console.debug('Prompt:', streamOpts);
-    let fullText = '';
-    const streamGen = streamLlm(streamOpts);
-    for await (const chunk of streamGen) {
-      fullText += chunk;
-      streamText.value += chunk;
-    }
-
-    const pageId = crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    await execute(
-      'INSERT INTO local_pages (id, session_id, system, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [pageId, activeSessionId.value!, systemNote, text || null, fullText, now],
-    );
-
-    const idx = pages.value.findIndex(p => p.id === tempId);
-    if (idx !== -1) {
-      pages.value[idx] = {
-        id: pageId,
-        system: systemNote,
-        prompt: text || null,
-        response: fullText,
-      };
-    }
-  } catch (err) {
-    console.error('Message failed:', err);
-    const idx = pages.value.findIndex(p => p.id === tempId);
-    if (idx !== -1) {
-      pages.value[idx] = {
-        ...pages.value[idx]!,
-        response: 'Something went wrong. Please try again.',
-      };
-    }
-  } finally {
-    streaming.value = false;
-    streamText.value = '';
-  }
-}
-
-async function regeneratePage(
-  pageIndex: number,
-  instruction: string,
-  mode: 'steer' | 'instruct',
-) {
-  if (streaming.value || !activeSessionId.value) return;
-  if (pageIndex === -1) return;
-
-  const oldPage = pages.value[pageIndex]!;
-  const pageId = oldPage.id;
-  const truncatedIds = pages.value.slice(pageIndex + 1).map(p => p.id);
-
-  pages.value = pages.value.slice(0, pageIndex + 1);
-
-  if (mode === 'steer') {
-    const updatedSystem = oldPage.system
-      ? `${oldPage.system}\n${instruction}`
-      : instruction;
-    pages.value[pageIndex] = { ...oldPage, system: updatedSystem };
-  }
-
-  streaming.value = true;
-  streamText.value = '';
-
-  try {
-    const currentPage = pages.value[pageIndex]!;
-    const systemPage = currentPage.system;
-
-    if (mode === 'steer') {
-      await execute('UPDATE local_pages SET system = ? WHERE id = ?', [systemPage, pageId]);
-    }
-
-    const { context, messages } = buildMessages({
-      title: title.value,
-      description: disposition.value.trim() || null,
-      profile: activeProfile.value ?? undefined,
-      pages: pages.value,
-      pageIndex,
-    });
-
-    if (pageIndex === 0) {
-      messages.unshift({ author: 'system', content: SYSTEM_VIGNETTE_OPEN });
-    }
-
-    if (mode === 'steer') {
-      messages.push({
-        author: 'system',
-        content: SYSTEM_STEER,
-      });
-    } else {
-      messages.push(
-        {
-          author: 'system',
-          content: SYSTEM_INSTRUCT,
-        },
-        {
-          author: 'user',
-          content: instruction || '(no particular instructions)',
-        },
-      );
-    }
-
-    let fullText = '';
-    const streamOpts: StreamLlmOptions = {
-      persona: PERSONA_PLATFORM,
-      messages,
-      context,
-    };
-    console.debug('Regenerate:', streamOpts);
-    const streamGen = streamLlm(streamOpts);
-    for await (const chunk of streamGen) {
-      fullText += chunk;
-      streamText.value += chunk;
-    }
-
-    const currentIdx = pages.value.findIndex(p => p.id === pageId);
-    if (currentIdx !== -1) {
-      pages.value[currentIdx] = {
-        ...pages.value[currentIdx]!,
-        response: fullText || pages.value[currentIdx]!.response,
-      };
-    }
-
-    await execute('UPDATE local_pages SET response = ? WHERE id = ?', [fullText, pageId]);
-    if (truncatedIds.length > 0) {
-      const placeholders = truncatedIds.map(() => '?').join(', ');
-      await execute(`DELETE FROM local_pages WHERE id IN (${placeholders})`, truncatedIds);
-    }
-  } catch (err) {
-    console.error('Regenerate failed:', err);
-    if (mode === 'steer') {
-      pages.value[pageIndex] = oldPage;
-    }
-  } finally {
-    streaming.value = false;
-    streamText.value = '';
+      return createPage(payload.text, payload.pageIndex);
   }
 }
 
 async function onUpdatePage(payload: { pageIndex: number; response?: string; system?: string | null; prompt?: string }) {
-  const idx = payload.pageIndex;
-  const page = pages.value[idx];
+  const page = pages.value[payload.pageIndex];
   if (!page) return;
-
-  pages.value[idx] = {
-    ...page,
-    ...(payload.response !== undefined ? { response: payload.response } : {}),
-    ...(payload.system !== undefined ? { system: payload.system } : {}),
-    ...(payload.prompt !== undefined ? { prompt: payload.prompt } : {}),
-  };
-
-  const sets: string[] = [];
-  const params: unknown[] = [];
-
-  if (payload.response !== undefined) { sets.push('response = ?'); params.push(payload.response); }
-  if (payload.system !== undefined) { sets.push('system = ?'); params.push(payload.system); }
-  if (payload.prompt !== undefined) { sets.push('prompt = ?'); params.push(payload.prompt); }
-
-  if (sets.length === 0) return;
-  params.push(page.id);
-
-  try {
-    await execute(`UPDATE local_pages SET ${sets.join(', ')} WHERE id = ?`, params);
-  } catch (e) {
-    console.error('Failed to save page edit', e);
-  }
+  await vignette.fork({
+    pageIndex: payload.pageIndex,
+    system: payload.system !== undefined ? payload.system : (page.system || null),
+    prompt: payload.prompt || page.prompt || null,
+    response: payload.response || page.response || null,
+  });
 }
+
+onMounted(resetState);
+watch(id, resetState);
 </script>
 
 <style scoped>

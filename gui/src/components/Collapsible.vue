@@ -2,14 +2,14 @@
   <div class="collapsible">
     <button
       class="collapsible-header"
-      :aria-expanded="modelValue"
-      @click.prevent="modelValue = !modelValue"
+      :aria-expanded="isOpen"
+      @click.prevent="isOpen = !isOpen"
     >
-      <Chevron :open="modelValue" />
+      <Chevron :open="isOpen" />
       <span class="collapsible-label"><slot name="header" /></span>
       <slot name="header-actions" />
     </button>
-    <div ref="bodyRef" class="collapsible-body" :class="{ 'collapsible-body--open': modelValue }">
+    <div ref="bodyRef" class="collapsible-body" :class="{ 'collapsible-body--open': isOpen }">
       <div class="collapsible-body-inner">
         <slot />
       </div>
@@ -20,11 +20,20 @@
 <script setup lang="ts">
 import Chevron from '~/components/Chevron.vue';
 
-const modelValue = defineModel<boolean>({ default: true });
+const props = withDefaults(defineProps<{ defaultExpanded?: boolean }>(), {
+  defaultExpanded: false,
+});
+
+const modelValue = defineModel<boolean | undefined>();
+const isOpen = computed({
+  get: () => modelValue.value ?? props.defaultExpanded,
+  set: (value: boolean) => modelValue.value = value,
+});
+
 const bodyRef = ref<HTMLElement | null>(null);
 
 // Animate height on toggle using Web Animations API
-watch(modelValue, async (open) => {
+watch(isOpen, async (open) => {
   const el = bodyRef.value;
   if (!el) return;
 
@@ -61,7 +70,7 @@ watch(modelValue, async (open) => {
 
 // Ensure correct initial state
 onMounted(() => {
-  if (!modelValue.value && bodyRef.value) {
+  if (!isOpen.value && bodyRef.value) {
     bodyRef.value.style.height = '0px';
   }
 });

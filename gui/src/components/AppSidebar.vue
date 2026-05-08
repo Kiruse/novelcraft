@@ -82,11 +82,11 @@
 <script setup lang="ts">
 import { HomeOutlined, BuildOutlined } from '@ant-design/icons-vue';
 import AccountBox from '~/components/AccountBox.vue';
-import { useVignetteList } from '~/composables/useVignetteList';
+import { useVignettes } from '~/composables/useVignettes';
 
 const router = useRouter();
 
-const { vignettes, hasMore: hasMoreVignettes, refresh: refreshVignettes } = useVignetteList();
+const { recent: vignettes, hasMore: hasMoreVignettes, refresh: refreshVignettes } = useVignettes();
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -352,19 +352,23 @@ onUnmounted(() => {
   inline-size: 100%;
   padding: var(--size-2) var(--size-3);
   border-radius: var(--radius-2);
-  background: var(--surface-3);
-  color: var(--text-1);
-  border: var(--border-size-1) solid var(--surface-4);
+  background: none;
+  color: var(--text-2);
+  border: var(--border-size-1) solid transparent;
   font-size: var(--font-size-1);
   font-weight: var(--font-weight-5);
   cursor: pointer;
-  transition: background var(--animation-duration, 0.15s) var(--ease-2);
+  transition: background var(--animation-duration, 0.15s) var(--ease-2),
+    border-color var(--animation-duration, 0.15s) var(--ease-2),
+    color var(--animation-duration, 0.15s) var(--ease-2);
   font-family: inherit;
   text-align: start;
 }
 
 .sidebar-new-btn:hover {
-  background: var(--surface-4);
+  background: var(--surface-3);
+  color: var(--text-1);
+  border-color: var(--surface-4);
 }
 
 .session-title {

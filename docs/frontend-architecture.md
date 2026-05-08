@@ -60,7 +60,11 @@ The main vignette gameplay page.
 
 **Features:**
 - Supports both `new` (from home page "New vignette" button) and existing session IDs
-- LLM streaming via `useLlmStream` composable
+- LLM streaming via `useGame` composable (which uses `useLlmStream` internally)
+- `useGame` exposes `streamText`, `thoughts`, `tokenUsage`, `prompt`, and `status` — `thoughts` accumulates reasoning-delta events, `tokenUsage` holds the latest `LlmUsage` from the stream's done event, `prompt` holds a `PromptDebug` snapshot of the last LLM request
+- Passes `thoughts`, `tokenUsage`, `prompt` (as `prompt-debug`), and `debugMode` (from `useDebugMode`) to the `Game` component for the debug panel
+- Passes the session's `disposition` to the `Game` component, which renders it as a read-only page 0
+- Page creation respects the user's current viewing position: `createPage(prompt, pageIndex)` calls `vignette.fork()` to truncate all subsequent pages before appending the new one when the user submits a "write" prompt from a non-last page. This branches the story at that point rather than always appending to the end
 
 ### Story Builder (`gui/src/pages/builder.vue`)
 
@@ -70,7 +74,7 @@ Story creation and editing interface.
 
 ### Settings (`gui/src/pages/settings.vue`)
 
-Thin settings page that renders `<ModelsConfigurator />` inside the settings layout. All model configuration logic is handled by `ModelsConfigurator`.
+Settings page that renders `<ModelsConfigurator />` and a "Debug Zone" section. The Debug Zone contains a "Debug Mode" checkbox (backed by `useDebugMode`, persisted to localStorage) and a "Reset Onboarding" button.
 
 **Route:** `/settings`
 
@@ -93,6 +97,8 @@ Step-based first-run onboarding flow rendered by `App.vue` when onboarding is no
 - Completing onboarding calls `useOnboarding().complete()` and transitions to the main app
 
 ### Creating New Pages
+
+Page creation in the Vignette Play page uses `createPage(prompt, pageIndex)`. When `pageIndex` points to a non-last page, the function calls `vignette.fork()` at that index to truncate all subsequent pages in the database before pushing the new page. This branches the story at the user's current viewing position instead of always appending to the end.
 
 ### App Root (`gui/src/App.vue`)
 
@@ -222,6 +228,55 @@ Vignette list data and CRUD operations.
 
 **Location:** `gui/src/composables/useVignetteList.ts`
 
+### useVignette
+
+Manages a single vignette session — its metadata, pages, and database mutations.
+
+**Location:** `gui/src/composables/useVignette.ts`
+
+**Returns:** `{ status, meta, pages, error, save, push, fork }`
+
+- `status` — `Readonly<Ref<'loading' | 'ready' | 'error'>>`
+- `meta` — `Ref<VignetteMeta>` — reactive session metadata (`title`, `disposition`, `createdAt`, `updatedAt`)
+- `pages` — `Readonly<Ref<VignettePage[]>>` — reactive page array
+- `error` — `Readonly<Ref<string | undefined>>`
+- `save()` — persists `meta` changes to `local_sessions`
+- `push(prompt?)` — appends a new page to the end (DB insert + reactive array push); the new page has no response yet
+- `fork({ pageIndex, system?, prompt?, response? })` — updates a page in-place and truncates all pages after `pageIndex`. Deletes the truncated pages from `local_pages` in SQLite and replaces the in-memory array. Used by the Vignette Play page to branch the story when the user writes from a non-last page
+
+**Fork semantics:** `fork()` is the mechanism for branching/rewriting story history. It atomically (within a SQLite transaction) updates the target page's fields and deletes all subsequent pages. After the transaction, the reactive `pages` array is replaced with the truncated list.
+
+### useGame
+
+Manages the LLM gameplay loop for a vignette session — builds messages, streams the response, and exposes reactive state for the UI.
+
+**Location:** `gui/src/composables/useGame.ts`
+
+**Exported types:**
+
+- `GameStatus` — `'idle' | 'streaming'`
+- `PromptDebug` — debug snapshot of the last LLM prompt sent:
+  ```typescript
+  interface PromptDebug {
+    persona: string;
+    messages: readonly { author: string; content: string }[];
+    model?: string;
+    context?: Record<string, unknown>;
+    promptId?: string;
+  }
+  ```
+- `UseGameOpts` — options for `useGame()` (`meta`, `pages`)
+- `GameRunOpts` — options for `run()` (`promptId?`, `getMessages?`, `prependStreamText?`)
+
+**Returns:** `{ status, streamText, thoughts, tokenUsage, prompt, run }`
+
+- `status` — `Readonly<Ref<GameStatus>>`
+- `streamText` — accumulated text content from the LLM stream (cleared when streaming starts and ends)
+- `thoughts` — accumulated reasoning text from reasoning-delta events (cleared when streaming starts)
+- `tokenUsage` — latest token usage (`LlmUsage`) from the stream's done event (prompt_tokens, completion_tokens, total_tokens)
+- `prompt` — `Readonly<Ref<PromptDebug | undefined>>` — snapshot of the last prompt sent to the LLM (populated during streaming, includes persona, messages, model, context, and promptId)
+- `run(opts?)` — builds messages via `buildMessages()`, streams via `streamLlmFull()`, accumulates text and reasoning chunks. Accepts optional `promptId` (for debug identification), `getMessages` (function to mutate the messages array before sending, used for steer/inject modes), and `prependStreamText` (text to prepend to the live stream output)
+
 ### useShortcutsDialog
 
 Shared state composable for the keyboard shortcuts dialog.
@@ -269,6 +324,17 @@ Singleton composable that tracks whether first-run onboarding has been completed
 Toast notification system.
 
 **Location:** `gui/src/composables/useToast.ts`
+
+### useDebugMode
+
+Singleton composable that provides a `debugMode` boolean ref persisted to localStorage. When enabled, the Game component renders a `DebugPanel` on the right side showing the LLM's accumulated reasoning ("Thoughts") and token usage ("Token Usage"). All callers share the same instance.
+
+**Location:** `gui/src/composables/useDebugMode.ts`
+
+**Returns:** `{ debugMode: Ref<boolean> }`
+
+- `debugMode` — reactive boolean, initialized from `localStorage` key `novelcraft:debugMode` on mount, auto-saved on change
+- Toggled via a checkbox on the Settings page under the "Debug Zone" section
 
 ## Utilities
 
@@ -363,9 +429,45 @@ Uses `streamLlmFull()` from `useLlmStream.ts`.
 
 ### Game
 
-Main gameplay component — the single interactive surface for vignette play sessions.
+Main gameplay component — the single interactive surface for vignette play sessions. Supports a virtual "page 0" that renders the session disposition as read-only markdown. When debug mode is enabled (via `useDebugMode`), renders a `DebugPanel` component on the right side displaying the LLM's accumulated reasoning, token usage, and prompt debug data.
 
 **Location:** `gui/src/components/Game.vue`
+
+**Props:**
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `vignette` | `DeepReadonly<Vignette>` | required | Vignette instance (reactive `meta` and `pages`) |
+| `titlePlaceholder` | `string` | `'Untitled'` | Placeholder for the title input |
+| `streaming` | `boolean` | `false` | Whether an LLM response is currently streaming |
+| `streamText` | `string` | `''` | Current streaming text content |
+| `thoughts` | `string` | `''` | Accumulated reasoning text from the LLM stream |
+| `tokenUsage` | `LlmUsage \| undefined` | `undefined` | Latest token usage from the LLM stream (prompt_tokens, completion_tokens, total_tokens) |
+| `promptDebug` | `PromptDebug \| undefined` | `undefined` | Last prompt debug data from `useGame().prompt` |
+
+**Events:**
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `prompt` | `{ text: string; mode: InputMode; pageIndex: number }` | User submitted a message (write/steer/instruct) from the given page index |
+| `updateTitle` | `string` | Title input blurred with a new value |
+| `updatePage` | `{ pageIndex: number; response?: string; system?: string \| null; prompt?: string }` | User edited a page's response |
+| `updatePageIndex` | `number` | User navigated between pages |
+
+The `pageIndex` in the `prompt` event reflects the page the user was viewing when they submitted input. The parent page (`[id].vue`) uses this to decide whether to fork the vignette at that position before creating a new page.
+
+**Disposition page (virtual page 0):**
+
+When `disposition` is a non-empty string, the Game component prepends a virtual page to the page list. This page displays the disposition text as rendered markdown with a subtle "Disposition" label. It is always the first page in the page indicator (`1 / N`) and is navigable, but no editing controls are available on it.
+
+Key computed properties driving this behavior:
+
+- `hasDispositionPage` — `true` when `disposition` has non-whitespace content
+- `totalPages` — `pages.length + 1` when disposition page exists, otherwise `pages.length`
+- `realPageIndex` — maps the 0-indexed `currentPage` to the actual `pages` array index (offset by -1 when disposition page is present)
+- `renderedDisposition` — disposition text rendered to HTML via markdown
+
+Navigation, page indicator, and auto-advance logic all account for the virtual disposition page offset.
 
 ### ChatArea
 
@@ -375,9 +477,36 @@ Chat/conversation display area.
 
 ### GameDebugPanel
 
-Debug panel for gameplay state inspection.
+Debug panel for gameplay state inspection (module runtime state, knowledge, tools). Separate from `DebugPanel` which shows LLM thoughts/token usage.
 
 **Location:** `gui/src/components/GameDebugPanel.vue`
+
+### DebugPanel
+
+Lightweight debug panel extracted from `Game.vue`. Displays the LLM's accumulated reasoning ("Thoughts"), token usage ("Token Usage"), and prompt debug data ("Prompt") as collapsible sections. Rendered by `Game.vue` when debug mode is enabled (toggled via `useDebugMode`).
+
+**Location:** `gui/src/components/DebugPanel.vue`
+
+**Props:**
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `thoughts` | `string` | Accumulated reasoning text from the LLM stream |
+| `tokenUsage` | `LlmUsage \| undefined` | Latest token usage from the LLM stream |
+| `promptDebug` | `PromptDebug \| undefined` | Last prompt debug data from `useGame().prompt` |
+
+Uses the `Collapsible` component internally for all three sections.
+
+**Prompt tree view** (third "Prompt" collapsible section):
+
+When `promptDebug` is populated, renders a tree view displaying:
+
+- `persona` and `model` as key-value branches (rendered by `TreeBranch`)
+- `promptId` as `id` key-value branch (rendered by `TreeBranch`)
+- `context` as a recursive nested tree (rendered by `TreeObject` — recurses into nested objects, renders leaf values as key-value branches)
+- `messages` as a count branch showing `[N]`, expandable to a list of individual messages. Each message shows the `author` label and a truncated content preview (80 chars, newlines collapsed). Clicking a message expands it to show the full content in a `<pre>` block.
+
+`TreeBranch` and `TreeObject` are render-function components defined in the `<script lang="ts">` block (non-setup) using `defineComponent` + `h()`. They are also exported for potential reuse.
 
 ### ShortcutsDialog
 

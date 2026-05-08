@@ -91,7 +91,7 @@ const SHORTCUTS: ShortcutGroup[] = [
   {
     title: 'Game — chat bar',
     shortcuts: [
-      { keys: 'Shift Tab', label: 'Cycle input mode (Write → Steer → Instruct)' },
+      { keys: 'Ctrl Tab', label: 'Cycle input mode (Write → Steer → Instruct)' },
       { keys: 'Enter', label: 'Send message' },
       { keys: '↑ (empty input)', label: 'Edit last response' },
     ],

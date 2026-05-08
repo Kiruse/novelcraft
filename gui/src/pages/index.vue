@@ -29,13 +29,13 @@
 </template>
 
 <script setup lang="ts">
-import { useVignetteList } from '~/composables/useVignetteList';
+import { useVignettes } from '~/composables/useVignettes';
 
-const { vignettes: recentVignettes, refresh } = useVignetteList();
+const { recent: recentVignettes, refresh: refresh } = useVignettes();
 
 onMounted(async () => {
   try {
-    await refresh(4);
+    await refresh();
   } catch {
     // local DB not available
   }
