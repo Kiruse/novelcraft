@@ -1,4 +1,5 @@
-import { select, execute } from '~/composables/useLocalDb';
+import { eq } from 'drizzle-orm';
+import { db, localProfiles } from '~/db';
 
 const DEFAULT_FIELDS: Record<string, string> = {
   name: '',
@@ -9,15 +10,6 @@ const DEFAULT_FIELDS: Record<string, string> = {
 };
 
 const MAX_PROFILES = 5;
-
-export interface ProfileRow {
-  id: string;
-  name: string;
-  fields: string;
-  active: number;
-  createdAt: string;
-  updatedAt: string;
-}
 
 export type Profile = {
   id: string;
@@ -47,7 +39,7 @@ const ready = computed(() => profiles.value !== undefined);
 let initPromise: Promise<void> | null = null;
 
 async function refresh() {
-  const rows = await select<ProfileRow>('SELECT * FROM local_profiles ORDER BY created_at');
+  const rows = await db.select().from(localProfiles).orderBy(localProfiles.createdAt);
   profiles.value = rows.map(r => ({
     id: r.id,
     name: r.name,
@@ -65,40 +57,34 @@ async function create(name: string, fields?: Record<string, string>): Promise<Pr
   const id = crypto.randomUUID();
   const initialFields = fields ?? { ...DEFAULT_FIELDS };
 
-  await execute(
-    'INSERT INTO local_profiles (id, name, fields, active, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)',
-    [id, name, serializeFields(initialFields), now, now],
-  );
+  await db.insert(localProfiles).values({
+    id,
+    name,
+    fields: serializeFields(initialFields),
+    active: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
 
   await refresh();
   return profiles.value?.find(p => p.id === id) ?? null;
 }
 
 async function update(id: string, patch: { name?: string; fields?: Record<string, string> }) {
-  const updates: string[] = [];
-  const values: unknown[] = [];
+  const set: Partial<typeof localProfiles.$inferInsert> & { updatedAt: string } = {
+    updatedAt: new Date().toISOString(),
+  };
 
-  updates.push("updated_at = ?");
-  values.push(new Date().toISOString());
+  if (patch.name !== undefined) set.name = patch.name;
+  if (patch.fields !== undefined) set.fields = serializeFields(patch.fields);
 
-  if (patch.name !== undefined) {
-    updates.push("name = ?");
-    values.push(patch.name);
-  }
-  if (patch.fields !== undefined) {
-    updates.push("fields = ?");
-    values.push(serializeFields(patch.fields));
-  }
-
-  values.push(id);
-
-  await execute(`UPDATE local_profiles SET ${updates.join(', ')} WHERE id = ?`, values);
+  await db.update(localProfiles).set(set).where(eq(localProfiles.id, id));
   await refresh();
 }
 
 async function remove(id: string) {
   const wasActive = profiles.value?.find(p => p.id === id)?.active ?? false;
-  await execute('DELETE FROM local_profiles WHERE id = ?', [id]);
+  await db.delete(localProfiles).where(eq(localProfiles.id, id));
 
   if (wasActive && (profiles.value?.length ?? 0) > 1) {
     const next = profiles.value?.find(p => p.id !== id);
@@ -109,9 +95,9 @@ async function remove(id: string) {
 }
 
 async function setActive(id: string) {
-  await execute('UPDATE local_profiles SET active = 0');
+  await db.update(localProfiles).set({ active: 0 });
   const now = new Date().toISOString();
-  await execute('UPDATE local_profiles SET active = 1, updated_at = ? WHERE id = ?', [now, id]);
+  await db.update(localProfiles).set({ active: 1, updatedAt: now }).where(eq(localProfiles.id, id));
   await refresh();
 }
 

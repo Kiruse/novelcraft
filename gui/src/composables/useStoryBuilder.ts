@@ -1,10 +1,8 @@
 import type { Component } from 'vue';
-import MapGraphConfig from '~/components/builder/MapGraphConfig.vue';
 import NpcConfig from '~/components/builder/NpcConfig.vue';
-import EventConfig from '~/components/builder/EventConfig.vue';
-import SystemPromptConfig from '~/components/builder/SystemPromptConfig.vue';
-import { registerStandardModules, getAllModules } from '~/gameplay';
-import { select, execute } from '~/composables/useLocalDb';
+import { createDefaultRegistry } from '~/gameplay';
+import { eq } from 'drizzle-orm';
+import { db, localStories } from '~/db';
 
 export interface StoryForm {
   storyId: string;
@@ -22,11 +20,11 @@ interface SavedStory {
 }
 
 export function useStoryBuilder() {
-  const DEFAULT_MODULE_TYPES = ['system_prompt', 'event', 'npc'];
+  const DEFAULT_MODULE_TYPES = ['npc', 'plan', 'lore'];
 
-  registerStandardModules();
+  const registry = createDefaultRegistry();
   const registryModules = computed(() =>
-    [...getAllModules().values()].map(m => ({ type: m.type })),
+    Object.values(registry.getAll()).map(m => ({ type: m.type })),
   );
 
   const form = reactive<StoryForm>({
@@ -96,10 +94,7 @@ export function useStoryBuilder() {
   const canPublish = computed(() => publishErrors.value.length === 0);
 
   const moduleComponents: Record<string, unknown> = {
-    'system_prompt': SystemPromptConfig,
-    'event': EventConfig,
     'npc': NpcConfig,
-    'map::graph': MapGraphConfig,
   };
 
   const availableModules = computed(() =>
@@ -191,21 +186,26 @@ export function useStoryBuilder() {
       const id = result.value?.id ?? crypto.randomUUID();
       const now = new Date().toISOString();
 
-      const existing = await select<{ id: string }>(
-        'SELECT id FROM local_sessions WHERE id = ?',
-        [id],
-      );
+      const existing = await db.select({ id: localStories.id })
+        .from(localStories)
+        .where(eq(localStories.id, id));
 
       if (existing.length > 0) {
-        await execute(
-          'UPDATE local_sessions SET title = ?, updated_at = ? WHERE id = ?',
-          [payload.title ?? 'Untitled', now, id],
-        );
+        await db.update(localStories).set({
+          title: payload.title ?? 'Untitled',
+          description: payload.description ?? null,
+          config: JSON.stringify(payload.modules),
+          updatedAt: now,
+        }).where(eq(localStories.id, id));
       } else {
-        await execute(
-          'INSERT INTO local_sessions (id, story_id, title, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [id, payload.storyId ?? 'story', payload.title ?? 'Untitled', payload.description ?? null, now, now],
-        );
+        await db.insert(localStories).values({
+          id,
+          title: payload.title ?? 'Untitled',
+          description: payload.description ?? null,
+          config: JSON.stringify(payload.modules),
+          createdAt: now,
+          updatedAt: now,
+        });
       }
 
       const saved: SavedStory = {

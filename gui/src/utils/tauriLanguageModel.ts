@@ -139,22 +139,10 @@ function convertTools(tools: Array<LanguageModelV3FunctionTool | LanguageModelV3
 }
 
 function mapFinishReason(raw: string): LanguageModelV3FinishReason['unified'] {
-  switch (raw) {
-    case 'stop':
-      return 'stop';
-    case 'length':
-      return 'length';
-    case 'content_filter':
-    case 'content-filter':
-      return 'content-filter';
-    case 'tool_calls':
-    case 'tool-calls':
-      return 'tool-calls';
-    case 'error':
-      return 'error';
-    default:
-      return 'other';
-  }
+  let normalized = raw.replaceAll('_', '-');
+  if (['stop', 'length', 'content-filter', 'tool-calls', 'error'].includes(normalized))
+    return normalized as any;
+  return 'other';
 }
 
 const emptyUsage = (): LanguageModelV3Usage => ({

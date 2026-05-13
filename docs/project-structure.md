@@ -16,10 +16,14 @@ novelcraft/
 │       ├── src/
 │       │   ├── main.rs               # Entry point
 │       │   ├── lib.rs                # App builder, plugin registration, command handler
-│       │   └── commands/
-│       │       ├── mod.rs            # Module barrel
-│       │       ├── llm.rs            # LLM proxy (HTTP streaming via reqwest)
-│       │       └── fs.rs             # File export/import, file dialogs
+│       │   ├── util.rs               # SSE stream parsing (StreamEvent enum, process_stream())
+│       │   ├── commands/
+│       │   │   ├── mod.rs            # Module barrel
+│       │   │   ├── llm.rs            # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
+│       │   │   └── fs.rs             # File export/import, file dialogs
+│       │   └── infer/
+│       │       ├── mod.rs            # Module barrel (pub mod api)
+│       │       └── api.rs            # OpenAI API types (request/response structs for SSE)
 │       ├── Cargo.toml                # Rust dependencies
 │       ├── build.rs                  # Tauri build script
 │       ├── tauri.conf.json           # Tauri configuration
@@ -65,32 +69,39 @@ novelcraft/
 │   │   │   └── builder/
 │   │   │       └── InspireDialog.vue # Inspiration dialog (uses useLlmStream)
 │   │   ├── composables/              # Vue composables
-│   │   │   ├── useLocalDb.ts         # SQLite wrapper via tauri-plugin-sql
-│   │   │   ├── useProfiles.ts        # Player profiles CRUD (local SQLite)
-│   │   │   ├── useLlmStream.ts       # Centralized LLM streaming client
+│   │   │   ├── useProfiles.ts        # Player profiles CRUD (Drizzle ORM)
+│   │   │   ├── useLlmStream.ts       # Centralized LLM streaming client (supports tools via ToolSet)
+│   │   │   ├── useGame.ts            # Stateless gameplay loop (buildMessages, buildProfileContext, returns {response, toolCalls, state} — no persistence)
 │   │   │   ├── useShortcutsDialog.ts # Shared state for ShortcutsDialog (open/show/close/toggle)
 │   │   │   ├── useHostLiveness.ts    # LLM host liveness checking (singleton state)
 │   │   │   ├── useOnboarding.ts      # Onboarding completion state (singleton, local SQLite)
-│   │   │   ├── useStoryBuilder.ts    # Story builder logic
-│   │   │   ├── useVignetteList.ts    # Vignette list data & operations
+│   │   │   ├── useStoryBuilder.ts    # Story builder logic (saves to local_stories, uses createDefaultRegistry)
+│   │   │   ├── useVignettes.ts       # Vignette list data & operations (recent, hasMore, create, remove, refresh)
+│   │   │   ├── useVignette.ts        # Single vignette session (2-step push/fork pattern, snapshots, fork with snapshot cleanup via createDefaultRegistry)
 │   │   │   ├── useToast.ts           # Toast notification system
 │   │   │   └── useDebugMode.ts       # Debug mode toggle (singleton, persisted to localStorage)
 │   │   ├── gameplay/                 # Game modules
-│   │   │   ├── index.ts              # Barrel export
-│   │   │   ├── gameplayModule.ts     # Core gameplay logic
-│   │   │   ├── systemPromptModule.ts # System prompt handling
-│   │   │   ├── eventModule.ts        # Event system
-│   │   │   ├── npcModule.ts          # NPC management
-│   │   │   └── graphMapModule.ts     # Graph/map module
+│   │   │   ├── index.ts              # Barrel export (createDefaultRegistry + re-exports)
+│   │   │   ├── gameplayModule.ts     # Core types (GameplaySession, GameplayModule, ToolResult, GameplayModuleRegistry, createDefaultRegistry, defineGameplayModule with .withTool() builder)
+│   │   │   ├── npcModule.ts          # NPC management module
+│   │   │   ├── planModule.ts         # Roadmap/plan module (updateRoadmap tool, auto-prefixed to plan::updateRoadmap)
+│   │   │   └── loreModule.ts         # Lore/knowledge module (query tool, auto-prefixed to lore::query, queries local_lore_entries)
 │   │   ├── utils/                    # Frontend utilities
-│   │   │   ├── llmHelpers.ts         # LLM prompt building helpers (e.g. buildProfileContext)
 │   │   │   ├── tauriLanguageModel.ts # TauriLanguageModel (LanguageModelV3 bridge) & createTauriModel()
 │   │   │   ├── msgUtils.ts           # Message utilities
 │   │   │   └── suggestionParser.ts   # Suggestion parsing utilities
+│   │   ├── db/                       # Drizzle ORM database layer
+│   │   │   ├── schema.ts             # Drizzle table definitions (7 SQLite tables)
+│   │   │   └── index.ts              # Drizzle instance (sqlite-proxy adapter) + table re-exports
 │   │   ├── prompts.ts                # Prompts & personas (single source of truth)
 │   │   ├── router/                   # Vue Router configuration
 │   │   │   └── index.ts              # Route definitions
 │   │   └── assets/css/               # Open Props CSS
+│   ├── drizzle.config.ts            # Drizzle Kit configuration (schema path, output dir, dialect)
+│   ├── drizzle/                     # Generated migration SQL files
+│   │   ├── 0000_legal_venom.sql     # Initial migration (creates all 7 tables)
+│   │   └── meta/
+│   │       └── _journal.json        # Drizzle Kit migration journal
 │   ├── vite-plugins/
 │   │   └── auto-import.ts            # Custom Vite plugin: injects Vue/vue-router imports at build time
 │   ├── index.html                    # Vite entry HTML
@@ -114,9 +125,13 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
 **`engine/src/src/`**
 - `main.rs` — Binary entry point
 - `lib.rs` — App builder, plugin registration (`sql`, `dialog`, `fs`), command handler registration
+- `util.rs` — SSE stream parsing utilities; defines `StreamEvent` enum (`Text`, `Reasoning`, `ToolCall`, `Done`) and `process_stream()` async function that parses byte streams and invokes a callback for each event
 - `commands/` — Tauri commands organized by domain
-  - `llm.rs` — LLM proxy: streams from OpenAI-compatible API, emits `llm:text`/`llm:reasoning`/`llm:error`/`llm:done` events
+  - `llm.rs` — LLM proxy: builds requests, streams from OpenAI-compatible API via `reqwest`, delegates SSE frame parsing to `util::process_stream()`, emits `llm:text`/`llm:reasoning`/`llm:tool_call`/`llm:error`/`llm:done` events
   - `fs.rs` — File operations: export/import sessions, native file/folder pickers
+  - `mod.rs` — Module barrel
+- `infer/` — LLM API type definitions (extracted from `commands/llm.rs`)
+  - `api.rs` — OpenAI API-related types: request structs (`ChatCompletionRequest`, `ApiChatMessage`, `ApiTool`, etc.), response structs (`StreamResponse`, `StreamChoice`, `StreamDelta`, etc.), and shared types (`FunctionCall`, `ToolCall`)
   - `mod.rs` — Module barrel
 
 **`engine/capabilities/default.json`**
@@ -137,13 +152,13 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 - `App.vue` — Root component; uses top-level await on `useOnboarding()` to switch between `Onboarding.vue` and `Main.vue`
 - `Main.vue` — Main app shell: sidebar, router view, keyboard shortcuts, global dialogs
 - `Onboarding.vue` — Step-based first-run onboarding (welcome, model configuration)
-- `env.d.ts` — Global type declarations for auto-imported identifiers (`select()`, `execute()`, Vue composition API, vue-router) — provides TypeScript support only; runtime injection is handled by the Vite auto-import plugin
+- `env.d.ts` — Global type declarations for auto-imported identifiers (Vue composition API, vue-router) — provides TypeScript support only; runtime injection is handled by the Vite auto-import plugin
 - `prompts.ts` — Prompts and personas — single source of truth for the entire app
 
 **`gui/src/pages/`**
 - File-based routing via Vue Router (not Nuxt file-based routing)
 - Dynamic routes use `[param].vue` syntax
-- Vignette pages use local SQLite via raw SQL
+- Vignette pages use local SQLite via Drizzle ORM
 
 **`gui/src/components/`**
 - Reusable Vue components
@@ -153,24 +168,46 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 **`gui/src/composables/`**
 - Shared reactive logic wrapped in `use*.ts` functions
 - Vue composition API and vue-router functions are auto-imported at build time by the Vite auto-import plugin (`gui/vite-plugins/auto-import.ts`)
-- `select()` and `execute()` are declared in `env.d.ts` for TypeScript support
 - Key composables:
-  - `useLocalDb` — SQLite wrapper via tauri-plugin-sql (exports `select<T>()` and `execute()`)
-  - `useLlmStream` — Centralized LLM streaming (never duplicate Tauri event listening)
+  - `useLlmStream` — Centralized LLM streaming with optional `tools` support (never duplicate Tauri event listening)
+  - `useGame` — Stateless gameplay loop: builds messages with module knowledge, creates registry via `createDefaultRegistry()`, builds tool set via `registry.getToolSet()` (immer `createDraft`/`finishDraft` for state transitions), tracks tool calls. Returns `{ response, toolCalls, state }` — does NOT persist. Also contains `buildMessages()` and `buildProfileContext()` (moved from deleted `llmHelpers.ts`)
+  - `useVignette` — Single vignette session management with 2-step push/fork pattern: `push()`/`fork()` return a `PromptUpdater` for consumers to finalize after `run()`. Manages snapshots, fork with snapshot cleanup via tool call replay. Exposes `getGameplaySession()` and readonly `snapshot` ref
+  - `useVignettes` — Vignette list data and CRUD operations (creates snapshot 0 on creation, deletes pages + snapshots + session on removal). Returns `{ vignettes, recent, hasMore, create, remove, refresh, loadVignettes }`
+  - `useStoryBuilder` — Story builder logic, saves to `local_stories` table, uses `createDefaultRegistry()`
   - `useHostLiveness` — LLM host liveness checking with singleton state (ping_hosts via Tauri)
-  - `useStoryBuilder` — Story builder logic (imports modules from `~/gameplay`)
-  - `useVignetteList` — Vignette list data and CRUD operations
   - `useDebugMode` — Debug mode toggle with singleton `debugMode` ref persisted to localStorage
 
 **`gui/src/gameplay/`**
 - Game modules used by the frontend
-- Contains: `gameplayModule.ts`, `systemPromptModule.ts`, `eventModule.ts`, `npcModule.ts`, `graphMapModule.ts`
-- Barrel export via `index.ts`
-- Consumed by `useStoryBuilder` and other composables
+- Core types: `GameplaySession` (simplified: `{ storyId, sessionId, state }` — no `modules` field), `GameplayModule`, `ToolResult`, `ToolCallRecord`, `GameplayModuleRegistry`, `createDefaultRegistry`, `defineGameplayModule` (with `.withTool()` builder)
+- Tool execution uses `immer` for immutable state transitions (`createDraft`/`finishDraft` in `GameplayModuleRegistry.getToolSet()`) — tools mutate `ctx.state` directly instead of using spread operators
+- Registered modules: `NPCModule`, `PlanModule`, `LoreModule`
+- Barrel export via `index.ts` with `createDefaultRegistry()` factory
+- Consumed by `useGame`, `useStoryBuilder`, and other composables
+
+**Module descriptions:**
+- `npcModule.ts` — NPC management module
+- `planModule.ts` — Roadmap/plan module; `getKnowledge()` returns `{ roadmap }`, tool `updateRoadmap` (auto-prefixed to `plan::updateRoadmap`)
+- `loreModule.ts` — Lore/knowledge module; no knowledge injection, tool `query` (auto-prefixed to `lore::query`) queries `local_lore_entries` via Drizzle ORM LIKE search; accesses story ID via `session.storyId`
+
+**`gui/src/db/`**
+- Drizzle ORM database layer for all SQLite access
+- `schema.ts` — Drizzle table definitions for all 7 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
+- `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
+- **Import pattern**: `import { db, localProfiles } from '~/db';` plus operators from `drizzle-orm`
+
+**`gui/drizzle/`**
+- Generated migration SQL files managed by Drizzle Kit
+- `0000_legal_venom.sql` — Initial migration creating all 7 tables
+- `meta/_journal.json` — Drizzle Kit migration journal (tracks order and checksums)
+- Migrations are bundled at build time via `import.meta.glob` and applied by `runMigrations()` in `gui/src/db/index.ts`
+- Generate new migrations with `just generate-migration`
+
+**`gui/drizzle.config.ts`**
+- Drizzle Kit configuration: `defineConfig({ schema: './src/db/schema.ts', out: './drizzle', dialect: 'sqlite' })`
 
 **`gui/src/utils/`**
 - Pure utility functions
-- `llmHelpers.ts` — `buildProfileContext()` and other LLM prompt helpers
 - `tauriLanguageModel.ts` — `TauriLanguageModel` class (implements `LanguageModelV3` from `@ai-sdk/provider`) and `createTauriModel()` factory function; bridges Tauri LLM proxy to Vercel AI SDK
 - `msgUtils.ts` — Message formatting and transformation
 - `suggestionParser.ts` — AI suggestion parsing
@@ -201,6 +238,7 @@ The root `justfile` is the single source of truth for all build commands. There 
 | `just clippy` | cargo clippy in `engine/` |
 | `just fmt` | cargo fmt in `engine/` |
 | `just fmt-check` | cargo fmt --check in `engine/` |
+| `just generate-migration` | Generate Drizzle Kit migration from schema changes (`cd gui && bunx drizzle-kit generate`) |
 
 ## File Naming Conventions
 
@@ -213,7 +251,7 @@ The root `justfile` is the single source of truth for all build commands. There 
 - Explicit imports required
 
 ### Composables
-- PascalCase with `use` prefix: `useLocalDb.ts`, `useLlmStream.ts`
+- PascalCase with `use` prefix: `useLlmStream.ts`, `useProfiles.ts`
 
 ### Rust Commands
 - snake_case: `llm.rs`, `fs.rs`

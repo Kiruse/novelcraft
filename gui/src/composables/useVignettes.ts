@@ -1,11 +1,12 @@
-import { execute, select } from '~/composables/useLocalDb';
+import { eq, desc } from 'drizzle-orm';
+import { db, localSessions, localStateSnapshots, localPages } from '~/db';
 
 export interface VignetteRow {
   id: string;
   title: string;
   description: string | null;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const recent = ref<VignetteRow[]>([]);
@@ -20,38 +21,59 @@ export function useVignettes() {
   }
 
   async function refreshRecent() {
-    const rows = await select<VignetteRow>(
-      'SELECT id, title, description, created_at, updated_at FROM local_sessions ORDER BY updated_at DESC LIMIT 4',
-    );
+    const rows = await db.select({
+      id: localSessions.id,
+      title: localSessions.title,
+      description: localSessions.description,
+      createdAt: localSessions.createdAt,
+      updatedAt: localSessions.updatedAt,
+    }).from(localSessions).orderBy(desc(localSessions.updatedAt)).limit(4);
+
     hasMore.value = rows.length > 3;
     recent.value = rows.slice(0, 3);
   }
 
   async function refreshAll() {
-    vignettes.value = await select<VignetteRow>(
-      'SELECT id, title, description, created_at, updated_at FROM local_sessions ORDER BY updated_at DESC',
-    );
+    vignettes.value = await db.select({
+      id: localSessions.id,
+      title: localSessions.title,
+      description: localSessions.description,
+      createdAt: localSessions.createdAt,
+      updatedAt: localSessions.updatedAt,
+    }).from(localSessions).orderBy(desc(localSessions.updatedAt));
   }
 
   async function create() {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    await execute(
-      'INSERT INTO local_sessions (id, story_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      [id, `vignette:${id}`, 'Untitled Vignette', now, now],
-    );
+
+    await db.transaction(async (tx) => {
+      await tx.insert(localSessions).values({
+        id,
+        storyId: `vignette:${id}`,
+        title: 'Untitled Vignette',
+        createdAt: now,
+        updatedAt: now,
+      });
+      await tx.insert(localStateSnapshots).values({
+        id: crypto.randomUUID(),
+        sessionId: id,
+        pageIndex: 0,
+        data: '{}',
+        createdAt: now,
+      });
+    });
+
     refresh();
     return id;
   }
 
   async function remove(id: string) {
-    await execute(
-      `BEGIN TRANSACTION;
-      DELETE FROM local_pages WHERE id = ?;
-      DELETE FROM local_sessions WHERE id = ?;
-      COMMIT;`,
-      [id, id],
-    );
+    await db.transaction(async (tx) => {
+      await tx.delete(localPages).where(eq(localPages.sessionId, id));
+      await tx.delete(localStateSnapshots).where(eq(localStateSnapshots.sessionId, id));
+      await tx.delete(localSessions).where(eq(localSessions.id, id));
+    });
     refresh();
   }
 

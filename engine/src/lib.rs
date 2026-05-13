@@ -1,4 +1,6 @@
 mod commands;
+mod infer;
+mod util;
 
 use commands::{fs as fs_cmds, llm as llm_cmds};
 

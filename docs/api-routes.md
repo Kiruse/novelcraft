@@ -39,7 +39,7 @@ await invoke('save_models', { models: updatedModels });
 
 #### `prompt`
 
-Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames, and emits events back to the frontend.
+Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-compatible chat completions API, delegates SSE frame parsing to `util::process_stream()`, and emits events back to the frontend.
 
 **File:** `engine/src/src/commands/llm.rs`
 
@@ -106,6 +106,22 @@ interface LlmDonePayload {
   };
 }
 ```
+
+**Implementation types (Rust):** The `prompt` command uses typed serde structs instead of `serde_json::Value` for all request/response handling. Types are split across three modules:
+
+**`engine/src/util.rs`** — SSE stream parsing (extracted from `llm.rs`):
+- `StreamEvent` — enum with variants: `Text(String)`, `Reasoning(String)`, `ToolCall { index, id, name, arguments_delta }`, `Done { finish_reason, usage }`
+- `process_stream()` — async function that takes a byte stream and a callback `Fn(StreamEvent)`, parses SSE frames, and invokes the callback for each event. Tracks `finish_reason` and `usage` state internally and emits `Done` when `[DONE]` is received or the stream ends. Uses `futures::StreamExt` for byte stream iteration.
+
+**`engine/src/infer/api.rs`** — OpenAI API wire types (imported by `llm.rs` via `use crate::infer::api::*`):
+- `FunctionCall` / `ToolCall` — typed tool call structs matching the OpenAI format (`{ id, type, function: { name, arguments } }`), used in `LlmMessage::tool_calls`
+- `ApiChatMessage`, `ApiToolFunction`, `ApiTool`, `StreamOptions`, `ChatCompletionRequest` — typed structs for building the API request body (replaces `serde_json::json!()` macro calls)
+- `StreamResponse`, `StreamUsage`, `StreamChoice`, `StreamDelta`, `StreamToolCall`, `StreamFunctionDelta` — typed structs for SSE response parsing (replaces manual `.get()` chaining on `serde_json::Value`)
+
+**`engine/src/commands/llm.rs`** — command-level and application types (remain in the command module). The `prompt` function builds the HTTP request, then calls `process_stream(response.bytes_stream(), &|event| match event { ... })` with a closure that maps `StreamEvent` variants to Tauri `emit_event` calls. SSE buffer/frame parsing logic was extracted to `util.rs`, making `llm.rs` focused on request building and error handling.
+- `ModelConfig`, `LlmMessage`, `LlmTool`, `LlmToolCallDelta`, `LlmDonePayload`, `LlmUsage`, `LlmPromptRequest`, `UnreachableHost`, `PingHostRequest`
+
+Fields still using `serde_json::Value`: `LlmTool::parameters` (JSON Schema passthrough to API) and `LlmPromptRequest::context` (dead code, kept for frontend compatibility).
 
 **Backward compatibility:** All new fields (`persona` made optional, `request_id`, `tools`, `tool_call_id`, `tool_calls` on messages) use `#[serde(default)]` and are optional. Existing callers passing the old shape work unchanged. Events without `request_id` retain the same names as before.
 
@@ -269,6 +285,8 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'done') {
     console.log('Finish:', event.finishReason, 'Usage:', event.usage);
   }
+  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
+  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
 }
 ```
 

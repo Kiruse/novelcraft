@@ -38,7 +38,7 @@
               <span v-if="v.description" class="vignette-row-disposition">{{ truncate(v.description, 120) }}</span>
             </div>
             <div class="vignette-row-meta">
-              <span class="vignette-row-date">{{ formatDate(v.updated_at) }}</span>
+              <span class="vignette-row-date">{{ formatDate(v.updatedAt) }}</span>
               <button
                 class="vignette-delete-btn"
                 aria-label="Delete vignette"

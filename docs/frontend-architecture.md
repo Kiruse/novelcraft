@@ -19,7 +19,7 @@ The frontend is built with Vue 3 + Vite + Vue Router, running inside a Tauri web
 All gameplay runs client-side inside the Tauri webview:
 
 - **Tauri IPC** (`invoke`) — LLM proxy, file operations, model configuration
-- **Local SQLite** (`select` / `execute`) — vignettes, pages, module runtime, profiles
+- **Local SQLite** (`db` from `~/db`) — stories, vignettes, pages, state snapshots, lore entries, profiles
 - **LLM streaming** (`useLlmStream`) — text generation via Tauri events
 
 ## Pages
@@ -34,7 +34,7 @@ The home page shows a hero section, the most recent vignettes, and an empty stat
 
 **Features:**
 - Hero section with app title, subtitle, and a "+ New vignette" button linking to `/vignettes/new`
-- Recent vignettes section showing up to 3 most recent vignettes as clickable rows (via `useVignetteList`)
+- Recent vignettes section showing up to 3 most recent vignettes as clickable rows (via `useVignettes`)
 - "View all vignettes" link to `/vignettes`
 - Empty state message when no vignettes exist
 
@@ -48,7 +48,7 @@ Displays the user's local vignette sessions.
 
 **Route:** `/vignettes`
 
-**Data source:** Reads from local SQLite (`local_sessions` table via `useVignetteList`)
+**Data source:** Reads from local SQLite (`local_sessions` table via `useVignettes`, queried through Drizzle ORM)
 
 #### Vignette Play (`gui/src/pages/vignettes/[id].vue`)
 
@@ -56,15 +56,17 @@ The main vignette gameplay page.
 
 **Route:** `/vignettes/:id` (also supports `/vignettes/new` for creating new vignettes)
 
-**Data source:** Reads/writes to local SQLite (`local_sessions`, `local_pages`, `local_module_runtime`)
+**Data source:** Reads/writes to local SQLite (`local_sessions`, `local_pages`, `local_state_snapshots`, `local_stories`)
 
 **Features:**
 - Supports both `new` (from home page "New vignette" button) and existing session IDs
 - LLM streaming via `useGame` composable (which uses `useLlmStream` internally)
 - `useGame` exposes `streamText`, `thoughts`, `tokenUsage`, `prompt`, and `status` — `thoughts` accumulates reasoning-delta events, `tokenUsage` holds the latest `LlmUsage` from the stream's done event, `prompt` holds a `PromptDebug` snapshot of the last LLM request
 - Passes `thoughts`, `tokenUsage`, `prompt` (as `prompt-debug`), and `debugMode` (from `useDebugMode`) to the `Game` component for the debug panel
-- Passes the session's `disposition` to the `Game` component, which renders it as a read-only page 0
-- Page creation respects the user's current viewing position: `createPage(prompt, pageIndex)` calls `vignette.fork()` to truncate all subsequent pages before appending the new one when the user submits a "write" prompt from a non-last page. This branches the story at that point rather than always appending to the end
+- **2-step push/fork coordination**: The consumer (`[id].vue`) coordinates between `useVignette().push()/.fork()` and `useGame().run()`. `run()` is stateless — it returns `{ response, toolCalls, state }` without persisting. The consumer calls the `PromptUpdater` returned by `push()`/`fork()` to finalize the page.
+  - `lockIn()`: calls `push({})`, then `run()`, then calls the updater
+  - `createPage()`: for write mode calls `push({prompt})` then `run()`; for expand mode calls `fork({pageIndex})` then `run()`
+  - `recreatePage()`: for steer/inject calls `fork({pageIndex, system})`, then `run()` with `getMessages` that injects the old response and system prompts
 
 ### Story Builder (`gui/src/pages/builder.vue`)
 
@@ -98,7 +100,13 @@ Step-based first-run onboarding flow rendered by `App.vue` when onboarding is no
 
 ### Creating New Pages
 
-Page creation in the Vignette Play page uses `createPage(prompt, pageIndex)`. When `pageIndex` points to a non-last page, the function calls `vignette.fork()` at that index to truncate all subsequent pages in the database before pushing the new page. This branches the story at the user's current viewing position instead of always appending to the end.
+Page creation in the Vignette Play page follows a 2-step push/fork pattern coordinated by the consumer (`[id].vue`):
+
+1. **Push/Fork**: Call `vignette.push({prompt})` to append a new page (or `vignette.fork({pageIndex})` to truncate and branch). Both return a `PromptUpdater` function.
+2. **Run**: Call `game.run({session, ...})` to stream the LLM response. This is stateless — it returns `{ response, toolCalls, state }` without persisting.
+3. **Finalize**: Call the `PromptUpdater(response, toolCalls, state)` to persist the response and state transition to the DB.
+
+When `fork()` is used, it deletes pages and snapshots at/after the fork index, replays tool calls from surviving pages to rebuild state, then calls `push()` internally to create the new page.
 
 ### App Root (`gui/src/App.vue`)
 
@@ -123,20 +131,25 @@ const routes = [
 
 ## Composables
 
-Composables are located in `gui/src/composables/`. Vue composition API functions (`ref`, `computed`, `watch`, etc.) and vue-router functions (`useRoute`, `useRouter`) are auto-imported at build time by a custom Vite plugin (`gui/vite-plugins/auto-import.ts`). The `select()` and `execute()` local DB helpers are declared in `gui/src/env.d.ts`.
+Composables are located in `gui/src/composables/`. Vue composition API functions (`ref`, `computed`, `watch`, etc.) and vue-router functions (`useRoute`, `useRouter`) are auto-imported at build time by a custom Vite plugin (`gui/vite-plugins/auto-import.ts`). Database access uses Drizzle ORM via `import { db, ... } from '~/db'`.
 
-### useLocalDb
+### Drizzle ORM Database Layer
 
-Wraps `tauri-plugin-sql` for local SQLite access.
+All SQLite access goes through Drizzle ORM, defined in `gui/src/db/`.
 
-**Location:** `gui/src/composables/useLocalDb.ts`
+**Location:** `gui/src/db/`
 
-**Exports:** `select<T>()`, `execute()` (auto-imported globally)
+**Files:**
+- `schema.ts` — Drizzle table definitions for all 7 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
+- `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, `SQLiteTx`, `SQLiteTxCallback`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
+
+**Exports:** `db` (Drizzle instance), `schema`, and all table objects (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`, `localOnboarding`)
 
 ```typescript
-const sessions = await select<{ id: string; title: string }>(
-  'SELECT id, title FROM local_sessions ORDER BY created_at DESC'
-);
+import { db, localSessions } from '~/db';
+import { eq, desc } from 'drizzle-orm';
+
+const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
 ```
 
 ### useProfiles
@@ -166,7 +179,7 @@ Centralized LLM streaming client built on `ConversationalArchetype` from `@stega
 **Exports:**
 
 - `streamLlm(options)` — async generator yielding text chunks only
-- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`)
+- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`, `tool-call`, `tool-result`)
 - `LlmUsage` — token usage interface (`prompt_tokens`, `completion_tokens`, `total_tokens`)
 - `LlmDonePayload` — done event payload interface (`finish_reason`, `usage?`)
 
@@ -178,6 +191,7 @@ Centralized LLM streaming client built on `ConversationalArchetype` from `@stega
   messages: Array<{ author: string; content: string }>;
   model?: string;        // Usage ID (defaults to DEFAULT_MODEL from ~/prompts, currently 'storyteller')
   context?: Record<string, unknown>;  // passed to ConversationalArchetype as context
+  tools?: ToolSet;       // Optional Vercel AI SDK ToolSet for gameplay module tools
 }
 ```
 
@@ -185,12 +199,14 @@ Centralized LLM streaming client built on `ConversationalArchetype` from `@stega
 
 ```typescript
 {
-  type: 'text' | 'reasoning' | 'done' | 'error';
+  type: 'text' | 'reasoning' | 'done' | 'error' | 'tool-call' | 'tool-result';
   data: string;
   finishReason?: string;   // populated on 'done' events
   usage?: LlmUsage;        // populated on 'done' events
 }
 ```
+
+Tool-call events yield `{ id, tool, args }` as JSON in `data`. Tool-result events yield `{ id, tool, result }` as JSON in `data`.
 
 ```typescript
 import { streamLlmFull } from '~/composables/useLlmStream';
@@ -200,6 +216,8 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
   if (event.type === 'done') { /* event.finishReason, event.usage available */ }
+  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
+  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
 }
 ```
 
@@ -208,47 +226,66 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
 **Internal architecture:**
 
 1. A `MemoryMessageStore` and `Conversation` are created from the incoming `messages` array (each message is pushed via `message()` from `@stegakir/aikit`).
-2. A `ConversationalArchetype` is instantiated with the `persona` and optional `context`.
+2. A `ConversationalArchetype` is instantiated with the `persona` and optional `context`. If `tools` is provided, it is passed to `ConversationalArchetype` for tool use.
 3. `archetype.prompt()` is called with `createTauriModel(modelId)` as the model and the conversation. This triggers `TauriLanguageModel.doStream()` which internally manages Tauri IPC (event listeners, request ID scoping, SSE parsing).
-4. The resulting `TextStreamPart` stream is mapped to `StreamEvent` objects: `text-delta` → `{ type: 'text', data }`, `reasoning-delta` → `{ type: 'reasoning', data }`, `finish` → `{ type: 'done', data: '', finishReason, usage }`, `error` → `{ type: 'error', data }`.
-5. Tool-related stream parts (`tool-call`, `tool-result`) are handled transparently by `ConversationalArchetype`'s internal `ToolLoopAgent` — callers never see them.
-6. Request ID scoping for concurrent streams is managed internally by `TauriLanguageModel.doStream()` — no `requestId` parameter is exposed to callers.
+4. The resulting `TextStreamPart` stream is mapped to `StreamEvent` objects: `text-delta` → `{ type: 'text', data }`, `reasoning-delta` → `{ type: 'reasoning', data }`, `finish` → `{ type: 'done', data: '', finishReason, usage }`, `error` → `{ type: 'error', data }`, `tool-call` → `{ type: 'tool-call', data: JSON.stringify({ id, tool, args }) }`, `tool-result` → `{ type: 'tool-result', data: JSON.stringify({ id, tool, result }) }`.
+5. Request ID scoping for concurrent streams is managed internally by `TauriLanguageModel.doStream()` — no `requestId` parameter is exposed to callers.
 
 ### useStoryBuilder
 
-Story builder logic, imports gameplay modules.
+Story builder logic. Saves to `local_stories` table instead of `local_sessions`. Default module types are `['npc', 'plan', 'lore']`.
 
 **Location:** `gui/src/composables/useStoryBuilder.ts`
 
-Uses `getAllModules()` from `~/gameplay`.
+Uses `createDefaultRegistry()` from `~/gameplay`.
 
-### useVignetteList
+### useVignettes
 
-Vignette list data and CRUD operations.
+Vignette list data and CRUD operations. `create()` inserts a session and snapshot 0 (empty state `{}`) into `local_state_snapshots`. `remove()` deletes `local_pages`, `local_state_snapshots`, and `local_sessions` for the session.
 
-**Location:** `gui/src/composables/useVignetteList.ts`
+**Location:** `gui/src/composables/useVignettes.ts`
+
+**Returns:** `{ vignettes, recent, hasMore, create, remove, refresh, loadVignettes }`
+
+- `vignettes` — `Readonly<Ref<VignetteRow[] | undefined>>` — all vignettes (loaded on demand via `loadVignettes`)
+- `recent` — `Readonly<Ref<VignetteRow[]>>` — up to 3 most recent vignettes
+- `hasMore` — `Readonly<Ref<boolean>>` — whether more than 3 vignettes exist
+- `create()` — creates a new session with snapshot 0, returns the session ID
+- `remove(id)` — deletes session, its pages, and snapshots
+- `refresh()` — refreshes both recent and full list (if loaded)
+- `loadVignettes()` — loads the full vignette list
 
 ### useVignette
 
-Manages a single vignette session — its metadata, pages, and database mutations.
+Manages a single vignette session — its metadata, pages, state snapshots, and database mutations. Exposes a 2-step push/fork pattern where `push()`/`fork()` return a `PromptUpdater` that consumers call after `run()` completes.
 
 **Location:** `gui/src/composables/useVignette.ts`
 
-**Returns:** `{ status, meta, pages, error, save, push, fork }`
+**Returns:** `{ status, meta, pages, snapshot, error, save, push, fork, update, getGameplaySession }`
 
 - `status` — `Readonly<Ref<'loading' | 'ready' | 'error'>>`
 - `meta` — `Ref<VignetteMeta>` — reactive session metadata (`title`, `disposition`, `createdAt`, `updatedAt`)
-- `pages` — `Readonly<Ref<VignettePage[]>>` — reactive page array
+- `pages` — `Readonly<Ref<VignettePage[]>>` — reactive page array. Each `VignettePage` includes an optional `toolCalls` field (serialized JSON).
+- `snapshot` — `Readonly<Ref<Snapshot>>` — readonly ref exposing the current state snapshot
 - `error` — `Readonly<Ref<string | undefined>>`
 - `save()` — persists `meta` changes to `local_sessions`
-- `push(prompt?)` — appends a new page to the end (DB insert + reactive array push); the new page has no response yet
-- `fork({ pageIndex, system?, prompt?, response? })` — updates a page in-place and truncates all pages after `pageIndex`. Deletes the truncated pages from `local_pages` in SQLite and replaces the in-memory array. Used by the Vignette Play page to branch the story when the user writes from a non-last page
+- `push({ prompt?, system? })` — inserts a new page into the DB and reactive array. Returns a `PromptUpdater` function `(response, toolCalls, state) => Promise<void>` that finalizes the page with the LLM's response, tool calls, and state transition (including snapshot management).
+- `fork({ pageIndex, system?, prompt? })` — truncates pages >= `pageIndex` (DB + reactive), deletes snapshots >= `pageIndex`, loads the youngest snapshot before `pageIndex`, replays tool calls from surviving pages via `createDefaultRegistry()`, then calls `push()` to create a new page. Returns a `PromptUpdater`. System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
+- `update({ pageIndex, system?, prompt?, response? })` — edits page text without AI involvement. Null clears, undefined keeps existing.
+- `getGameplaySession()` — returns a `GameplaySession` derived from the current snapshot: `{ sessionId, storyId, state: snapshot.data }`
 
-**Fork semantics:** `fork()` is the mechanism for branching/rewriting story history. It atomically (within a SQLite transaction) updates the target page's fields and deletes all subsequent pages. After the transaction, the reactive `pages` array is replaced with the truncated list.
+**Fork semantics:** `fork()` deletes the target page and all subsequent pages from the DB, deletes orphaned snapshots, rewinds state by loading the youngest snapshot before the fork index and replaying tool calls, then calls `push()` to create a new page. The `PromptUpdater` returned by `push()` handles snapshot checkpointing (every 100 pages) and state persistence.
+
+**Exported types:**
+- `VignetteMeta` — `{ title, storyId, disposition, createdAt, updatedAt }`
+- `VignettePage` — `{ id, sessionId, system?, prompt?, response?, toolCalls? }`
+- `ForkOpts` — `{ pageIndex, system?: string | null, prompt?: string | null }`
+- `UpdateOpts` — `{ pageIndex, system?: string | null, prompt?: string | null, response?: string | null }`
+- `PromptUpdater` — `(response: string, toolCalls: ToolCallRecord[], state: GameState) => Promise<void>`
 
 ### useGame
 
-Manages the LLM gameplay loop for a vignette session — builds messages, streams the response, and exposes reactive state for the UI.
+Stateless LLM gameplay loop — builds messages, streams the response, and returns data for the consumer to persist. Does NOT mutate app/game state or persist anything.
 
 **Location:** `gui/src/composables/useGame.ts`
 
@@ -265,8 +302,8 @@ Manages the LLM gameplay loop for a vignette session — builds messages, stream
     promptId?: string;
   }
   ```
-- `UseGameOpts` — options for `useGame()` (`meta`, `pages`)
-- `GameRunOpts` — options for `run()` (`promptId?`, `getMessages?`, `prependStreamText?`)
+- `UseGameOpts` — options for `useGame()` (`meta`, `pages` — reactive refs, no `sessionId`)
+- `GameRunOpts` — options for `run()` (`session: DeepReadonly<GameplaySession>`, `promptId?`, `getMessages?`, `prependStreamText?`)
 
 **Returns:** `{ status, streamText, thoughts, tokenUsage, prompt, run }`
 
@@ -275,7 +312,11 @@ Manages the LLM gameplay loop for a vignette session — builds messages, stream
 - `thoughts` — accumulated reasoning text from reasoning-delta events (cleared when streaming starts)
 - `tokenUsage` — latest token usage (`LlmUsage`) from the stream's done event (prompt_tokens, completion_tokens, total_tokens)
 - `prompt` — `Readonly<Ref<PromptDebug | undefined>>` — snapshot of the last prompt sent to the LLM (populated during streaming, includes persona, messages, model, context, and promptId)
-- `run(opts?)` — builds messages via `buildMessages()`, streams via `streamLlmFull()`, accumulates text and reasoning chunks. Accepts optional `promptId` (for debug identification), `getMessages` (function to mutate the messages array before sending, used for steer/inject modes), and `prependStreamText` (text to prepend to the live stream output)
+- `run(opts)` — **stateless**: takes a `GameplaySession` (via `session` param), builds messages with module knowledge, creates a `GameplayModuleRegistry` via module-level `createDefaultRegistry()`, builds module tool set via `registry.getToolSet()`, streams via `streamLlm()`, accumulates text and reasoning chunks, tracks tool calls and state mutations during streaming, and returns `{ response, toolCalls, state }`. **Does not persist anything.** Consumers (the Vignette Play page) coordinate persistence by calling the `PromptUpdater` returned by `push()`/`fork()`. Accepts optional `promptId` (for debug identification), `getMessages` (function to mutate the messages array before sending, used for steer/inject modes), and `prependStreamText` (text to prepend to the live stream output).
+
+Also contains internal helpers:
+- `buildMessages()` — accepts optional `gameplaySession`, builds messages from pages with module knowledge injection
+- `getProfileContext()` — injects active profile fields as `[Player profile]` block
 
 ### useShortcutsDialog
 
@@ -429,7 +470,7 @@ Uses `streamLlmFull()` from `useLlmStream.ts`.
 
 ### Game
 
-Main gameplay component — the single interactive surface for vignette play sessions. Supports a virtual "page 0" that renders the session disposition as read-only markdown. When debug mode is enabled (via `useDebugMode`), renders a `DebugPanel` component on the right side displaying the LLM's accumulated reasoning, token usage, and prompt debug data.
+Main gameplay component — the single interactive surface for vignette play sessions. Supports a virtual "page 0" that renders the session disposition as read-only markdown (accessed via `vignette.meta.value.disposition`). When debug mode is enabled (via `useDebugMode`), renders a `DebugPanel` component on the right side displaying the LLM's accumulated reasoning, token usage, and prompt debug data.
 
 **Location:** `gui/src/components/Game.vue`
 
@@ -458,7 +499,7 @@ The `pageIndex` in the `prompt` event reflects the page the user was viewing whe
 
 **Disposition page (virtual page 0):**
 
-When `disposition` is a non-empty string, the Game component prepends a virtual page to the page list. This page displays the disposition text as rendered markdown with a subtle "Disposition" label. It is always the first page in the page indicator (`1 / N`) and is navigable, but no editing controls are available on it.
+When `vignette.meta.value.disposition` has non-whitespace content, the Game component prepends a virtual page to the page list. This page displays the disposition text as rendered markdown with a subtle "Disposition" label. It is always the first page in the page indicator (`1 / N`) and is navigable, but no editing controls are available on it.
 
 Key computed properties driving this behavior:
 
@@ -766,14 +807,16 @@ const router = useRouter();
 </script>
 ```
 
-### Local DB Helpers
+### Local DB Access
 
-Declared in `gui/src/env.d.ts` (type-only declarations; runtime provided by `tauri-plugin-sql`):
+Drizzle ORM provides type-safe queries. Import `db` and table references from `~/db`, operators from `drizzle-orm`:
 
 ```typescript
-// No import needed
-const sessions = await select<{ id: string }>('SELECT id FROM local_sessions');
-await execute('DELETE FROM local_sessions WHERE id = ?', [id]);
+import { db, localSessions } from '~/db';
+import { eq, desc } from 'drizzle-orm';
+
+const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
+await db.delete(localSessions).where(eq(localSessions.id, id));
 ```
 
 ### Components

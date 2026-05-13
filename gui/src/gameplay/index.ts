@@ -1,29 +1,32 @@
-import { registerModule } from './gameplayModule';
-import { GraphMapModule } from './graphMapModule';
 import { NPCModule } from './npcModule';
-import { EventModule } from './eventModule';
-import { SystemPromptModule } from './systemPromptModule';
+import { PlanModule } from './planModule';
+import { LoreModule } from './loreModule';
+import { GameplayModuleRegistry } from './gameplayModule';
 
-export const registerStandardModules = () => {
-  registerModule(SystemPromptModule);
-  registerModule(EventModule);
-  registerModule(NPCModule);
-  registerModule(GraphMapModule);
-};
+export const createDefaultRegistry = () =>
+  new GameplayModuleRegistry([
+    NPCModule,
+    PlanModule,
+    LoreModule,
+  ]);
 
-export { registerModule, getModule, getAllModules, defineGameplayModule, findSessionModule, toolOk, toolErr } from './gameplayModule';
+export {
+  defineGameplayModule,
+  toolOk,
+  toolErr,
+  toolCallRecordSchema,
+  GameplayModuleRegistry,
+} from './gameplayModule';
+
 export type {
   GameplayModule,
   GameplayModuleContext,
   GameplaySession,
-  GameplayModuleRuntime,
-  GameplayModuleRuntimeDoc,
   ToolDefinition,
   ToolResult,
-  Subagent,
+  ToolCallRecord,
 } from './gameplayModule';
 
-export { GraphMapModule } from './graphMapModule';
 export { NPCModule } from './npcModule';
-export { EventModule } from './eventModule';
-export { SystemPromptModule } from './systemPromptModule';
+export { PlanModule } from './planModule';
+export { LoreModule } from './loreModule';

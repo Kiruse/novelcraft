@@ -191,7 +191,7 @@ const SLASH_MODE_COMMANDS: Record<string, InputMode> = {
 const FOCUS_CYCLE = ['chat', 'prose', 'prompt', 'system'] as const;
 
 const props = withDefaults(defineProps<{
-  vignette: DeepReadonly<Vignette>;
+  vignette: Vignette;
   /** Placeholder for the title input. */
   titlePlaceholder?: string;
   /** Whether the agent is currently streaming. */

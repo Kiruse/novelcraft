@@ -84,7 +84,7 @@ import {
   SYSTEM_INSTRUCT,
   SYSTEM_SUGGEST_VIGNETTE,
 } from '~/prompts';
-import { useVignette } from '~/composables/useVignette';
+import { type UpdateOpts, useVignette } from '~/composables/useVignette';
 import { useVignettes } from '~/composables/useVignettes';
 import { useGame } from '~/composables/useGame';
 import { getErrorDisplay } from '~/utils/msgUtils';
@@ -180,15 +180,12 @@ function useSuggestion(suggestion: ParsedSuggestion) {
 async function lockIn() {
   try {
     await vignette.save();
-    await vignette.push();
-    const response = await run({ promptId: 'create' });
-    const page = pages.value[pages.value.length - 1];
-    await vignette.fork({
-      pageIndex: pages.value.length - 1,
-      system: page.system ?? undefined,
-      prompt: page.prompt ?? undefined,
-      response,
+    const update = await vignette.push({});
+    const { response, toolCalls, state } = await run({
+      session: readonly(vignette.getGameplaySession()),
+      promptId: 'create',
     });
+    await update(response, toolCalls, state);
   } catch (err) {
     toast.error('Failed to create vignette: ' + getErrorDisplay(err));
     console.error('Vignette start failed:', err);
@@ -204,46 +201,20 @@ async function createPage(prompt: string, pageIndex: number) {
 
   prompt = prompt.trim();
 
-  if (pageIndex < pages.value.length - 1) {
-    const page = pages.value[pageIndex]!;
-    await vignette.fork({
-      pageIndex,
-      system: page.system ?? undefined,
-      prompt: page.prompt ?? undefined,
-      response: page.response ?? undefined,
-    });
-  }
-
   try {
-    const page = pages.value[pages.value.length - 1];
-    if (prompt) await vignette.push(prompt);
-    const prevResponse = prompt ? undefined : page.response;
-    const response = await run({
+    const lastPage = pages.value[pages.value.length - 1];
+    const update = prompt
+      ? await vignette.push({ prompt })
+      : await vignette.fork({ pageIndex });
+    const session = readonly(vignette.getGameplaySession());
+
+    const { response, toolCalls, state } = await run({
+      session,
       promptId: prompt ? 'prompt' : 'expand',
-      prependStreamText: prevResponse ?? undefined,
-      getMessages: msgs => {
-        // if (!prompt)
-        //   msgs.push({
-        //     author: 'user',
-        //     content: 'Please write more content.',
-        //   });
-        return msgs;
-      },
+      prependStreamText: prompt ? undefined : lastPage.prompt,
     });
-    if (prompt) {
-      await vignette.fork({
-        pageIndex: pages.value.length - 1,
-        prompt,
-        response,
-      });
-    } else {
-      await vignette.fork({
-        pageIndex,
-        system: page.system,
-        prompt: page.prompt,
-        response,
-      });
-    }
+
+    await update(response, toolCalls, state);
   } catch (err) {
     toast.error('Failed to create new page: ' + getErrorDisplay(err));
     console.error('Create page failed:', err);
@@ -259,10 +230,9 @@ async function recreatePage(
 
   const page = pages.value[pages.value.length - 1];
 
-  let system = page.system, systemChanged = false;
+  let system = page.system;
 
   if (mode === 'steer') {
-    systemChanged = true;
     if (!system) {
       system = instruction;
     } else {
@@ -271,21 +241,21 @@ async function recreatePage(
   }
 
   try {
-    if (systemChanged) {
-      await vignette.fork({
-        pageIndex,
-        system: system ?? undefined,
-        prompt: page.prompt ?? undefined,
-        response: page.response ?? undefined,
-      });
-    }
-
-    const response = await run({
+    const update = await vignette.fork({
+      pageIndex,
+      system,
+    });
+    const { response, toolCalls, state } = await run({
+      session: readonly(vignette.getGameplaySession()),
       promptId: mode,
       getMessages: (msgs) => {
         if (pageIndex === 0) {
           msgs.unshift({ author: 'system', content: SYSTEM_VIGNETTE_OPEN });
         }
+        msgs.push({
+          author: 'ai',
+          content: page.response!,
+        });
         switch (mode) {
           case 'steer': {
             msgs.push({
@@ -312,13 +282,7 @@ async function recreatePage(
         return msgs;
       },
     });
-
-    await vignette.fork({
-      pageIndex,
-      system: system ?? undefined,
-      prompt: page.prompt ?? undefined,
-      response,
-    });
+    await update(response, toolCalls, state);
   } catch (err) {
     toast.error('Failed to recreate page: ' + getErrorDisplay(err));
     console.error('Recreate Page failed:', err);
@@ -337,10 +301,10 @@ function onPrompt(payload: { text: string; mode: InputMode; pageIndex: number })
   }
 }
 
-async function onUpdatePage(payload: { pageIndex: number; response?: string; system?: string | null; prompt?: string }) {
+async function onUpdatePage(payload: UpdateOpts) {
   const page = pages.value[payload.pageIndex];
   if (!page) return;
-  await vignette.fork({
+  await vignette.update({
     pageIndex: payload.pageIndex,
     system: payload.system !== undefined ? payload.system : (page.system || null),
     prompt: payload.prompt || page.prompt || null,

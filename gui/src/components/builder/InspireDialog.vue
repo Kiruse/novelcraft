@@ -53,7 +53,7 @@ import { SuggestionParser } from '~/utils/suggestionParser';
 import type { ParsedSuggestion } from '~/utils/suggestionParser';
 import { unindent } from '@stegakir/aikit/utils';
 import { DEFAULT_MODEL } from '~/prompts';
-import { streamLlmFull } from '~/composables/useLlmStream';
+import { streamLlm } from '~/composables/useLlmStream';
 
 const STORY_SUGGEST_RANDOM_PERSONA = unindent(`
   You are a creative story idea generator.
@@ -135,7 +135,7 @@ async function generate() {
 
   try {
     const hasPrompt = keywords.value.trim().length > 0;
-    const stream = streamLlmFull({
+    const stream = streamLlm({
       persona: hasPrompt ? STORY_SUGGEST_KEYWORDS_PERSONA : STORY_SUGGEST_RANDOM_PERSONA,
       messages: [{
         author: 'user',

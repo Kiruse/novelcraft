@@ -8,9 +8,9 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, no server.
 
-- **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`) and file operations (export/import, file dialogs)
+- **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`) and file operations (export/import, file dialogs)
 - **Vue 3 frontend** (`gui/src/`) runs in a webview via Vite — manages gameplay state, LLM orchestration, and all UI
-- **Local SQLite** via `tauri-plugin-sql` — all gameplay data (sessions, pages, profiles, module runtime) lives in a local `.db` file
+- **Local SQLite** via `tauri-plugin-sql` — all gameplay data (stories, sessions, pages, state snapshots, lore entries, profiles) lives in a local `.db` file
 - **No server, no auth, no PostgreSQL** — single-user desktop application
 - **LLM calls** go through Rust Tauri commands — `useLlmStream` internally uses `ConversationalArchetype` from `@stegakir/aikit` with `createTauriModel()` (which implements `LanguageModelV3` from `@ai-sdk/provider`). The AI SDK bridge calls `invoke('prompt', ...)` and maps Tauri events (`llm:text`, `llm:reasoning`, `llm:tool_call`, `llm:error`, `llm:done`) to AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
 - **Story sharing** is file-based — export/import JSON files via native file dialogs
@@ -28,10 +28,14 @@ novelcraft/
 │       ├── src/
 │       │   ├── main.rs     # Entry point
 │       │   ├── lib.rs      # App builder, plugin registration, command handler
-│       │   └── commands/
-│       │       ├── mod.rs  # Module barrel
-│       │       ├── llm.rs  # LLM proxy (HTTP streaming via reqwest)
-│       │       └── fs.rs   # File export/import, file dialogs
+│       │   ├── util.rs     # SSE stream parsing (StreamEvent enum, process_stream())
+│       │   ├── commands/
+│       │   │   ├── mod.rs  # Module barrel
+│       │   │   ├── llm.rs  # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
+│       │   │   └── fs.rs   # File export/import, file dialogs
+│       │   └── infer/
+│       │       ├── mod.rs  # Module barrel (pub mod api)
+│       │       └── api.rs  # OpenAI API types (request/response structs for SSE)
 │       ├── Cargo.toml      # Rust dependencies
 │       └── tauri.conf.json # Tauri configuration
 ├── gui/                    # Vue 3 frontend (Vite + Vue Router)
@@ -44,11 +48,14 @@ novelcraft/
 │   │   ├── pages/          # Vue Router pages
 │   │   ├── components/     # Vue components
 │   │   ├── composables/    # Vue composables
+│   │   ├── db/             # Drizzle ORM (schema + instance)
 │   │   ├── utils/          # Frontend utilities
 │   │   ├── gameplay/       # Game modules (barrel via index.ts)
 │   │   ├── prompts.ts      # Prompts & personas (single source of truth)
 │   │   ├── router/         # Vue Router configuration
 │   │   └── assets/css/     # Open Props CSS
+│   ├── drizzle.config.ts      # Drizzle Kit configuration (schema, out, dialect)
+│   ├── drizzle/                # Generated migration SQL files + meta/_journal.json
 │   ├── index.html          # Vite entry HTML
 │   ├── vite.config.ts      # Vite config with ~ alias
 │   ├── tsconfig.json       # TypeScript config with ~/* paths
@@ -74,6 +81,8 @@ novelcraft/
 | Gameplay Modules | `gui/src/gameplay/` | Named exports, barrel via `index.ts` |
 | Prompts | `gui/src/prompts.ts` | Single source of truth |
 | Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `fs.rs`) |
+| Rust Utilities | `engine/src/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`) |
+| DB Schema | `gui/src/db/` | Drizzle ORM schema (`schema.ts`) + instance (`index.ts`) |
 
 **Detailed docs:** [Code Conventions](./docs/code-conventions.md)
 
@@ -106,14 +115,14 @@ Models are configured in Rust, persisted to disk as JSON.
 **All LLM calls go through the Rust backend via Tauri commands.**
 
 - **`invoke('prompt', { request })`** — takes `{ model, messages[], persona?, context?, request_id?, tools? }` and streams the response. The invoke is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted.
-- Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames, and emits Tauri events:
+- Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames via `util::process_stream()`, and emits Tauri events:
   - `llm:text` — text content chunk
   - `llm:reasoning` — reasoning/thinking chunk
   - `llm:tool_call` — tool/function call streaming delta (`{ index, id?, name?, arguments_delta }`)
   - `llm:error` — error message
   - `llm:done` — stream complete (payload: `{ finish_reason, usage? }`)
 - Events are scoped with `request_id` when provided: `llm:{event}:{request_id}`. This enables concurrent LLM streams without event collisions.
-- **Frontend composable**: `gui/src/composables/useLlmStream.ts` creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. The AI SDK stream parts are mapped to `StreamEvent` objects (`text`, `reasoning`, `error`, `done`). Tool-related parts are handled transparently by `ConversationalArchetype`'s internal `ToolLoopAgent`.
+- **Frontend composable**: `gui/src/composables/useLlmStream.ts` creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. The AI SDK stream parts are mapped to `StreamEvent` objects (`text`, `reasoning`, `error`, `done`, `tool-call`, `tool-result`). Tool-call events yield `{ id, tool, args }` as JSON. Tool-result events yield `{ id, tool, result }` as JSON.
 - **AI SDK bridge**: `gui/src/utils/tauriLanguageModel.ts` — `createTauriModel(modelId)` returns a `LanguageModelV3` implementation that bridges Tauri events to Vercel AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
 
 **Prompts and personas** are defined in `gui/src/prompts.ts`.
@@ -121,26 +130,34 @@ Always import from `~/prompts` & maintain them there as a single source of truth
 
 **Important terminology:** A "persona" is ONLY the system prompt passed as the `persona` parameter to the LLM call — it defines who the agent *is*. The sole persona used throughout the app is `PERSONA_PLATFORM`. Everything else — scene instructions (`SYSTEM_VIGNETTE_OPEN`), steering notes (`SYSTEM_STEER`), editor requests (`SYSTEM_INSTRUCT`), page-level `system` fields — are **NOT** personas. They are regular messages with `author: 'system'` injected into the conversation history to guide the agent's behavior.
 
-### Client-Side Data — SQLite via tauri-plugin-sql
+### Client-Side Data — SQLite via Drizzle ORM
 
-Gameplay state (sessions, pages, module runtime, profiles) is stored in **local SQLite** via `tauri-plugin-sql`.
+Gameplay state (stories, sessions, pages, state snapshots, lore entries, profiles) is stored in **local SQLite** via `tauri-plugin-sql`, accessed through **Drizzle ORM**.
 
-- **Composable**: `gui/src/composables/useLocalDb.ts` — lazy-initializes the database, runs `CREATE TABLE IF NOT EXISTS`, exports `select<T>()` and `execute()` helpers
+- **DB module**: `gui/src/db/` — Drizzle ORM schema definitions and instance
+  - `schema.ts` — Drizzle table definitions for all 7 SQLite tables (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`, `localOnboarding`). Column property names are camelCase mapping to snake_case SQL columns.
+  - `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
+- **Import pattern**: `import { db, localProfiles } from '~/db';` plus operators from `drizzle-orm` (e.g. `eq`, `desc`, `like`, `and`, `or`)
 - **Composable**: `gui/src/composables/useProfiles.ts` — wraps `local_profiles` table; exposes `profiles`, `activeProfile`, `create`, `update`, `remove`, `setActive`, `init`; auto-creates a default profile on first use (max 5)
 - **Mode**: Local-only, no sync
 - **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
-- **Dependencies**: `@tauri-apps/plugin-sql`
+- **Dependencies**: `@tauri-apps/plugin-sql`, `drizzle-orm`, `drizzle-kit` (dev)
+- **Migrations**: Managed via `drizzle-kit`. Migration SQL files in `gui/drizzle/` are bundled at build time via `import.meta.glob` and applied on first DB connection. Baseline detection handles databases created before the migration system existed.
 
-**Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/utils/llmHelpers.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
+**Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/composables/useGame.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
 
 ```typescript
-// Raw SQL query in any composable/component (auto-imported via env.d.ts)
-const sessions = await select<{ id: string; title: string }>('SELECT id, title FROM local_sessions');
+// Drizzle ORM query in any composable/component
+import { db, localSessions } from '~/db';
+import { eq, desc } from 'drizzle-orm';
 
-// Insert via execute
-await execute('INSERT INTO local_pages (id, session_id, response, created_at) VALUES (?, ?, ?, ?)', [
-  id, sessionId, response, new Date().toISOString(),
-]);
+const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
+
+// Insert
+import { localPages } from '~/db';
+await db.insert(localPages).values({
+  id, sessionId, response, createdAt: new Date().toISOString(),
+});
 ```
 
 ### LLM Streaming — useLlmStream
@@ -148,10 +165,10 @@ await execute('INSERT INTO local_pages (id, session_id, response, created_at) VA
 All LLM streaming goes through `gui/src/composables/useLlmStream.ts`.
 
 - `streamLlm(options)` — async generator yielding text chunks only
-- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`). Done events include `finishReason` and `usage` fields.
-- `StreamLlmOptions` accepts optional `model` and `context` parameters. The `context` is passed to `ConversationalArchetype` as the context parameter.
+- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`, `tool-call`, `tool-result`). Done events include `finishReason` and `usage` fields. Tool-call events yield `{ id, tool, args }` as JSON. Tool-result events yield `{ id, tool, result }` as JSON.
+- `StreamLlmOptions` accepts optional `model`, `context`, and `tools` parameters. The `context` is passed to `ConversationalArchetype` as the context parameter. The `tools` is an optional Vercel AI SDK `ToolSet` (built via `GameplayModuleRegistry.getToolSet()`) passed through to `ConversationalArchetype` for gameplay module tool use.
 - Replaces any inline Tauri event listening — never duplicate event logic in components
-- Internally creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. AI SDK `TextStreamPart` events are mapped to `StreamEvent` objects (`text-delta` → text, `reasoning-delta` → reasoning, `finish` → done with usage, `error` → error). Tool-related parts are handled transparently by `ConversationalArchetype`'s internal `ToolLoopAgent`.
+- Internally creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. AI SDK `TextStreamPart` events are mapped to `StreamEvent` objects (`text-delta` → text, `reasoning-delta` → reasoning, `finish` → done with usage, `error` → error, `tool-call` → tool-call with `{ id, tool, args }` JSON, `tool-result` → tool-result with `{ id, tool, result }` JSON).
 - Request ID scoping is managed internally by `TauriLanguageModel.doStream()` — no need to pass `requestId` from callers.
 
 ```typescript
@@ -162,8 +179,81 @@ for await (const event of streamLlmFull({ persona, messages })) {
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
   if (event.type === 'done') { /* event.finishReason, event.usage available */ }
+  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
+  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
 }
 ```
+
+### Gameplay Module System (`gui/src/gameplay/`)
+
+Modules define gameplay mechanics via tools exposed to the LLM.
+
+**Core types** (`gameplayModule.ts`):
+- `GameplaySession` — simplified to `{ storyId, sessionId, state: Record<string, unknown> }`. No `modules` field. State is a flat map from module type to module-specific data. Managed by `useVignette` (via `getGameplaySession()`) rather than a dedicated composable.
+- `GameplayModuleContext` — has `session`, `module`, `state` fields (access `storyId`/`sessionId` via `ctx.session.storyId`/`ctx.session.sessionId`)
+- `ToolResult<S>` — `{ success: true; state?: S; response?: string } | { success: false; error: string }`. When `state` is omitted on success, the draft mutations from immer are used. The `response` field is used by query-only tools (like lore) to return data to the LLM without mutating state.
+- `GameplayModuleRegistry` — class with `get()`, `getAll()`, `getToolSet()` methods. `getToolSet()` uses immer's `createDraft`/`finishDraft` for immutable state transitions. When a module's state is undefined (first tool call), `getToolSet()` calls `module.init()` to produce default state. Tool names in module definitions are unprefixed (e.g. `'move'`); `getToolSet()` auto-prefixes them to `${modType}::${toolDef.name}`. The `onToolCall` callback receives the full prefixed key (see below)
+- `createDefaultRegistry()` — factory that creates a registry pre-loaded with `NPCModule`, `PlanModule`, `LoreModule`. Uses `GameplayModuleRegistry` constructor (no `register()` method).
+- `defineGameplayModule()` — factory with `.withTool()` builder pattern for adding tools to a module. Requires an `init()` method returning the default state (supports `MaybePromise`).
+- `MaybePromise<T>` — local type alias in `gameplayModule.ts` for `T | Promise<T>`
+- `OnToolCall` — type alias for tool call callback
+- `Subagent` — interface for sub-agent definitions
+- `toolCallRecordSchema` — zod schema for tool call records stored in pages
+- `toolOk(state?, opts?)` — `state` is optional. `toolOk()` means success with no state override (draft mutations apply). `toolOk(newState)` means success, override entire state. Accepts optional `{ response?: string }` as second arg
+- `toolErr(error)` — returns a failure result
+
+**Immer state transitions** (in `GameplayModuleRegistry.getToolSet()`):
+
+Tool execution uses `immer` for immutable state updates:
+1. When `session.state[modType]` is undefined, `getToolSet()` calls `module.init()` to produce default state
+2. `createDraft(base)` creates a mutable draft proxy
+3. Draft is passed as `ctx.state` to the tool — the tool mutates `ctx.state` directly
+4. If `result.state` is provided, it overrides the draft entirely
+5. If `result.state` is undefined, `finishDraft(draft)` produces the new immutable state
+6. On error, the draft is discarded (no state change)
+
+Modules use direct draft mutation instead of spread operators:
+- `npcModule.ts`: `state.npcs[name]!.location = destination; return toolOk();`
+- `planModule.ts`: `state.roadmap = roadmap; return toolOk();`
+- `loreModule.ts`: `return toolOk(undefined, { response: ... });` (query-only, no state mutation)
+
+**Dependency:** `immer` ^11.1.6
+
+**Registered modules** (via `createDefaultRegistry()`):
+- `NPCModule` — NPC management, tool `move` (defined unprefixed, auto-prefixed to `npc::move`)
+- `PlanModule` — `getKnowledge()` returns `{ roadmap }`, tool `updateRoadmap` (auto-prefixed to `plan::updateRoadmap`)
+- `LoreModule` — no knowledge injection, tool `query` (auto-prefixed to `lore::query`) queries `local_lore_entries` via LIKE search
+
+**Deleted modules:** `eventModule.ts`, `graphMapModule.ts`, `systemPromptModule.ts` — removed during the module system redesign.
+
+### Snapshot Lifecycle
+
+State snapshots in `local_state_snapshots` enable undo/fork by capturing module state at each page:
+
+- **Session creation** → snapshot 0 with empty state `{}`
+- **After each page's tool calls** → head snapshot updated in place (or new snapshot inserted at checkpoint boundaries)
+- **Every 100 pages** → copy current head as checkpoint before updating
+- **Fork** → delete snapshots with `page_index >= fork_index`, recompute head from youngest snapshot before `fork_index` via tool call replay through `createDefaultRegistry()`, then `push()` to create a new page
+- **State is immutable** — immer drafts are used for convenience during tool execution and replay, but the canonical state is the snapshot data
+- **Initial module state** is always empty; first tool call populates what's needed (forward-compatible with module upgrades)
+
+### LLM Helpers — buildMessages
+
+`buildMessages()` is defined in `gui/src/composables/useGame.ts` (moved from deleted `llmHelpers.ts`):
+- `buildMessages()` now accepts optional `gameplaySession?: GameplaySession`
+- When provided, calls each module's `getKnowledge()` and injects results into context under `context.modules`
+- `buildProfileContext()` — injects active profile fields as `[Player profile]` block
+
+### useVignette — Push/Fork Coordination
+
+`useVignette` manages a single vignette session and exposes a 2-step push/fork pattern:
+
+- **`push({ prompt?, system? })`** — inserts a page into the DB/reactive array and returns a `PromptUpdater` function. The updater is called later with `(response, toolCalls, state)` to finalize the page with the LLM's response and state transition.
+- **`fork({ pageIndex, system?, prompt? })`** — based on `push()`: truncates pages >= pageIndex (DB + reactive), deletes snapshots >= pageIndex, loads the youngest snapshot before pageIndex, replays tool calls from surviving pages, then calls `push()` to create a new page (returning its updater). System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
+- **`update({ pageIndex, system?, prompt?, response? })`** — edits page text without AI involvement. Null clears, undefined keeps existing.
+- **`getGameplaySession()`** — returns a `GameplaySession` derived from the current snapshot.
+- **`snapshot`** — readonly ref exposing the current state snapshot.
+- **`run()`** (from `useGame`) is stateless — it takes a `GameplaySession`, builds messages, streams the LLM, and returns `{ response, toolCalls, state }`. It does NOT persist anything. Consumers coordinate persistence by calling the `PromptUpdater` returned by `push()`/`fork()`.
 
 ### TypeScript — No `as any`
 
@@ -239,38 +329,40 @@ just fmt-check
 
 ## Database Query Patterns
 
-### Local Database (SQLite — via tauri-plugin-sql)
+### Local Database (SQLite — via Drizzle ORM)
 
-All data access uses raw SQL through `select()` and `execute()` from `gui/src/composables/useLocalDb.ts`.
+All data access uses Drizzle ORM through `db` and table references from `gui/src/db/`.
 
 ```typescript
-// These are auto-imported globally (declared in env.d.ts)
+import { db, localSessions, localPages, localStateSnapshots } from '~/db';
+import { eq, desc, and, like, or } from 'drizzle-orm';
 
 // Query sessions
-const sessions = await select<{ id: string; title: string; description: string | null }>(
-  'SELECT id, title, description FROM local_sessions ORDER BY created_at DESC'
-);
+const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
 
-// Query with parameters
-const pages = await select<{ id: string; response: string }>(
-  'SELECT id, response FROM local_pages WHERE session_id = ? ORDER BY created_at',
-  [sessionId]
-);
+// Query with filter
+const pages = await db.select().from(localPages)
+  .where(eq(localPages.sessionId, sessionId))
+  .orderBy(localPages.createdAt);
 
 // Insert
-await execute(
-  'INSERT INTO local_pages (id, session_id, system, prompt, response, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  [id, sessionId, system, prompt, response, new Date().toISOString()]
-);
+await db.insert(localPages).values({
+  id, sessionId, system, prompt, response, createdAt: new Date().toISOString(),
+});
 
 // Update
-await execute(
-  'UPDATE local_sessions SET title = ?, updated_at = ? WHERE id = ?',
-  [newTitle, new Date().toISOString(), sessionId]
-);
+await db.update(localSessions)
+  .set({ title: newTitle, updatedAt: new Date().toISOString() })
+  .where(eq(localSessions.id, sessionId));
 
 // Delete
-await execute('DELETE FROM local_sessions WHERE id = ?', [sessionId]);
+await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+
+// Transaction
+await db.transaction(async (tx) => {
+  await tx.delete(localPages).where(eq(localPages.sessionId, sessionId));
+  await tx.delete(localSessions).where(eq(localSessions.id, sessionId));
+});
 ```
 
 **Detailed docs:** [Database Schema](./docs/database-schema.md)
@@ -330,6 +422,8 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'reasoning') { /* append reasoning */ }
   if (event.type === 'error') { /* handle error */ }
   if (event.type === 'done') { /* event.finishReason, event.usage available */ }
+  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
+  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
 }
 ```
 
@@ -386,16 +480,18 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
   if (event.type === 'text') { /* append text */ }
   if (event.type === 'error') { /* handle error */ }
   if (event.type === 'done') { /* event.finishReason, event.usage available */ }
+  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
+  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
 }
 ```
 
 ### Local Data Access
 
 ```typescript
-// select() and execute() are auto-imported globally
-const sessions = await select<{ id: string; title: string }>(
-  'SELECT id, title FROM local_sessions ORDER BY created_at DESC'
-);
+import { db, localSessions } from '~/db';
+import { eq, desc } from 'drizzle-orm';
+
+const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
 ```
 
 **Detailed docs:** [Frontend Architecture](./docs/frontend-architecture.md)
@@ -421,8 +517,10 @@ const sessions = await select<{ id: string; title: string }>(
 - Vignette, session, or profile data structures change
 
 **Process:**
-1. Add/modify the `CREATE TABLE IF NOT EXISTS` SQL in `gui/src/composables/useLocalDb.ts`
-2. Schema changes apply on next app launch (tables created if not exist; column additions require manual `ALTER TABLE` or DB recreation)
+1. Add/modify table definitions in `gui/src/db/schema.ts`
+2. Run `just generate-migration` — this generates a new numbered SQL migration in `gui/drizzle/`
+3. Migration is automatically applied on next app launch (bundled via `import.meta.glob`, run by `runMigrations()` in `gui/src/db/index.ts`)
+4. For existing databases created before the migration system, baseline detection marks all migrations as applied without re-running them
 
 ### When to Create a Component
 
@@ -474,6 +572,7 @@ All build and development commands are in the root `justfile`.
 | `just clippy` | cargo clippy in `engine/` |
 | `just fmt` | cargo fmt in `engine/` |
 | `just fmt-check` | cargo fmt --check in `engine/` |
+| `just generate-migration` | Generate Drizzle Kit migration from schema changes (`cd gui && bunx drizzle-kit generate`) |
 
 ## Key Dependencies
 
@@ -492,6 +591,9 @@ All build and development commands are in the root `justfile`.
 | `open-props` | CSS design tokens |
 | `marked` | Markdown rendering |
 | `zod` | Runtime validation |
+| `immer` | Immutable state transitions in gameplay modules (`createDraft`/`finishDraft`) |
+| `drizzle-orm` | Type-safe SQLite query builder (ORM via `sqlite-proxy` adapter) |
+| `drizzle-kit` | Schema migration generator (dev dependency) |
 | `vite` | Build tool (dev dependency) |
 | `@vitejs/plugin-vue` | Vite Vue plugin (dev dependency) |
 | `vue-tsc` | Vue TypeScript checking (dev dependency) |
@@ -505,6 +607,7 @@ All build and development commands are in the root `justfile`.
 | `tauri-plugin-dialog` | Native dialog plugin |
 | `tauri-plugin-fs` | File system plugin |
 | `reqwest` | HTTP client (streaming SSE) |
+| `bytes` | Byte buffer utilities (SSE stream parsing) |
 | `serde` / `serde_json` | Serialization |
 | `tokio` | Async runtime |
 | `futures` | Async stream utilities |
