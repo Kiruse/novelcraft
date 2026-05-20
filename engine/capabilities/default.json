@@ -21,6 +21,7 @@
     "dialog:allow-confirm",
     "fs:default",
     "fs:allow-read",
-    "fs:allow-write"
+    "fs:allow-write",
+    "store:default"
   ]
 }

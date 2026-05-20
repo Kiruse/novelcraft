@@ -6,7 +6,7 @@ This document describes the local SQLite database schema used for all gameplay s
 
 NovelCraft is a fully offline desktop app. All data lives in a **single local SQLite database** accessed via `tauri-plugin-sql` through **Drizzle ORM**. There is no server database, no PostgreSQL, no sync.
 
-- **Local database** (SQLite via `tauri-plugin-sql`) — gameplay state: stories, sessions, pages, state snapshots, lore entries, profiles, onboarding
+- **Local database** (SQLite via `tauri-plugin-sql`) — gameplay state: stories, sessions, pages, state snapshots, lore entries, profiles
 - **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
 - **Access**: Drizzle ORM through `db` instance and table references from `gui/src/db/`
 
@@ -88,9 +88,9 @@ Stores gameplay state snapshots per session. Each snapshot captures the full mod
 - **Checkpoints**: Snapshots at every 100-page boundary are kept permanently. Non-checkpoint snapshots are cleaned up after each `push()` finalization. Enable state reconstruction after forks.
 - **Creation**: Session creation inserts snapshot 0 with empty state `{}`. After each page's tool calls complete, the head snapshot is updated in place (or a new snapshot is inserted at checkpoint boundaries).
 - **Checkpointing**: Every 100 pages, a new snapshot is inserted (rather than updating the head in place). Non-checkpoint snapshots (those not on a 100-page boundary) are cleaned up after each push.
-- **Fork**: When a fork occurs at `page_index`, all snapshots with `page_index >= fork_index` are deleted. The head is recomputed from the youngest snapshot with `page_index < fork_index` by replaying tool calls from surviving pages.
-- **State is immutable** — immer drafts are used for convenience during tool execution and replay, but the canonical state is the snapshot data.
-- **Initial module state** is always empty (`{}`); first tool call populates what's needed. This is forward-compatible with module upgrades.
+- **Fork**: When a fork occurs at `page_index`, all snapshots with `page_index >= fork_index` are deleted. The head is recomputed from the youngest snapshot with `page_index < fork_index` by replaying tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state).
+- **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data.
+- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback. `executeTool()` applies this fallback when module state is undefined. This is forward-compatible with module upgrades.
 
 ### local_lore_entries
 
@@ -128,20 +128,6 @@ Stores user-defined player profiles. Profile data is local-only. The active prof
 - Only one profile may be active at a time
 - Default fields prepopulated: `name`, `appearance`, `interests`, `favorite color`
 - Managed via `gui/src/composables/useProfiles.ts`
-
-### local_onboarding
-
-Stores whether the first-run onboarding has been completed. Single-row table.
-
-**Columns:**
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `completed` | integer (boolean) | NOT NULL, default 0 | Whether onboarding is complete (0 = not done, 1 = done) |
-
-**Business rules:**
-- Exactly one row — created on first check if not present
-- Managed via `gui/src/composables/useOnboarding.ts`
 
 ## Querying Local Database
 
@@ -201,7 +187,32 @@ await db.update(localSessions)
 
 // Delete
 await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+
+// Multi-step write — use individual calls, NOT db.transaction()
+// (see "Transaction Constraint" below)
+await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
+await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 ```
+
+### Transaction Constraint
+
+**Do not use `db.transaction()`.** The `drizzle-orm/sqlite-proxy` adapter simulates transactions by sending raw `BEGIN`/`COMMIT` SQL statements. However, `@tauri-apps/plugin-sql` uses a `sqlx::Pool<Sqlite>` with a default `max_connections` of 10. Each `pool.execute()` call within the simulated transaction can be routed to a **different pool connection**, so the transaction context is lost. Operations that appear atomic will actually execute on separate connections — causing silent data loss (e.g., deletes in a "transaction" that silently roll back while inserts commit).
+
+**Correct pattern:** Use individual `await db.insert()` / `db.update()` / `db.delete()` calls in sequence. Each call auto-commits on its own connection.
+
+```typescript
+// WRONG — transaction context is lost across pool connections
+await db.transaction(async (tx) => {
+  await tx.delete(localPages).where(eq(localPages.sessionId, sessionId));
+  await tx.delete(localSessions).where(eq(localSessions.id, sessionId));
+});
+
+// CORRECT — individual auto-commit calls
+await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
+await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+```
+
+This constraint applies everywhere the `db` instance from `gui/src/db/` is used. There is no workaround short of replacing the `sqlite-proxy` adapter with a direct SQLite driver that supports true single-connection transactions.
 
 ## Migrations
 
@@ -225,7 +236,8 @@ export default defineConfig({
 
 Generated migrations are stored in `gui/drizzle/`:
 
-- `0000_legal_venom.sql` — Initial migration that creates all 7 tables
+- `0000_legal_venom.sql` — Initial migration that creates all 6 tables
+- `0001_brainy_morph.sql` — Drops the `local_onboarding` table (migrated to tauri-plugin-store)
 - `meta/_journal.json` — Drizzle Kit migration journal (tracks migration order and checksums)
 
 Each migration SQL file may contain multiple statements separated by `--> statement-breakpoint` markers. The migration runner splits on this marker and executes each statement sequentially.

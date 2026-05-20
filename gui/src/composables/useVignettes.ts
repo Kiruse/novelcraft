@@ -11,13 +11,12 @@ export interface VignetteRow {
 
 const recent = ref<VignetteRow[]>([]);
 const hasMore = ref(false);
+const vignettes = ref<VignetteRow[] | undefined>(undefined);
 
 export function useVignettes() {
-  const vignettes = ref<VignetteRow[] | undefined>(undefined);
-
   async function refresh() {
     await refreshRecent();
-    if (vignettes) await refreshAll();
+    if (vignettes.value !== undefined) await refreshAll();
   }
 
   async function refreshRecent() {
@@ -64,7 +63,7 @@ export function useVignettes() {
       });
     });
 
-    refresh();
+    await refresh();
     return id;
   }
 
@@ -74,7 +73,7 @@ export function useVignettes() {
       await tx.delete(localStateSnapshots).where(eq(localStateSnapshots.sessionId, id));
       await tx.delete(localSessions).where(eq(localSessions.id, id));
     });
-    refresh();
+    await refresh();
   }
 
   return {
@@ -84,6 +83,8 @@ export function useVignettes() {
     create,
     remove,
     refresh,
-    loadVignettes: refreshAll,
+    loadVignettes: async () => {
+      await refreshAll();
+    },
   };
 }

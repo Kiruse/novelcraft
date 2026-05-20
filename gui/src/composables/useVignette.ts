@@ -1,5 +1,4 @@
 import { eq, desc, and, lte, inArray, sql, gte } from 'drizzle-orm';
-import { createDraft, finishDraft } from "immer";
 import type { DeepReadonly, Ref } from "vue";
 import { db, localSessions, localPages, localStateSnapshots, SQLiteTx } from "~/db";
 import { createDefaultRegistry, type GameplaySession, type ToolCallRecord, toolCallRecordSchema } from "~/gameplay";
@@ -88,25 +87,13 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
       const toolCalls = toolCallRecordSchema.array().parse(JSON.parse(page.toolCalls));
       for (const toolCall of toolCalls) {
         const [modType, ...toolTypes] = toolCall.tool.split('::');
-        const toolType = toolTypes.join('::');
-        const mod = registry.get(modType);
-        const tool = mod?.tools?.find(tool => tool.name === toolType);
-        if (!mod || !tool) {
-          console.warn(`Unknown module:tool ${toolType}:${toolType}`);
-          continue;
-        }
+        const toolName = toolTypes.join('::');
 
-        const draft = createDraft(snapshot.data[modType] as any);
-
-        const result = await tool.execute(toolCall.params, {
-          session,
-          module: mod,
-          state: draft,
-        });
-        if (!result.success)
-          throw new Error(`Tool call ${toolCall.tool} failed during replay`);
-
-        snapshot.data[modType] = result.state ?? finishDraft(draft);
+        const result = await registry.executeTool(
+          session, modType, toolName, toolCall.params,
+          (mt) => snapshot.data[mt],
+        );
+        snapshot.data[modType] = result.newState;
       }
     }
   }

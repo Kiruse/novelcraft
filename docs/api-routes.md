@@ -16,7 +16,7 @@ There is no HTTP server. All communication between the Vue frontend and Rust bac
 
 ### Plugin Permissions
 
-Tauri v2 plugin permissions are configured in `engine/capabilities/default.json`. This capability grants the main window access to the `sql`, `dialog`, and `fs` plugins (load, execute, select, open, save, read, write, etc.). When adding a new Tauri plugin, its permissions must be added here.
+Tauri v2 plugin permissions are configured in `engine/capabilities/default.json`. This capability grants the main window access to the `sql`, `store`, `dialog`, and `fs` plugins (load, execute, select, open, save, read, write, store:default, etc.). When adding a new Tauri plugin, its permissions must be added here.
 
 ### Calling Commands from Frontend
 

@@ -42,7 +42,7 @@
               <button
                 class="vignette-delete-btn"
                 aria-label="Delete vignette"
-                @click.prevent="pendingDeleteId = v.id"
+                @click.stop.prevent="pendingDeleteId = v.id"
               >&times;</button>
             </div>
           </RouterLink>

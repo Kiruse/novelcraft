@@ -12,6 +12,7 @@ The frontend is built with Vue 3 + Vite + Vue Router, running inside a Tauri web
 - **Vite**: Build tool and dev server
 - **Vue Router**: Client-side routing
 - **tauri-plugin-sql**: Local SQLite for gameplay state
+- **tauri-plugin-store**: Persistent key/value store for simple flags and preferences
 - **Open Props**: CSS custom property design tokens
 
 ### Architecture
@@ -106,7 +107,7 @@ Page creation in the Vignette Play page follows a 2-step push/fork pattern coord
 2. **Run**: Call `game.run({session, ...})` to stream the LLM response. This is stateless — it returns `{ response, toolCalls, state }` without persisting.
 3. **Finalize**: Call the `PromptUpdater(response, toolCalls, state)` to persist the response and state transition to the DB.
 
-When `fork()` is used, it deletes pages and snapshots at/after the fork index, replays tool calls from surviving pages to rebuild state, then calls `push()` internally to create the new page.
+When `fork()` is used, it deletes pages and snapshots at/after the fork index, replays tool calls from surviving pages via `registry.executeTool()` to rebuild state (with `init()` fallback for uninitialized module state), then calls `push()` internally to create the new page.
 
 ### App Root (`gui/src/App.vue`)
 
@@ -140,10 +141,10 @@ All SQLite access goes through Drizzle ORM, defined in `gui/src/db/`.
 **Location:** `gui/src/db/`
 
 **Files:**
-- `schema.ts` — Drizzle table definitions for all 7 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
+- `schema.ts` — Drizzle table definitions for all 6 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
 - `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, `SQLiteTx`, `SQLiteTxCallback`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
 
-**Exports:** `db` (Drizzle instance), `schema`, and all table objects (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`, `localOnboarding`)
+**Exports:** `db` (Drizzle instance), `schema`, and all table objects (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`)
 
 ```typescript
 import { db, localSessions } from '~/db';
@@ -245,15 +246,17 @@ Vignette list data and CRUD operations. `create()` inserts a session and snapsho
 
 **Location:** `gui/src/composables/useVignettes.ts`
 
+**Shared state:** `vignettes`, `recent`, and `hasMore` are declared at module level (outside the composable function), making them singletons shared across all consumers. This ensures mutations (e.g. `remove()`) are immediately visible in every component using `useVignettes()` (sidebar, home page, vignettes list page).
+
 **Returns:** `{ vignettes, recent, hasMore, create, remove, refresh, loadVignettes }`
 
-- `vignettes` — `Readonly<Ref<VignetteRow[] | undefined>>` — all vignettes (loaded on demand via `loadVignettes`)
+- `vignettes` — `Readonly<Ref<VignetteRow[] | undefined>>` — all vignettes (loaded on demand via `loadVignettes`; `undefined` until loaded, empty array after)
 - `recent` — `Readonly<Ref<VignetteRow[]>>` — up to 3 most recent vignettes
 - `hasMore` — `Readonly<Ref<boolean>>` — whether more than 3 vignettes exist
 - `create()` — creates a new session with snapshot 0, returns the session ID
 - `remove(id)` — deletes session, its pages, and snapshots
 - `refresh()` — refreshes both recent and full list (if loaded)
-- `loadVignettes()` — loads the full vignette list
+- `loadVignettes()` — async wrapper around `refreshAll()` that loads the full vignette list
 
 ### useVignette
 
@@ -270,11 +273,11 @@ Manages a single vignette session — its metadata, pages, state snapshots, and 
 - `error` — `Readonly<Ref<string | undefined>>`
 - `save()` — persists `meta` changes to `local_sessions`
 - `push({ prompt?, system? })` — inserts a new page into the DB and reactive array. Returns a `PromptUpdater` function `(response, toolCalls, state) => Promise<void>` that finalizes the page with the LLM's response, tool calls, and state transition (including snapshot management).
-- `fork({ pageIndex, system?, prompt? })` — truncates pages >= `pageIndex` (DB + reactive), deletes snapshots >= `pageIndex`, loads the youngest snapshot before `pageIndex`, replays tool calls from surviving pages via `createDefaultRegistry()`, then calls `push()` to create a new page. Returns a `PromptUpdater`. System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
+- `fork({ pageIndex, system?, prompt? })` — truncates pages >= `pageIndex` (DB + reactive), deletes snapshots >= `pageIndex`, loads the youngest snapshot before `pageIndex`, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page. Returns a `PromptUpdater`. System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
 - `update({ pageIndex, system?, prompt?, response? })` — edits page text without AI involvement. Null clears, undefined keeps existing.
 - `getGameplaySession()` — returns a `GameplaySession` derived from the current snapshot: `{ sessionId, storyId, state: snapshot.data }`
 
-**Fork semantics:** `fork()` deletes the target page and all subsequent pages from the DB, deletes orphaned snapshots, rewinds state by loading the youngest snapshot before the fork index and replaying tool calls, then calls `push()` to create a new page. The `PromptUpdater` returned by `push()` handles snapshot checkpointing (every 100 pages) and state persistence.
+**Fork semantics:** `fork()` deletes the target page and all subsequent pages from the DB, deletes orphaned snapshots, rewinds state by loading the youngest snapshot before the fork index and replaying tool calls via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page. The `PromptUpdater` returned by `push()` handles snapshot checkpointing (every 100 pages) and state persistence.
 
 **Exported types:**
 - `VignetteMeta` — `{ title, storyId, disposition, createdAt, updatedAt }`
@@ -312,7 +315,7 @@ Stateless LLM gameplay loop — builds messages, streams the response, and retur
 - `thoughts` — accumulated reasoning text from reasoning-delta events (cleared when streaming starts)
 - `tokenUsage` — latest token usage (`LlmUsage`) from the stream's done event (prompt_tokens, completion_tokens, total_tokens)
 - `prompt` — `Readonly<Ref<PromptDebug | undefined>>` — snapshot of the last prompt sent to the LLM (populated during streaming, includes persona, messages, model, context, and promptId)
-- `run(opts)` — **stateless**: takes a `GameplaySession` (via `session` param), builds messages with module knowledge, creates a `GameplayModuleRegistry` via module-level `createDefaultRegistry()`, builds module tool set via `registry.getToolSet()`, streams via `streamLlm()`, accumulates text and reasoning chunks, tracks tool calls and state mutations during streaming, and returns `{ response, toolCalls, state }`. **Does not persist anything.** Consumers (the Vignette Play page) coordinate persistence by calling the `PromptUpdater` returned by `push()`/`fork()`. Accepts optional `promptId` (for debug identification), `getMessages` (function to mutate the messages array before sending, used for steer/inject modes), and `prependStreamText` (text to prepend to the live stream output).
+- `run(opts)` — **stateless**: takes a `GameplaySession` (via `session` param), builds messages with module knowledge, creates a `GameplayModuleRegistry` via module-level `createDefaultRegistry()`, builds module tool set via `registry.getToolSet()` (which internally delegates to `registry.executeTool()` for each tool call), streams via `streamLlm()`, accumulates text and reasoning chunks, tracks tool calls and state mutations during streaming, and returns `{ response, toolCalls, state }`. **Does not persist anything.** Consumers (the Vignette Play page) coordinate persistence by calling the `PromptUpdater` returned by `push()`/`fork()`. Accepts optional `promptId` (for debug identification), `getMessages` (function to mutate the messages array before sending, used for steer/inject modes), and `prependStreamText` (text to prepend to the live stream output).
 
 Also contains internal helpers:
 - `buildMessages()` — accepts optional `gameplaySession`, builds messages from pages with module knowledge injection
@@ -349,16 +352,20 @@ interface UnreachableHost {
 
 ### useOnboarding
 
-Singleton composable that tracks whether first-run onboarding has been completed. Uses module-level state so all callers share the same instance.
+Singleton composable that tracks whether first-run onboarding has been completed. Uses **tauri-plugin-store** (`LazyStore` from `@tauri-apps/plugin-store`) to persist a boolean flag instead of a SQLite table.
 
 **Location:** `gui/src/composables/useOnboarding.ts`
 
-**Usage:** `await useOnboarding()` — must be awaited because it queries SQLite on first call.
+**Usage:** `await useOnboarding()` — must be awaited because it reads from the store on first call.
 
 **Returns:** `{ completed: Readonly<Ref<boolean>>, complete: () => Promise<void> }`
 
-- `completed` — `true` once onboarding is done (checked against `local_onboarding` table on first call)
-- `complete()` — writes `completed = 1` to `local_onboarding` and sets the reactive ref to `true`
+- `completed` — `true` once onboarding is done (reads `onboarding_completed` key from `app.json` store on first call)
+- `complete()` — sets `onboarding_completed` to `true` in `app.json` and updates the reactive ref
+
+**Store details:**
+- Store file: `app.json` in the Tauri app data directory
+- Key: `onboarding_completed` (boolean)
 
 ### useToast
 

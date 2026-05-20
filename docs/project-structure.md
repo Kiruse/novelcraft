@@ -74,9 +74,9 @@ novelcraft/
 │   │   │   ├── useGame.ts            # Stateless gameplay loop (buildMessages, buildProfileContext, returns {response, toolCalls, state} — no persistence)
 │   │   │   ├── useShortcutsDialog.ts # Shared state for ShortcutsDialog (open/show/close/toggle)
 │   │   │   ├── useHostLiveness.ts    # LLM host liveness checking (singleton state)
-│   │   │   ├── useOnboarding.ts      # Onboarding completion state (singleton, local SQLite)
+│   │   │   ├── useOnboarding.ts      # Onboarding completion state (singleton, tauri-plugin-store)
 │   │   │   ├── useStoryBuilder.ts    # Story builder logic (saves to local_stories, uses createDefaultRegistry)
-│   │   │   ├── useVignettes.ts       # Vignette list data & operations (recent, hasMore, create, remove, refresh)
+│   │   │   ├── useVignettes.ts       # Vignette list data & operations (singleton shared state: recent, hasMore, vignettes, create, remove, refresh)
 │   │   │   ├── useVignette.ts        # Single vignette session (2-step push/fork pattern, snapshots, fork with snapshot cleanup via createDefaultRegistry)
 │   │   │   ├── useToast.ts           # Toast notification system
 │   │   │   └── useDebugMode.ts       # Debug mode toggle (singleton, persisted to localStorage)
@@ -91,7 +91,7 @@ novelcraft/
 │   │   │   ├── msgUtils.ts           # Message utilities
 │   │   │   └── suggestionParser.ts   # Suggestion parsing utilities
 │   │   ├── db/                       # Drizzle ORM database layer
-│   │   │   ├── schema.ts             # Drizzle table definitions (7 SQLite tables)
+│   │   │   ├── schema.ts             # Drizzle table definitions (6 SQLite tables)
 │   │   │   └── index.ts              # Drizzle instance (sqlite-proxy adapter) + table re-exports
 │   │   ├── prompts.ts                # Prompts & personas (single source of truth)
 │   │   ├── router/                   # Vue Router configuration
@@ -99,7 +99,7 @@ novelcraft/
 │   │   └── assets/css/               # Open Props CSS
 │   ├── drizzle.config.ts            # Drizzle Kit configuration (schema path, output dir, dialect)
 │   ├── drizzle/                     # Generated migration SQL files
-│   │   ├── 0000_legal_venom.sql     # Initial migration (creates all 7 tables)
+│   │   ├── 0000_legal_venom.sql     # Initial migration (creates all 6 tables)
 │   │   └── meta/
 │   │       └── _journal.json        # Drizzle Kit migration journal
 │   ├── vite-plugins/
@@ -124,7 +124,7 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
 
 **`engine/src/src/`**
 - `main.rs` — Binary entry point
-- `lib.rs` — App builder, plugin registration (`sql`, `dialog`, `fs`), command handler registration
+- `lib.rs` — App builder, plugin registration (`sql`, `store`, `dialog`, `fs`), command handler registration
 - `util.rs` — SSE stream parsing utilities; defines `StreamEvent` enum (`Text`, `Reasoning`, `ToolCall`, `Done`) and `process_stream()` async function that parses byte streams and invokes a callback for each event
 - `commands/` — Tauri commands organized by domain
   - `llm.rs` — LLM proxy: builds requests, streams from OpenAI-compatible API via `reqwest`, delegates SSE frame parsing to `util::process_stream()`, emits `llm:text`/`llm:reasoning`/`llm:tool_call`/`llm:error`/`llm:done` events
@@ -136,7 +136,7 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
 
 **`engine/capabilities/default.json`**
 - Tauri v2 capability file granting plugin permissions for the main window
-- Permissions: `sql:default`, `sql:allow-load`, `sql:allow-execute`, `sql:allow-select`, `dialog:default`, `dialog:allow-open`, `dialog:allow-save`, `dialog:allow-message`, `dialog:allow-ask`, `dialog:allow-confirm`, `fs:default`, `fs:allow-read`, `fs:allow-write`
+- Permissions: `sql:default`, `sql:allow-load`, `sql:allow-execute`, `sql:allow-select`, `dialog:default`, `dialog:allow-open`, `dialog:allow-save`, `dialog:allow-message`, `dialog:allow-ask`, `dialog:allow-confirm`, `fs:default`, `fs:allow-read`, `fs:allow-write`, `store:default`
 
 **`engine/src/tauri.conf.json`**
 - `frontendDist` points to `../../gui/dist`
@@ -170,17 +170,17 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 - Vue composition API and vue-router functions are auto-imported at build time by the Vite auto-import plugin (`gui/vite-plugins/auto-import.ts`)
 - Key composables:
   - `useLlmStream` — Centralized LLM streaming with optional `tools` support (never duplicate Tauri event listening)
-  - `useGame` — Stateless gameplay loop: builds messages with module knowledge, creates registry via `createDefaultRegistry()`, builds tool set via `registry.getToolSet()` (immer `createDraft`/`finishDraft` for state transitions), tracks tool calls. Returns `{ response, toolCalls, state }` — does NOT persist. Also contains `buildMessages()` and `buildProfileContext()` (moved from deleted `llmHelpers.ts`)
-  - `useVignette` — Single vignette session management with 2-step push/fork pattern: `push()`/`fork()` return a `PromptUpdater` for consumers to finalize after `run()`. Manages snapshots, fork with snapshot cleanup via tool call replay. Exposes `getGameplaySession()` and readonly `snapshot` ref
-  - `useVignettes` — Vignette list data and CRUD operations (creates snapshot 0 on creation, deletes pages + snapshots + session on removal). Returns `{ vignettes, recent, hasMore, create, remove, refresh, loadVignettes }`
+   - `useGame` — Stateless gameplay loop: builds messages with module knowledge, creates registry via `createDefaultRegistry()`, builds tool set via `registry.getToolSet()` (which delegates to `registry.executeTool()` for immer state transitions), tracks tool calls. Returns `{ response, toolCalls, state }` — does NOT persist. Also contains `buildMessages()` and `buildProfileContext()` (moved from deleted `llmHelpers.ts`)
+   - `useVignette` — Single vignette session management with 2-step push/fork pattern: `push()`/`fork()` return a `PromptUpdater` for consumers to finalize after `run()`. Manages snapshots, fork with snapshot cleanup via tool call replay through `registry.executeTool()` (with `init()` fallback for uninitialized module state). No direct `immer` import — delegates all state transitions to the registry. Exposes `getGameplaySession()` and readonly `snapshot` ref
+  - `useVignettes` — Vignette list data and CRUD operations (creates snapshot 0 on creation, deletes pages + snapshots + session on removal). `vignettes`, `recent`, `hasMore` are module-level singletons so all consumers share the same reactive state. Returns `{ vignettes, recent, hasMore, create, remove, refresh, loadVignettes }`
   - `useStoryBuilder` — Story builder logic, saves to `local_stories` table, uses `createDefaultRegistry()`
   - `useHostLiveness` — LLM host liveness checking with singleton state (ping_hosts via Tauri)
   - `useDebugMode` — Debug mode toggle with singleton `debugMode` ref persisted to localStorage
 
 **`gui/src/gameplay/`**
 - Game modules used by the frontend
-- Core types: `GameplaySession` (simplified: `{ storyId, sessionId, state }` — no `modules` field), `GameplayModule`, `ToolResult`, `ToolCallRecord`, `GameplayModuleRegistry`, `createDefaultRegistry`, `defineGameplayModule` (with `.withTool()` builder)
-- Tool execution uses `immer` for immutable state transitions (`createDraft`/`finishDraft` in `GameplayModuleRegistry.getToolSet()`) — tools mutate `ctx.state` directly instead of using spread operators
+- Core types: `GameplaySession` (simplified: `{ storyId, sessionId, state }` — no `modules` field), `GameplayModule`, `ExecuteToolResult`, `ToolResult`, `ToolCallRecord`, `GameplayModuleRegistry`, `createDefaultRegistry`, `defineGameplayModule` (with `.withTool()` builder)
+- Tool execution uses `immer` for immutable state transitions (`createDraft`/`finishDraft` centralized in `GameplayModuleRegistry.executeTool()`) — both `getToolSet()` and `replay()` in `useVignette` delegate to `executeTool()`. Tools mutate `ctx.state` directly instead of using spread operators
 - Registered modules: `NPCModule`, `PlanModule`, `LoreModule`
 - Barrel export via `index.ts` with `createDefaultRegistry()` factory
 - Consumed by `useGame`, `useStoryBuilder`, and other composables
@@ -192,13 +192,14 @@ Contains the Vue 3 + Vite frontend application. No server — this runs in a Tau
 
 **`gui/src/db/`**
 - Drizzle ORM database layer for all SQLite access
-- `schema.ts` — Drizzle table definitions for all 7 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
+- `schema.ts` — Drizzle table definitions for all 6 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
 - `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
 - **Import pattern**: `import { db, localProfiles } from '~/db';` plus operators from `drizzle-orm`
 
 **`gui/drizzle/`**
 - Generated migration SQL files managed by Drizzle Kit
-- `0000_legal_venom.sql` — Initial migration creating all 7 tables
+- `0000_legal_venom.sql` — Initial migration creating all 6 tables
+- `0001_brainy_morph.sql` — Drops `local_onboarding` table (migrated to tauri-plugin-store)
 - `meta/_journal.json` — Drizzle Kit migration journal (tracks order and checksums)
 - Migrations are bundled at build time via `import.meta.glob` and applied by `runMigrations()` in `gui/src/db/index.ts`
 - Generate new migrations with `just generate-migration`

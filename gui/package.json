@@ -16,6 +16,7 @@
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-sql": "^2",
+    "@tauri-apps/plugin-store": "^2.4.3",
     "case-anything": "^3.1.2",
     "drizzle-orm": "^0.45.2",
     "immer": "^11.1.8",

@@ -54,7 +54,3 @@ export const localProfiles = sqliteTable('local_profiles', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
-
-export const localOnboarding = sqliteTable('local_onboarding', {
-  completed: integer('completed').notNull().default(0),
-});

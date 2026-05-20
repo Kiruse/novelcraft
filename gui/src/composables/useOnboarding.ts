@@ -1,4 +1,7 @@
-import { db, localOnboarding } from '~/db';
+import { LazyStore } from '@tauri-apps/plugin-store';
+
+const store = new LazyStore('app.json');
+const KEY = 'onboarding_completed';
 
 const completed = ref(false);
 let initialized = false;
@@ -6,10 +9,10 @@ let initialized = false;
 export function useOnboarding() {
   if (!initialized) {
     initialized = true;
-    db.select({ completed: localOnboarding.completed })
-      .from(localOnboarding)
-      .then((rows) => {
-        completed.value = rows.length > 0 && rows[0].completed === 1;
+    store
+      .get<boolean>(KEY)
+      .then((val) => {
+        completed.value = val === true;
       })
       .catch(() => {
         completed.value = false;
@@ -17,13 +20,12 @@ export function useOnboarding() {
   }
 
   async function complete() {
-    await db.delete(localOnboarding);
-    await db.insert(localOnboarding).values({ completed: 1 });
+    await store.set(KEY, true);
     completed.value = true;
   }
 
   async function reset() {
-    await db.delete(localOnboarding);
+    await store.delete(KEY);
     completed.value = false;
   }
 

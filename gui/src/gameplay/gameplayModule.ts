@@ -57,6 +57,12 @@ export const toolCallRecordSchema = z.object({
   params: z.record(z.string(), z.unknown()),
 });
 
+export interface ExecuteToolResult {
+  success: true;
+  newState: unknown;
+  response: string;
+}
+
 export class GameplayModuleRegistry {
   private _modules: Record<string, GameplayModule>;
 
@@ -67,13 +73,47 @@ export class GameplayModuleRegistry {
   get = (type: string): GameplayModule | undefined => this._modules[type];
   getAll = () => this._modules;
 
+  /** Execute a single tool call against the given state container.
+   *  Handles init() fallback, immer draft, and state finalization.
+   *  `getState(modType)` must return the current module state (or `undefined`).
+   *  Returns the new immutable state and the tool's response string.
+   */
+  async executeTool(
+    session: GameplaySession,
+    modType: string,
+    toolName: string,
+    params: Record<string, unknown>,
+    getState: (modType: string) => unknown,
+  ): Promise<ExecuteToolResult> {
+    const mod = this.get(modType);
+    const tool = mod?.tools?.find(t => t.name === toolName);
+    if (!mod || !tool)
+      throw new Error(`Unknown tool: ${modType}::${toolName}`);
+
+    const base = getState(modType) ?? await mod.init();
+    const draft = createDraft(base);
+
+    const result = await tool.execute(params, {
+      session,
+      module: mod,
+      state: draft,
+    });
+
+    if (!result.success)
+      throw new Error(result.error);
+
+    return {
+      success: true,
+      newState: result.state ?? finishDraft(draft),
+      response: result.response ?? 'OK',
+    };
+  }
+
   /** Get a `ToolSet` which can be passed to the `ai` SDK.
    * The `onToolCall` handler receives the new module state which it should persist.
-   * State is managed via `immer`.
    */
   getToolSet(
     session: DeepReadonly<GameplaySession>,
-    /** A callback which should handle persisting new state */
     onToolCall: OnToolCall,
   ): ToolSet {
     const tools: ToolSet = {};
@@ -83,29 +123,21 @@ export class GameplayModuleRegistry {
       if (!gameplayModule || !gameplayModule.tools?.length) continue;
 
       for (const toolDef of gameplayModule.tools) {
-        tools[`${modType}::${toolDef.name}`] = {
+        const key = `${modType}::${toolDef.name}`;
+        tools[key] = {
           description: toolDef.description,
           inputSchema: toolDef.parameters ? zodSchema(toolDef.parameters) : zodSchema(z.object({})),
           execute: async (input: Record<string, unknown>) => {
-            const base = session.state[modType] ?? await gameplayModule.init();
-            const draft = createDraft(base);
-
-            const result = await toolDef.execute(
-              input,
-              {
-                session,
-                module: gameplayModule,
-                state: draft,
-              },
-            );
-
-            if (!result.success)
-              return `Error: ${result.error}`;
-
-            const newState = result.state ?? finishDraft(draft);
-            onToolCall(`${modType}::${toolDef.name}`, input, modType, newState);
-
-            return result.response ?? 'OK';
+            try {
+              const result = await this.executeTool(
+                session, modType, toolDef.name, input,
+                (mt) => session.state[mt],
+              );
+              onToolCall(key, input, modType, result.newState);
+              return result.response;
+            } catch (err) {
+              return `Error: ${err instanceof Error ? err.message : String(err)}`;
+            }
           },
         };
       }

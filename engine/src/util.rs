@@ -54,9 +54,7 @@ where
             usage = Some(u);
           }
 
-          if let Some(choices) = &parsed.choices {
-            let choice = choices.first().unwrap();
-
+          if let Some(choice) = parsed.choices.as_ref().and_then(|choices| choices.first()) {
             if let Some(fr) = &choice.finish_reason {
               if !fr.is_empty() {
                 finish_reason = Some(fr.clone());

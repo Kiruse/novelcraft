@@ -151,12 +151,12 @@ function buildMessages({
   if (session) {
     const modulesKnowledge: Record<string, Context> = {};
     for (const mod of Object.values(registry.getAll())) {
-      const knowledge = mod.getKnowledge(readonly({
+      const knowledge = session.state[mod.type] ? mod.getKnowledge(readonly({
         session,
         module: mod,
         state: session.state[mod.type],
-      }));
-      if (Object.keys(knowledge).length > 0) {
+      })) : undefined;
+      if (knowledge && Object.keys(knowledge).length > 0) {
         modulesKnowledge[mod.type] = knowledge as Context;
       }
     }

@@ -139,15 +139,15 @@ return toolErr('Something went wrong');
 
 ### Immer State Transitions
 
-Tool execution in `GameplayModuleRegistry.getToolSet()` uses `immer` (`createDraft`/`finishDraft`) for immutable state updates. This means tools can mutate `ctx.state` directly without spread operators:
+Tool execution in `GameplayModuleRegistry.getToolSet()` and tool call replay in `useVignette.replay()` both delegate to `GameplayModuleRegistry.executeTool()`, which uses `immer` (`createDraft`/`finishDraft`) for immutable state updates. This means tools can mutate `ctx.state` directly without spread operators:
 
-1. When `session.state[modType]` is undefined, `getToolSet()` calls `module.init()` to produce default state
+1. When module state is undefined, `module.init()` is called to produce default state (handled by `executeTool()`)
 2. `createDraft(base)` creates a mutable draft proxy of the current module state
 3. Draft is passed as `ctx.state` to the tool handler
 3. Tool mutates `ctx.state` directly (e.g. `ctx.state.someField = value`)
 4. If `toolOk()` is returned (no `state` argument), `finishDraft(draft)` produces the new immutable state
 5. If `toolOk(newState)` is returned, the provided state overrides the draft entirely
-6. If `toolErr(error)` is returned, the draft is discarded — no state change occurs
+6. If `toolErr(error)` is returned, `executeTool()` throws — the draft is discarded, no state change occurs
 
 **Dependency:** `immer` ^11.1.6
 
@@ -317,11 +317,13 @@ await db.update(localSessions)
 // Delete
 await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 
-// Transaction
-await db.transaction(async (tx) => {
-  await tx.delete(localPages).where(eq(localPages.sessionId, sessionId));
-  await tx.delete(localSessions).where(eq(localSessions.id, sessionId));
-});
+// Multi-step write — use individual calls, NOT db.transaction()
+// The sqlite-proxy adapter simulates transactions by sending raw BEGIN/COMMIT SQL,
+// but @tauri-apps/plugin-sql uses a sqlx::Pool<Sqlite> with max_connections = 10.
+// Each pool.execute() can route to a different connection, so the transaction
+// context is lost — causing silent data loss. Always use individual calls.
+await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
+await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 ```
 
 ## Rust Backend Formatting

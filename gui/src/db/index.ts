@@ -3,8 +3,7 @@ import Database from '@tauri-apps/plugin-sql';
 import * as schema from './schema';
 
 const migrationEntries = Object.entries(
-  import.meta.glob('../../drizzle/*.sql', {
-    query: '?raw',
+  import.meta.glob('../../drizzle/*.sql?raw', {
     eager: true,
     import: 'default',
   }) as Record<string, string>,

@@ -10,7 +10,8 @@ NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, n
 
 - **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`) and file operations (export/import, file dialogs)
 - **Vue 3 frontend** (`gui/src/`) runs in a webview via Vite — manages gameplay state, LLM orchestration, and all UI
-- **Local SQLite** via `tauri-plugin-sql` — all gameplay data (stories, sessions, pages, state snapshots, lore entries, profiles) lives in a local `.db` file
+- **Local SQLite** via `tauri-plugin-sql` — structured gameplay data (stories, sessions, pages, state snapshots, lore entries, profiles) lives in a local `.db` file
+- **Persistent key/value store** via `tauri-plugin-store` — simple flags and preferences (e.g. onboarding completed) stored as JSON on disk. Used instead of SQLite for single-row, non-queryable data.
 - **No server, no auth, no PostgreSQL** — single-user desktop application
 - **LLM calls** go through Rust Tauri commands — `useLlmStream` internally uses `ConversationalArchetype` from `@stegakir/aikit` with `createTauriModel()` (which implements `LanguageModelV3` from `@ai-sdk/provider`). The AI SDK bridge calls `invoke('prompt', ...)` and maps Tauri events (`llm:text`, `llm:reasoning`, `llm:tool_call`, `llm:error`, `llm:done`) to AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
 - **Story sharing** is file-based — export/import JSON files via native file dialogs
@@ -130,12 +131,24 @@ Always import from `~/prompts` & maintain them there as a single source of truth
 
 **Important terminology:** A "persona" is ONLY the system prompt passed as the `persona` parameter to the LLM call — it defines who the agent *is*. The sole persona used throughout the app is `PERSONA_PLATFORM`. Everything else — scene instructions (`SYSTEM_VIGNETTE_OPEN`), steering notes (`SYSTEM_STEER`), editor requests (`SYSTEM_INSTRUCT`), page-level `system` fields — are **NOT** personas. They are regular messages with `author: 'system'` injected into the conversation history to guide the agent's behavior.
 
+### Persistent Key/Value Store — tauri-plugin-store
+
+Simple flags, preferences, and single-row settings are stored in **tauri-plugin-store** (a JSON file on disk) rather than SQLite tables. A single-row SQLite table is wasteful overhead when a key/value store suffices.
+
+- **Frontend**: `LazyStore` from `@tauri-apps/plugin-store` — lazy-loads a store file (e.g. `app.json`) and provides `get()`/`set()`/`has()` methods
+- **Store file**: `app.json` in the Tauri app data directory
+- **Rust side**: `tauri-plugin-store = "2"` in `Cargo.toml`, `.plugin(tauri_plugin_store::Builder::default().build())` in `lib.rs`
+- **Capabilities**: `store:default` in `engine/capabilities/default.json`
+- **Current usage**: Onboarding completed flag (`onboarding_completed` boolean in `app.json`), managed by `gui/src/composables/useOnboarding.ts`
+
+**Convention**: Use `tauri-plugin-store` for simple key/value pairs (flags, preferences, single-row settings). Use SQLite tables only for structured, multi-row, queryable data.
+
 ### Client-Side Data — SQLite via Drizzle ORM
 
 Gameplay state (stories, sessions, pages, state snapshots, lore entries, profiles) is stored in **local SQLite** via `tauri-plugin-sql`, accessed through **Drizzle ORM**.
 
 - **DB module**: `gui/src/db/` — Drizzle ORM schema definitions and instance
-  - `schema.ts` — Drizzle table definitions for all 7 SQLite tables (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`, `localOnboarding`). Column property names are camelCase mapping to snake_case SQL columns.
+  - `schema.ts` — Drizzle table definitions for all 6 SQLite tables (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`). Column property names are camelCase mapping to snake_case SQL columns.
   - `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
 - **Import pattern**: `import { db, localProfiles } from '~/db';` plus operators from `drizzle-orm` (e.g. `eq`, `desc`, `like`, `and`, `or`)
 - **Composable**: `gui/src/composables/useProfiles.ts` — wraps `local_profiles` table; exposes `profiles`, `activeProfile`, `create`, `update`, `remove`, `setActive`, `init`; auto-creates a default profile on first use (max 5)
@@ -143,6 +156,7 @@ Gameplay state (stories, sessions, pages, state snapshots, lore entries, profile
 - **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
 - **Dependencies**: `@tauri-apps/plugin-sql`, `drizzle-orm`, `drizzle-kit` (dev)
 - **Migrations**: Managed via `drizzle-kit`. Migration SQL files in `gui/drizzle/` are bundled at build time via `import.meta.glob` and applied on first DB connection. Baseline detection handles databases created before the migration system existed.
+- **No `db.transaction()`**: The `drizzle-orm/sqlite-proxy` adapter simulates transactions by sending raw `BEGIN`/`COMMIT` SQL, but `@tauri-apps/plugin-sql` uses a `sqlx::Pool<Sqlite>` with default `max_connections = 10`. Each `pool.execute()` within the "transaction" can route to a different pool connection, so the transaction context is lost. This causes silent data loss. **Always use individual `db.insert()`/`db.update()`/`db.delete()` calls instead of `db.transaction()`.**
 
 **Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/composables/useGame.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
 
@@ -158,6 +172,11 @@ import { localPages } from '~/db';
 await db.insert(localPages).values({
   id, sessionId, response, createdAt: new Date().toISOString(),
 });
+
+// Multi-step write — use individual calls, NOT db.transaction()
+// (sqlite-proxy + sqlx connection pool breaks transaction semantics)
+await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
+await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 ```
 
 ### LLM Streaming — useLlmStream
@@ -192,7 +211,8 @@ Modules define gameplay mechanics via tools exposed to the LLM.
 - `GameplaySession` — simplified to `{ storyId, sessionId, state: Record<string, unknown> }`. No `modules` field. State is a flat map from module type to module-specific data. Managed by `useVignette` (via `getGameplaySession()`) rather than a dedicated composable.
 - `GameplayModuleContext` — has `session`, `module`, `state` fields (access `storyId`/`sessionId` via `ctx.session.storyId`/`ctx.session.sessionId`)
 - `ToolResult<S>` — `{ success: true; state?: S; response?: string } | { success: false; error: string }`. When `state` is omitted on success, the draft mutations from immer are used. The `response` field is used by query-only tools (like lore) to return data to the LLM without mutating state.
-- `GameplayModuleRegistry` — class with `get()`, `getAll()`, `getToolSet()` methods. `getToolSet()` uses immer's `createDraft`/`finishDraft` for immutable state transitions. When a module's state is undefined (first tool call), `getToolSet()` calls `module.init()` to produce default state. Tool names in module definitions are unprefixed (e.g. `'move'`); `getToolSet()` auto-prefixes them to `${modType}::${toolDef.name}`. The `onToolCall` callback receives the full prefixed key (see below)
+- `ExecuteToolResult` — `{ success: true; newState: unknown; response: string }`. Returned by `executeTool()`.
+- `GameplayModuleRegistry` — class with `get()`, `getAll()`, `executeTool()`, `getToolSet()` methods. `executeTool()` is the single method encapsulating the init-draft-execute-finalize sequence (handles `init()` fallback, immer `createDraft`/`finishDraft`, and state finalization). Both `getToolSet()` (live tool execution during LLM streaming) and `replay()` in `useVignette` delegate to `executeTool()`. Tool names in module definitions are unprefixed (e.g. `'move'`); `getToolSet()` auto-prefixes them to `${modType}::${toolDef.name}`. The `onToolCall` callback receives the full prefixed key (see below)
 - `createDefaultRegistry()` — factory that creates a registry pre-loaded with `NPCModule`, `PlanModule`, `LoreModule`. Uses `GameplayModuleRegistry` constructor (no `register()` method).
 - `defineGameplayModule()` — factory with `.withTool()` builder pattern for adding tools to a module. Requires an `init()` method returning the default state (supports `MaybePromise`).
 - `MaybePromise<T>` — local type alias in `gameplayModule.ts` for `T | Promise<T>`
@@ -202,15 +222,15 @@ Modules define gameplay mechanics via tools exposed to the LLM.
 - `toolOk(state?, opts?)` — `state` is optional. `toolOk()` means success with no state override (draft mutations apply). `toolOk(newState)` means success, override entire state. Accepts optional `{ response?: string }` as second arg
 - `toolErr(error)` — returns a failure result
 
-**Immer state transitions** (in `GameplayModuleRegistry.getToolSet()`):
+**Immer state transitions** (centralized in `GameplayModuleRegistry.executeTool()`):
 
-Tool execution uses `immer` for immutable state updates:
-1. When `session.state[modType]` is undefined, `getToolSet()` calls `module.init()` to produce default state
+Tool execution uses `immer` for immutable state updates. Both `getToolSet()` (live tool execution during LLM streaming) and `replay()` in `useVignette` delegate to `executeTool()`, which handles the full init-draft-execute-finalize sequence:
+1. When module state is undefined, `module.init()` is called to produce default state
 2. `createDraft(base)` creates a mutable draft proxy
 3. Draft is passed as `ctx.state` to the tool — the tool mutates `ctx.state` directly
 4. If `result.state` is provided, it overrides the draft entirely
 5. If `result.state` is undefined, `finishDraft(draft)` produces the new immutable state
-6. On error, the draft is discarded (no state change)
+6. On error (tool returns `toolErr()`), `executeTool()` throws — the draft is discarded (no state change). `getToolSet()` catches this and wraps it in an `Error: ...` string for the AI SDK
 
 Modules use direct draft mutation instead of spread operators:
 - `npcModule.ts`: `state.npcs[name]!.location = destination; return toolOk();`
@@ -233,9 +253,9 @@ State snapshots in `local_state_snapshots` enable undo/fork by capturing module 
 - **Session creation** → snapshot 0 with empty state `{}`
 - **After each page's tool calls** → head snapshot updated in place (or new snapshot inserted at checkpoint boundaries)
 - **Every 100 pages** → copy current head as checkpoint before updating
-- **Fork** → delete snapshots with `page_index >= fork_index`, recompute head from youngest snapshot before `fork_index` via tool call replay through `createDefaultRegistry()`, then `push()` to create a new page
-- **State is immutable** — immer drafts are used for convenience during tool execution and replay, but the canonical state is the snapshot data
-- **Initial module state** is always empty; first tool call populates what's needed (forward-compatible with module upgrades)
+- **Fork** → delete snapshots with `page_index >= fork_index`, recompute head from youngest snapshot before `fork_index` via tool call replay through `registry.executeTool()` (with `init()` fallback for uninitialized module state), then `push()` to create a new page
+- **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data
+- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback (forward-compatible with module upgrades). `executeTool()` applies this fallback when module state is undefined.
 
 ### LLM Helpers — buildMessages
 
@@ -249,7 +269,7 @@ State snapshots in `local_state_snapshots` enable undo/fork by capturing module 
 `useVignette` manages a single vignette session and exposes a 2-step push/fork pattern:
 
 - **`push({ prompt?, system? })`** — inserts a page into the DB/reactive array and returns a `PromptUpdater` function. The updater is called later with `(response, toolCalls, state)` to finalize the page with the LLM's response and state transition.
-- **`fork({ pageIndex, system?, prompt? })`** — based on `push()`: truncates pages >= pageIndex (DB + reactive), deletes snapshots >= pageIndex, loads the youngest snapshot before pageIndex, replays tool calls from surviving pages, then calls `push()` to create a new page (returning its updater). System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
+- **`fork({ pageIndex, system?, prompt? })`** — based on `push()`: truncates pages >= pageIndex (DB + reactive), deletes snapshots >= pageIndex, loads the youngest snapshot before pageIndex, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page (returning its updater). System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
 - **`update({ pageIndex, system?, prompt?, response? })`** — edits page text without AI involvement. Null clears, undefined keeps existing.
 - **`getGameplaySession()`** — returns a `GameplaySession` derived from the current snapshot.
 - **`snapshot`** — readonly ref exposing the current state snapshot.
@@ -358,11 +378,10 @@ await db.update(localSessions)
 // Delete
 await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 
-// Transaction
-await db.transaction(async (tx) => {
-  await tx.delete(localPages).where(eq(localPages.sessionId, sessionId));
-  await tx.delete(localSessions).where(eq(localSessions.id, sessionId));
-});
+// Multi-step write — use individual calls, NOT db.transaction()
+// sqlite-proxy + sqlx Pool connection routing breaks transaction semantics
+await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
+await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 ```
 
 **Detailed docs:** [Database Schema](./docs/database-schema.md)
@@ -584,6 +603,7 @@ All build and development commands are in the root `justfile`.
 | `vue-router` | Client-side routing |
 | `@tauri-apps/api` | Tauri IPC (`invoke`, `listen`) |
 | `@tauri-apps/plugin-sql` | SQLite database access |
+| `@tauri-apps/plugin-store` | Persistent key/value store (flags, preferences) |
 | `@tauri-apps/plugin-dialog` | Native file dialogs |
 | `@tauri-apps/plugin-fs` | File system access |
 | `@stegakir/aikit` | AI/LLM utilities (`ConversationalArchetype`, `Conversation`, `MemoryMessageStore`) |
@@ -591,7 +611,7 @@ All build and development commands are in the root `justfile`.
 | `open-props` | CSS design tokens |
 | `marked` | Markdown rendering |
 | `zod` | Runtime validation |
-| `immer` | Immutable state transitions in gameplay modules (`createDraft`/`finishDraft`) |
+| `immer` | Immutable state transitions in `GameplayModuleRegistry.executeTool()` (`createDraft`/`finishDraft`) |
 | `drizzle-orm` | Type-safe SQLite query builder (ORM via `sqlite-proxy` adapter) |
 | `drizzle-kit` | Schema migration generator (dev dependency) |
 | `vite` | Build tool (dev dependency) |
@@ -604,6 +624,7 @@ All build and development commands are in the root `justfile`.
 |-------|---------|
 | `tauri` | Desktop app framework |
 | `tauri-plugin-sql` | SQLite plugin |
+| `tauri-plugin-store` | Persistent key/value store plugin |
 | `tauri-plugin-dialog` | Native dialog plugin |
 | `tauri-plugin-fs` | File system plugin |
 | `reqwest` | HTTP client (streaming SSE) |
