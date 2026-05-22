@@ -16,7 +16,7 @@
         </p>
 
         <textarea
-          v-model="vignetteMeta.disposition"
+          v-model="vignetteMeta.description"
           class="disposition-area"
           placeholder="A lonely lighthouse keeper on a storm-wracked island starts receiving radio messages from a ship that sank fifty years ago..."
           rows="6"
@@ -113,10 +113,10 @@ const { status: gameStatus, streamText, thoughts, tokenUsage, prompt, run } = us
 });
 
 const streaming = computed(() => gameStatus.value === 'streaming');
-const suggestionPrompt = computed(() => vignetteMeta.value.disposition.trim());
+const suggestionPrompt = computed(() => vignetteMeta.value.description?.trim() ?? '');
 
 const canLockIn = computed(() =>
-  vignetteMeta.value.disposition.trim().length > 0 || selectedSuggestionIdx.value !== null
+  (vignetteMeta.value.description?.trim().length ?? 0) > 0 || selectedSuggestionIdx.value !== null
 );
 
 let programmaticDisposition = false;
@@ -170,7 +170,7 @@ function useSuggestion(suggestion: ParsedSuggestion) {
       vignetteMeta.value = {
         ...vignetteMeta.value,
         title: suggestion.title,
-        disposition: suggestion.description,
+        description: suggestion.description,
       };
       nextTick(() => { programmaticDisposition = false; });
     }
@@ -211,7 +211,7 @@ async function createPage(prompt: string, pageIndex: number) {
     const { response, toolCalls, state } = await run({
       session,
       promptId: prompt ? 'prompt' : 'expand',
-      prependStreamText: prompt ? undefined : lastPage.prompt,
+      prependStreamText: prompt ? undefined : (lastPage.prompt ?? undefined),
     });
 
     await update(response, toolCalls, state);

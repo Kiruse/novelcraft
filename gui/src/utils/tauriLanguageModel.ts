@@ -13,6 +13,7 @@ import type {
   LanguageModelV3FinishReason,
   LanguageModelV3Usage,
 } from '@ai-sdk/provider';
+import { commands } from '~/bindings';
 
 interface TauriMessage {
   author: string;
@@ -293,8 +294,11 @@ export class TauriLanguageModel implements LanguageModelV3 {
       cleanups.push(() => options.abortSignal!.removeEventListener('abort', onAbort));
     }
 
-    invoke('prompt', {
-      request: { model: this.modelId, messages, tools, request_id: requestId },
+    commands.prompt({
+      model: this.modelId,
+      messages,
+      tools,
+      request_id: requestId,
     }).catch(() => {
       cleanup();
     });
@@ -306,8 +310,8 @@ export class TauriLanguageModel implements LanguageModelV3 {
     const { stream } = await this.doStream(options);
     const reader = stream.getReader();
 
-    const texts: string[] = [];
-    const reasoning: string[] = [];
+    let response = '';
+    let reasoning = '';
     const toolCalls = new Map<string, { name: string; args: string }>();
     let finishReason: LanguageModelV3FinishReason = { unified: 'stop', raw: undefined };
     let usage: LanguageModelV3Usage = emptyUsage();
@@ -318,10 +322,10 @@ export class TauriLanguageModel implements LanguageModelV3 {
 
       switch (value.type) {
         case 'text-delta':
-          texts.push(value.delta);
+          response += value.delta;
           break;
         case 'reasoning-delta':
-          reasoning.push(value.delta);
+          reasoning += value.delta;
           break;
         case 'tool-input-start':
           toolCalls.set(value.id, { name: value.toolName, args: '' });
@@ -340,13 +344,10 @@ export class TauriLanguageModel implements LanguageModelV3 {
 
     const content: LanguageModelV3Content[] = [];
 
-    if (reasoning.length > 0) {
-      content.push({ type: 'reasoning', text: reasoning.join('') });
-    }
-
-    if (texts.length > 0) {
-      content.push({ type: 'text', text: texts.join('') });
-    }
+    if (reasoning.trim())
+      content.push({ type: 'reasoning', text: reasoning.trim() });
+    if (response.trim())
+      content.push({ type: 'text', text: response.trim() });
 
     for (const [id, { name, args }] of toolCalls) {
       content.push({ type: 'tool-call', toolCallId: id, toolName: name, input: args });

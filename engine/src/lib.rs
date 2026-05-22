@@ -1,31 +1,62 @@
 mod commands;
+mod error;
 mod infer;
 mod util;
 
-use commands::{fs as fs_cmds, llm as llm_cmds};
+use commands as cmds;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  env_logger::init();
+  let builder = tauri_specta::Builder::<tauri::Wry>::new()
+    .commands(tauri_specta::collect_commands![
+      cmds::fs::datapath,
+      cmds::llm::prompt,
+      cmds::llm::list_models,
+      cmds::llm::save_models,
+      cmds::llm::ping_hosts,
+      cmds::llm::ping_host,
+      cmds::session::session_list,
+      cmds::session::session_create,
+      cmds::session::session_delete,
+      cmds::session::session_load,
+      cmds::session::session_save_meta,
+      cmds::session::session_upsert_page,
+      cmds::session::session_truncate_pages,
+      cmds::session::session_get_head_snapshot,
+      cmds::session::session_save_head_snapshot,
+      cmds::session::session_delete_head_snapshot,
+      cmds::session::session_find_snapshot_before,
+      cmds::session::session_save_checkpoint,
+      cmds::session::session_delete_checkpoints_from,
+      cmds::profile::profile_list,
+      cmds::profile::profile_create,
+      cmds::profile::profile_update,
+      cmds::profile::profile_delete,
+      cmds::profile::profile_set_active,
+      cmds::story::story_get,
+      cmds::story::story_save,
+      cmds::lore::lore_query,
+    ]);
+
+  #[cfg(debug_assertions)]
+  builder
+    .export(
+      specta_typescript::Typescript::default(),
+      "../gui/src/bindings.ts",
+    )
+    .expect("Failed to export typescript bindings");
+
   tauri::Builder::default()
-    .plugin(tauri_plugin_sql::Builder::default().build())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_store::Builder::default().build())
-    .invoke_handler(tauri::generate_handler![
-      llm_cmds::prompt,
-      llm_cmds::list_models,
-      llm_cmds::save_models,
-      llm_cmds::ping_hosts,
-      llm_cmds::ping_host,
-      fs_cmds::export_session,
-      fs_cmds::import_session,
-      fs_cmds::pick_file,
-      fs_cmds::pick_folder,
-    ])
-    .setup(|app| {
+    .invoke_handler(builder.invoke_handler())
+    .setup(move |app| {
       let app_handle = app.handle().clone();
       tauri::async_runtime::spawn(async move {
-        llm_cmds::init_models(&app_handle).await;
+        cmds::profile::init_profiles(&app_handle).await;
+        cmds::llm::init_models(&app_handle).await;
       });
       Ok(())
     })

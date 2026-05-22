@@ -46,6 +46,7 @@ watch(isOpen, async (open) => {
   const targetHeight = inner.scrollHeight;
 
   if (open) {
+    el.style.visibility = '';
     // Expand: 0 → scrollHeight
     el.style.height = '0px';
     const anim = el.animate(
@@ -65,6 +66,7 @@ watch(isOpen, async (open) => {
     );
     await anim.finished;
     el.style.height = '0px';
+    el.style.visibility = 'hidden';
   }
 });
 
@@ -72,6 +74,7 @@ watch(isOpen, async (open) => {
 onMounted(() => {
   if (!isOpen.value && bodyRef.value) {
     bodyRef.value.style.height = '0px';
+    bodyRef.value.style.visibility = 'hidden';
   }
 });
 </script>

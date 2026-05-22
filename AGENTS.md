@@ -8,11 +8,11 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, no server.
 
-- **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`) and file operations (export/import, file dialogs)
+- **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`), file operations (export/import, file dialogs), and all data persistence (sessions, profiles, stories, lore as JSON files)
 - **Vue 3 frontend** (`gui/src/`) runs in a webview via Vite — manages gameplay state, LLM orchestration, and all UI
-- **Local SQLite** via `tauri-plugin-sql` — structured gameplay data (stories, sessions, pages, state snapshots, lore entries, profiles) lives in a local `.db` file
-- **Persistent key/value store** via `tauri-plugin-store` — simple flags and preferences (e.g. onboarding completed) stored as JSON on disk. Used instead of SQLite for single-row, non-queryable data.
-- **No server, no auth, no PostgreSQL** — single-user desktop application
+- **Filesystem persistence** via Tauri commands — all data (stories, sessions, pages, state snapshots, lore entries, profiles) stored as JSON files in the Tauri app data directory. The Rust backend handles all file I/O; the frontend accesses data through **tauri-specta generated bindings** (`gui/src/bindings.ts`), with `invoke('prompt', ...)` as the sole raw invoke for LLM streaming (fire-and-forget).
+- **Persistent key/value store** via `tauri-plugin-store` — simple flags and preferences (e.g. onboarding completed) stored as JSON on disk.
+- **No server, no auth, no database** — single-user desktop application with loose JSON files
 - **LLM calls** go through Rust Tauri commands — `useLlmStream` internally uses `ConversationalArchetype` from `@stegakir/aikit` with `createTauriModel()` (which implements `LanguageModelV3` from `@ai-sdk/provider`). The AI SDK bridge calls `invoke('prompt', ...)` and maps Tauri events (`llm:text`, `llm:reasoning`, `llm:tool_call`, `llm:error`, `llm:done`) to AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
 - **Story sharing** is file-based — export/import JSON files via native file dialogs
 - **Build orchestration** is via a root `justfile` — no top-level `package.json`
@@ -33,10 +33,14 @@ novelcraft/
 │       │   ├── commands/
 │       │   │   ├── mod.rs  # Module barrel
 │       │   │   ├── llm.rs  # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
-│       │   │   └── fs.rs   # File export/import, file dialogs
+│       │   │   ├── profile.rs  # Profile persistence (OnceCell<Mutex<ProfilesFile>>)
+│       │   │   ├── session.rs  # Session/page/snapshot persistence (JSON files)
+│       │   │   ├── story.rs    # Story persistence (JSON files)
+│       │   │   └── lore.rs     # Lore persistence (JSON files)
 │       │   └── infer/
-│       │       ├── mod.rs  # Module barrel (pub mod api)
-│       │       └── api.rs  # OpenAI API types (request/response structs for SSE)
+│       │       ├── mod.rs  # Module barrel (pub mod api, pub mod internal)
+│       │       ├── api.rs  # OpenAI API types (request/response structs for SSE)
+│       │       └── internal.rs  # Command-level types (ModelConfig, LlmMessage, LlmTool, LlmPromptRequest, etc.)
 │       ├── Cargo.toml      # Rust dependencies
 │       └── tauri.conf.json # Tauri configuration
 ├── gui/                    # Vue 3 frontend (Vite + Vue Router)
@@ -45,18 +49,16 @@ novelcraft/
 │   │   ├── App.vue         # Root component — switches between Onboarding and Main
 │   │   ├── Main.vue        # Main app shell (sidebar, router view, shortcuts, dialogs)
 │   │   ├── Onboarding.vue  # Step-based first-run onboarding flow
+│   │   ├── bindings.ts     # tauri-specta generated command bindings (auto-generated in debug builds)
 │   │   ├── env.d.ts        # Global type declarations & auto-imports
 │   │   ├── pages/          # Vue Router pages
 │   │   ├── components/     # Vue components
 │   │   ├── composables/    # Vue composables
-│   │   ├── db/             # Drizzle ORM (schema + instance)
-│   │   ├── utils/          # Frontend utilities
+│   │   ├── utils/          # Frontend utilities (includes unwrap helper for bindings)
 │   │   ├── gameplay/       # Game modules (barrel via index.ts)
 │   │   ├── prompts.ts      # Prompts & personas (single source of truth)
 │   │   ├── router/         # Vue Router configuration
 │   │   └── assets/css/     # Open Props CSS
-│   ├── drizzle.config.ts      # Drizzle Kit configuration (schema, out, dialect)
-│   ├── drizzle/                # Generated migration SQL files + meta/_journal.json
 │   ├── index.html          # Vite entry HTML
 │   ├── vite.config.ts      # Vite config with ~ alias
 │   ├── tsconfig.json       # TypeScript config with ~/* paths
@@ -81,9 +83,9 @@ novelcraft/
 | Router | `gui/src/router/` | `index.ts` with `createRouter()` |
 | Gameplay Modules | `gui/src/gameplay/` | Named exports, barrel via `index.ts` |
 | Prompts | `gui/src/prompts.ts` | Single source of truth |
-| Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `fs.rs`) |
-| Rust Utilities | `engine/src/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`) |
-| DB Schema | `gui/src/db/` | Drizzle ORM schema (`schema.ts`) + instance (`index.ts`) |
+| Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `profile.rs`, `session.rs`, `story.rs`, `lore.rs`) |
+| Rust Utilities | `engine/src/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`), file I/O helpers (`serialize`, `deserialize`, `ensure_dir`) |
+| Generated Bindings | `gui/src/bindings.ts` | tauri-specta auto-generated typescript bindings (debug builds) |
 
 **Detailed docs:** [Code Conventions](./docs/code-conventions.md)
 
@@ -107,7 +109,7 @@ novelcraft/
 Models are configured in Rust, persisted to disk as JSON.
 
 - **Rust side**: `engine/src/src/commands/llm.rs` — `init_models()` loads from `{app_data_dir}/models.json` or falls back to defaults
-- **Frontend side**: Call `invoke('list_models')` to read, `invoke('save_models', { models })` to write
+- **Frontend side**: Call `commands.listModels()` to read, `commands.saveModels({ models })` to write (from generated bindings)
 - Each model entry maps a **usage ID** (e.g. `"storyteller"`, `"suggestions"`) → `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
 - Default models point to `http://localhost:1234/v1` (local LLM server)
 
@@ -133,7 +135,7 @@ Always import from `~/prompts` & maintain them there as a single source of truth
 
 ### Persistent Key/Value Store — tauri-plugin-store
 
-Simple flags, preferences, and single-row settings are stored in **tauri-plugin-store** (a JSON file on disk) rather than SQLite tables. A single-row SQLite table is wasteful overhead when a key/value store suffices.
+Simple flags, preferences, and single-row settings are stored in **tauri-plugin-store** (a JSON file on disk). Used for single-value, non-queryable data like onboarding state.
 
 - **Frontend**: `LazyStore` from `@tauri-apps/plugin-store` — lazy-loads a store file (e.g. `app.json`) and provides `get()`/`set()`/`has()` methods
 - **Store file**: `app.json` in the Tauri app data directory
@@ -141,43 +143,61 @@ Simple flags, preferences, and single-row settings are stored in **tauri-plugin-
 - **Capabilities**: `store:default` in `engine/capabilities/default.json`
 - **Current usage**: Onboarding completed flag (`onboarding_completed` boolean in `app.json`), managed by `gui/src/composables/useOnboarding.ts`
 
-**Convention**: Use `tauri-plugin-store` for simple key/value pairs (flags, preferences, single-row settings). Use SQLite tables only for structured, multi-row, queryable data.
+**Convention**: Use `tauri-plugin-store` for simple key/value pairs (flags, preferences). Use Tauri backend commands for structured, multi-entity data (sessions, profiles, stories, lore).
 
-### Client-Side Data — SQLite via Drizzle ORM
+### Data Persistence — Filesystem via Tauri Commands
 
-Gameplay state (stories, sessions, pages, state snapshots, lore entries, profiles) is stored in **local SQLite** via `tauri-plugin-sql`, accessed through **Drizzle ORM**.
+All structured data (stories, sessions, pages, state snapshots, lore entries, profiles) is stored as **JSON files** on disk, managed by Rust backend commands. The frontend never performs direct file I/O.
 
-- **DB module**: `gui/src/db/` — Drizzle ORM schema definitions and instance
-  - `schema.ts` — Drizzle table definitions for all 6 SQLite tables (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`). Column property names are camelCase mapping to snake_case SQL columns.
-  - `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
-- **Import pattern**: `import { db, localProfiles } from '~/db';` plus operators from `drizzle-orm` (e.g. `eq`, `desc`, `like`, `and`, `or`)
-- **Composable**: `gui/src/composables/useProfiles.ts` — wraps `local_profiles` table; exposes `profiles`, `activeProfile`, `create`, `update`, `remove`, `setActive`, `init`; auto-creates a default profile on first use (max 5)
-- **Mode**: Local-only, no sync
-- **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
-- **Dependencies**: `@tauri-apps/plugin-sql`, `drizzle-orm`, `drizzle-kit` (dev)
-- **Migrations**: Managed via `drizzle-kit`. Migration SQL files in `gui/drizzle/` are bundled at build time via `import.meta.glob` and applied on first DB connection. Baseline detection handles databases created before the migration system existed.
-- **No `db.transaction()`**: The `drizzle-orm/sqlite-proxy` adapter simulates transactions by sending raw `BEGIN`/`COMMIT` SQL, but `@tauri-apps/plugin-sql` uses a `sqlx::Pool<Sqlite>` with default `max_connections = 10`. Each `pool.execute()` within the "transaction" can route to a different pool connection, so the transaction context is lost. This causes silent data loss. **Always use individual `db.insert()`/`db.update()`/`db.delete()` calls instead of `db.transaction()`.**
+- **File layout** (under Tauri app data directory):
+  - `{appData}/sessions/{sessionUUID}/meta.json` — session metadata
+  - `{appData}/sessions/{sessionUUID}/pages.{batch:03}.json` — pages batched in groups of 100
+  - `{appData}/sessions/{sessionUUID}/state.head.json` — current head snapshot
+  - `{appData}/sessions/{sessionUUID}/state.{batch:03}.json` — checkpoint snapshots
+  - `{appData}/profiles.json` — all profiles
+  - `{appData}/stories/{id}.json` — story definitions
+  - `{appData}/lore/{id}.json` — lore entries
+- **Version-gated deserialization**: Every file format includes a `version` field. `read_versioned_json()` reads the version first, then dispatches to the correct deserializer (currently only v1). Future format changes add new match arms.
+- **No transactions**: Each command call performs a single atomic file operation. The frontend drives sequential operations when multiple steps are needed.
+- **Rust command files**:
+  - `engine/src/src/commands/session.rs` — session, page, and snapshot commands (`session_list`, `session_create`, `session_delete`, `session_load`, `session_save_meta`, `session_push_page`, `session_update_page`, `session_truncate_pages`, `session_get_head_snapshot`, `session_save_head_snapshot`, `session_delete_head_snapshot`, `session_find_snapshot_before`, `session_save_checkpoint`, `session_delete_checkpoints_from`)
+  - `engine/src/src/commands/profile.rs` — profile commands (`profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active`). Uses `OnceCell<Mutex<ProfilesFile>>` pattern (same as models in `llm.rs`). Initialized via `init_profiles()` called in `lib.rs` setup.
+  - `engine/src/src/commands/story.rs` — story commands (`story_get`, `story_save`)
+  - `engine/src/src/commands/lore.rs` — lore commands (`lore_query`)
+- **Frontend composables**: Each composable wraps the relevant Tauri commands:
+  - `useVignettes` — `session_list`, `session_create`, `session_delete`
+  - `useVignette` — all session/page/snapshot commands
+  - `useProfiles` — all profile commands
+  - `useStoryBuilder` — `story_get`, `story_save`
+  - `loreModule` — `lore_query`
 
 **Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/composables/useGame.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
 
 ```typescript
-// Drizzle ORM query in any composable/component
-import { db, localSessions } from '~/db';
-import { eq, desc } from 'drizzle-orm';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
-const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
+// Sessions
+const sessions = await unwrap(commands.sessionList());
+const result = await unwrap(commands.sessionLoad(id));
+await unwrap(commands.sessionSaveMeta(id, updatedMeta));
+await unwrap(commands.sessionPushPage(id, pageEntry));
+await unwrap(commands.sessionDelete(id));
 
-// Insert
-import { localPages } from '~/db';
-await db.insert(localPages).values({
-  id, sessionId, response, createdAt: new Date().toISOString(),
-});
+// Profiles
+const { profiles, active_id } = await unwrap(commands.profileList());
+await unwrap(commands.profileCreate(newProfile));
+await unwrap(commands.profileSetActive(profileId));
 
-// Multi-step write — use individual calls, NOT db.transaction()
-// (sqlite-proxy + sqlx connection pool breaks transaction semantics)
-await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+// Stories
+const story = await unwrap(commands.storyGet(id));
+await unwrap(commands.storySave(storyEntry));
+
+// Lore
+const results = await unwrap(commands.loreQuery(id, 'search'));
 ```
+
+**Detailed docs:** [Data Storage](./docs/database-schema.md)
 
 ### LLM Streaming — useLlmStream
 
@@ -208,7 +228,7 @@ for await (const event of streamLlmFull({ persona, messages })) {
 Modules define gameplay mechanics via tools exposed to the LLM.
 
 **Core types** (`gameplayModule.ts`):
-- `GameplaySession` — simplified to `{ storyId, sessionId, state: Record<string, unknown> }`. No `modules` field. State is a flat map from module type to module-specific data. Managed by `useVignette` (via `getGameplaySession()`) rather than a dedicated composable.
+- `GameplaySession` — simplified to `{ storyId: string | undefined, sessionId, state: Record<string, unknown> }`. No `modules` field. State is a flat map from module type to module-specific data. `storyId` is undefined for impromptu/freeform sessions. Managed by `useVignette` (via `getGameplaySession()`) rather than a dedicated composable.
 - `GameplayModuleContext` — has `session`, `module`, `state` fields (access `storyId`/`sessionId` via `ctx.session.storyId`/`ctx.session.sessionId`)
 - `ToolResult<S>` — `{ success: true; state?: S; response?: string } | { success: false; error: string }`. When `state` is omitted on success, the draft mutations from immer are used. The `response` field is used by query-only tools (like lore) to return data to the LLM without mutating state.
 - `ExecuteToolResult` — `{ success: true; newState: unknown; response: string }`. Returned by `executeTool()`.
@@ -242,18 +262,18 @@ Modules use direct draft mutation instead of spread operators:
 **Registered modules** (via `createDefaultRegistry()`):
 - `NPCModule` — NPC management, tool `move` (defined unprefixed, auto-prefixed to `npc::move`)
 - `PlanModule` — `getKnowledge()` returns `{ roadmap }`, tool `updateRoadmap` (auto-prefixed to `plan::updateRoadmap`)
-- `LoreModule` — no knowledge injection, tool `query` (auto-prefixed to `lore::query`) queries `local_lore_entries` via LIKE search
+- `LoreModule` — no knowledge injection, tool `query` (auto-prefixed to `lore::query`) queries lore entries via `commands.loreQuery()`. Returns empty array when `session.storyId` is undefined (impromptu sessions have no lore).
 
 **Deleted modules:** `eventModule.ts`, `graphMapModule.ts`, `systemPromptModule.ts` — removed during the module system redesign.
 
 ### Snapshot Lifecycle
 
-State snapshots in `local_state_snapshots` enable undo/fork by capturing module state at each page:
+State snapshots enable undo/fork by capturing module state at each page:
 
-- **Session creation** → snapshot 0 with empty state `{}`
-- **After each page's tool calls** → head snapshot updated in place (or new snapshot inserted at checkpoint boundaries)
-- **Every 100 pages** → copy current head as checkpoint before updating
-- **Fork** → delete snapshots with `page_index >= fork_index`, recompute head from youngest snapshot before `fork_index` via tool call replay through `registry.executeTool()` (with `init()` fallback for uninitialized module state), then `push()` to create a new page
+- **Session creation** → head snapshot (`state.head.json`) with empty state `{}`
+- **After each page's tool calls** → head snapshot updated in place via `commands.sessionSaveHeadSnapshot()`
+- **Every 100 pages** → copy current head as checkpoint (`state.{batch}.json`) via `commands.sessionSaveCheckpoint()` before updating
+- **Fork** → delete head snapshot and checkpoints with `page_index >= fork_index` via `commands.sessionDeleteHeadSnapshot()` and `commands.sessionDeleteCheckpointsFrom()`, recompute head from youngest snapshot before `fork_index` via `commands.sessionFindSnapshotBefore()` and tool call replay through `registry.executeTool()` (with `init()` fallback for uninitialized module state), then `push()` to create a new page
 - **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data
 - **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback (forward-compatible with module upgrades). `executeTool()` applies this fallback when module state is undefined.
 
@@ -268,10 +288,10 @@ State snapshots in `local_state_snapshots` enable undo/fork by capturing module 
 
 `useVignette` manages a single vignette session and exposes a 2-step push/fork pattern:
 
-- **`push({ prompt?, system? })`** — inserts a page into the DB/reactive array and returns a `PromptUpdater` function. The updater is called later with `(response, toolCalls, state)` to finalize the page with the LLM's response and state transition.
-- **`fork({ pageIndex, system?, prompt? })`** — based on `push()`: truncates pages >= pageIndex (DB + reactive), deletes snapshots >= pageIndex, loads the youngest snapshot before pageIndex, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page (returning its updater). System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
-- **`update({ pageIndex, system?, prompt?, response? })`** — edits page text without AI involvement. Null clears, undefined keeps existing.
-- **`getGameplaySession()`** — returns a `GameplaySession` derived from the current snapshot.
+- **`push({ prompt?, system? })`** — inserts a page via `commands.sessionPushPage()` into the reactive array and returns a `PromptUpdater` function. The updater is called later with `(response, toolCalls, state)` to finalize the page with the LLM's response and state transition (via `commands.sessionUpdatePage()` and `commands.sessionSaveHeadSnapshot()`).
+- **`fork({ pageIndex, system?, prompt? })`** — based on `push()`: truncates pages via `commands.sessionTruncatePages()`, deletes snapshots via `commands.sessionDeleteHeadSnapshot()` and `commands.sessionDeleteCheckpointsFrom()`, loads the youngest snapshot before pageIndex via `commands.sessionFindSnapshotBefore()`, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page (returning its updater). System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
+- **`update({ pageIndex, system?, prompt?, response? })`** — edits page text via `commands.sessionUpdatePage()` without AI involvement. Null clears, undefined keeps existing.
+- **`getGameplaySession()`** — returns a `GameplaySession` derived from the current snapshot. `storyId` is undefined for impromptu/freeform sessions.
 - **`snapshot`** — readonly ref exposing the current state snapshot.
 - **`run()`** (from `useGame`) is stateless — it takes a `GameplaySession`, builds messages, streams the LLM, and returns `{ response, toolCalls, state }`. It does NOT persist anything. Consumers coordinate persistence by calling the `PromptUpdater` returned by `push()`/`fork()`.
 
@@ -347,44 +367,52 @@ just fmt-check
 
 ---
 
-## Database Query Patterns
+## Data Access Patterns
 
-### Local Database (SQLite — via Drizzle ORM)
+### All Data via Generated Bindings
 
-All data access uses Drizzle ORM through `db` and table references from `gui/src/db/`.
+All data access uses `commands.xxx()` from `gui/src/bindings.ts` (tauri-specta generated bindings) — never direct file I/O from the frontend. The `unwrap()` helper in `gui/src/utils/index.ts` converts the `typedError` discriminated union back to throw-on-error behavior.
 
 ```typescript
-import { db, localSessions, localPages, localStateSnapshots } from '~/db';
-import { eq, desc, and, like, or } from 'drizzle-orm';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
-// Query sessions
-const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
+// Sessions
+const sessions = await unwrap(commands.sessionList());
+await unwrap(commands.sessionCreate(id, storyId ?? null, 'New'));
+const loaded = await unwrap(commands.sessionLoad(id));
+await unwrap(commands.sessionSaveMeta(id, updatedMeta));
+await unwrap(commands.sessionPushPage(id, pageEntry));
+await unwrap(commands.sessionUpdatePage(id, 0, updatedPage));
+await unwrap(commands.sessionTruncatePages(id, 5));
+await unwrap(commands.sessionDelete(id));
 
-// Query with filter
-const pages = await db.select().from(localPages)
-  .where(eq(localPages.sessionId, sessionId))
-  .orderBy(localPages.createdAt);
+// Snapshots
+const head = await unwrap(commands.sessionGetHeadSnapshot(id));
+await unwrap(commands.sessionSaveHeadSnapshot(id, snap));
+await unwrap(commands.sessionDeleteHeadSnapshot(id));
+const snap = await unwrap(commands.sessionFindSnapshotBefore(id, 5));
+await unwrap(commands.sessionSaveCheckpoint(id, 0, snap));
+await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
 
-// Insert
-await db.insert(localPages).values({
-  id, sessionId, system, prompt, response, createdAt: new Date().toISOString(),
-});
+// Profiles
+const { profiles, active_id } = await unwrap(commands.profileList());
+await unwrap(commands.profileCreate(newProfile));
+await unwrap(commands.profileUpdate(profileId, updatedProfile));
+await unwrap(commands.profileDelete(profileId));
+await unwrap(commands.profileSetActive(profileId));
 
-// Update
-await db.update(localSessions)
-  .set({ title: newTitle, updatedAt: new Date().toISOString() })
-  .where(eq(localSessions.id, sessionId));
+// Stories
+const story = await unwrap(commands.storyGet(id));
+await unwrap(commands.storySave(storyEntry));
 
-// Delete
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
-
-// Multi-step write — use individual calls, NOT db.transaction()
-// sqlite-proxy + sqlx Pool connection routing breaks transaction semantics
-await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+// Lore
+const results = await unwrap(commands.loreQuery(id, 'search'));
 ```
 
-**Detailed docs:** [Database Schema](./docs/database-schema.md)
+**No transactions**: Each bindings call is independent. The frontend drives sequential operations.
+
+**Detailed docs:** [Data Storage](./docs/database-schema.md)
 
 ---
 
@@ -399,6 +427,8 @@ await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 | `prompt` | `{ request: { model, messages[], persona?, context?, request_id?, tools? } }` | `void` (emits events) | Stream LLM response |
 | `list_models` | none | `Record<string, ModelConfig>` | Get configured models |
 | `save_models` | `{ models: Record<string, ModelConfig> }` | `void` | Save model configuration |
+| `ping_hosts` | none | `Vec<UnreachableHost>` | Check all LLM host liveness |
+| `ping_host` | `{ request: { url, api_key? } }` | `Option<string>` | Check single host liveness |
 
 **File Operations:**
 
@@ -409,26 +439,69 @@ await db.delete(localSessions).where(eq(localSessions.id, sessionId));
 | `pick_file` | `{ filters? }` | `string \| null` | Open native file picker |
 | `pick_folder` | none | `string \| null` | Open native folder picker |
 
+**Sessions:**
+
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `session_list` | none | `SessionMeta[]` | List all sessions |
+| `session_create` | `{ sessionId, storyId?, title, description? }` | `void` | Create session with initial snapshot (storyId null for impromptu) |
+| `session_delete` | `{ sessionId }` | `void` | Delete session directory |
+| `session_load` | `{ sessionId }` | `SessionLoadResult` | Load full session (meta + pages + head snapshot) |
+| `session_save_meta` | `{ sessionId, meta }` | `void` | Update session metadata |
+| `session_push_page` | `{ sessionId, page }` | `void` | Append a new page |
+| `session_update_page` | `{ sessionId, pageIndex, page }` | `void` | Update page in place |
+| `session_truncate_pages` | `{ sessionId, pageIndex }` | `void` | Delete pages at/after index |
+| `session_get_head_snapshot` | `{ sessionId }` | `Snapshot \| null` | Get current head snapshot |
+| `session_save_head_snapshot` | `{ sessionId, snapshot }` | `void` | Write head snapshot |
+| `session_delete_head_snapshot` | `{ sessionId }` | `void` | Delete head snapshot |
+| `session_find_snapshot_before` | `{ sessionId, pageIndex }` | `Snapshot \| null` | Find youngest checkpoint before index |
+| `session_save_checkpoint` | `{ sessionId, batch, snapshot }` | `void` | Save checkpoint snapshot |
+| `session_delete_checkpoints_from` | `{ sessionId, pageIndex }` | `void` | Delete checkpoints at/after index |
+
+**Profiles:**
+
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `profile_list` | none | `ProfileListResult` | List all profiles with active ID |
+| `profile_create` | `{ id, name, fields, created_at }` | `void` | Create a profile |
+| `profile_update` | `{ id, name, fields }` | `void` | Update a profile's name and fields |
+| `profile_delete` | `{ id }` | `void` | Delete a profile (clears `active_id` if active) |
+| `profile_set_active` | `{ id }` | `void` | Set profile as active |
+
+**Stories:**
+
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `story_get` | `{ storyId }` | `StoryEntry` | Get story by ID |
+| `story_save` | `{ story }` | `void` | Create or replace story |
+
+**Lore:**
+
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `lore_query` | `{ storyId, query }` | `LoreQueryResult` | Search lore entries |
+
 ### Calling Commands from Frontend
 
 ```typescript
-import { invoke } from '@tauri-apps/api/core';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
 // LLM streaming (use the composable — never call invoke('prompt', ...) directly)
 // import { streamLlmFull } from '~/composables/useLlmStream';
 
 // Get/save models
-const models = await invoke<Record<string, ModelConfig>>('list_models');
-await invoke('save_models', { models: updatedModels });
+const models = await unwrap(commands.listModels());
+await unwrap(commands.saveModels({ models: updatedModels }));
 
 // File dialogs
-const filePath = await invoke<string | null>('pick_file', {
+const filePath = await unwrap(commands.pickFile({
   filters: [{ name: 'JSON', extensions: ['json'] }],
-});
+}));
 
 // Export/import
-await invoke('export_session', { session_id: id, file_path: filePath, data: exportData });
-const imported = await invoke<ExportData>('import_session', { file_path: filePath });
+await unwrap(commands.exportSession(id, filePath, exportData));
+const imported = await unwrap(commands.importSession(filePath));
 ```
 
 ### Listening for LLM Events
@@ -504,13 +577,13 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
 }
 ```
 
-### Local Data Access
+### Data Access
 
 ```typescript
-import { db, localSessions } from '~/db';
-import { eq, desc } from 'drizzle-orm';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
-const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
+const sessions = await unwrap(commands.sessionList());
 ```
 
 **Detailed docs:** [Frontend Architecture](./docs/frontend-architecture.md)
@@ -522,24 +595,26 @@ const sessions = await db.select().from(localSessions).orderBy(desc(localSession
 ### When to Add a Tauri Command
 
 - Frontend needs access to a system capability (file system, native dialogs, etc.)
-- New LLM-related functionality that requires Rust-side HTTP handling
+- New data persistence operations (new entity types, new query patterns)
 - Operations that should run outside the webview sandbox
 
 **Process:**
-1. Create a new function with `#[tauri::command]` in the appropriate `engine/src/src/commands/*.rs` file
-2. Register it in `engine/src/src/lib.rs` via `tauri::generate_handler![]`
-3. Call from frontend via `invoke('command_name', { params })`
+1. Create a new function with `#[tauri::command]` and `#[specta::specta]` in the appropriate `engine/src/src/commands/*.rs` file
+2. Ensure all parameter/return structs derive `specta::Type` (use `#[specta(type = Any)]` for `serde_json::Value` fields, or the `JsonAny` wrapper for command parameters)
+3. Register it in `engine/src/src/lib.rs` via `tauri::generate_handler![]` (the tauri-specta `Builder` picks it up automatically)
+4. Bindings are auto-generated at app startup in debug builds to `gui/src/bindings.ts` — call from frontend via `commands.commandName(params)`
 
-### When to Modify Local DB Schema
+### When to Modify Data Formats
 
-- Client-side gameplay state needs new tables or columns
-- Vignette, session, or profile data structures change
+- Entity data structures change (new fields, renamed fields)
+- New entity types need to be persisted
+- Page or snapshot formats need updating
 
 **Process:**
-1. Add/modify table definitions in `gui/src/db/schema.ts`
-2. Run `just generate-migration` — this generates a new numbered SQL migration in `gui/drizzle/`
-3. Migration is automatically applied on next app launch (bundled via `import.meta.glob`, run by `runMigrations()` in `gui/src/db/index.ts`)
-4. For existing databases created before the migration system, baseline detection marks all migrations as applied without re-running them
+1. Add/modify Rust structs in `engine/src/src/commands/session.rs`, `engine/src/src/commands/story.rs`, or `engine/src/src/commands/lore.rs`
+2. Add a new version arm in `read_versioned_json()` if the format is backward-incompatible
+3. Update the corresponding composable in `gui/src/composables/` to use the new fields
+4. Old-format files continue to work via version-gated deserialization
 
 ### When to Create a Component
 
@@ -557,7 +632,7 @@ const sessions = await db.select().from(localSessions).orderBy(desc(localSession
 
 - Shared reactive state or logic across components/pages
 - Wrapping Tauri APIs or external libraries
-- Data access patterns (local DB queries)
+- Data access patterns (wrapping Tauri commands)
 
 **Process:**
 1. Create `use*.ts` file in `gui/src/composables/`
@@ -591,7 +666,6 @@ All build and development commands are in the root `justfile`.
 | `just clippy` | cargo clippy in `engine/` |
 | `just fmt` | cargo fmt in `engine/` |
 | `just fmt-check` | cargo fmt --check in `engine/` |
-| `just generate-migration` | Generate Drizzle Kit migration from schema changes (`cd gui && bunx drizzle-kit generate`) |
 
 ## Key Dependencies
 
@@ -602,7 +676,6 @@ All build and development commands are in the root `justfile`.
 | `vue` | UI framework |
 | `vue-router` | Client-side routing |
 | `@tauri-apps/api` | Tauri IPC (`invoke`, `listen`) |
-| `@tauri-apps/plugin-sql` | SQLite database access |
 | `@tauri-apps/plugin-store` | Persistent key/value store (flags, preferences) |
 | `@tauri-apps/plugin-dialog` | Native file dialogs |
 | `@tauri-apps/plugin-fs` | File system access |
@@ -612,8 +685,6 @@ All build and development commands are in the root `justfile`.
 | `marked` | Markdown rendering |
 | `zod` | Runtime validation |
 | `immer` | Immutable state transitions in `GameplayModuleRegistry.executeTool()` (`createDraft`/`finishDraft`) |
-| `drizzle-orm` | Type-safe SQLite query builder (ORM via `sqlite-proxy` adapter) |
-| `drizzle-kit` | Schema migration generator (dev dependency) |
 | `vite` | Build tool (dev dependency) |
 | `@vitejs/plugin-vue` | Vite Vue plugin (dev dependency) |
 | `vue-tsc` | Vue TypeScript checking (dev dependency) |
@@ -623,7 +694,8 @@ All build and development commands are in the root `justfile`.
 | Crate | Purpose |
 |-------|---------|
 | `tauri` | Desktop app framework |
-| `tauri-plugin-sql` | SQLite plugin |
+| `tauri-specta` | Type-safe TypeScript bindings generation |
+| `specta` | Type introspection for Rust types |
 | `tauri-plugin-store` | Persistent key/value store plugin |
 | `tauri-plugin-dialog` | Native dialog plugin |
 | `tauri-plugin-fs` | File system plugin |
@@ -642,6 +714,6 @@ All build and development commands are in the root `justfile`.
 |----------|-------------|
 | [Project Structure](./docs/project-structure.md) | Complete file organization and directory layout |
 | [Code Conventions](./docs/code-conventions.md) | Code styling, imports, patterns, and best practices |
-| [Database Schema](./docs/database-schema.md) | Local SQLite table definitions and query patterns |
+| [Data Storage](./docs/database-schema.md) | JSON file formats and storage layout |
 | [API Routes](./docs/api-routes.md) | Tauri command documentation and usage patterns |
 | [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, composables, and styling conventions |

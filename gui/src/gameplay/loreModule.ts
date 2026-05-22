@@ -1,7 +1,7 @@
 import z from 'zod';
-import { eq, desc, and, or, like } from 'drizzle-orm';
 import { defineGameplayModule, toolOk } from './gameplayModule';
-import { db, localLoreEntries } from '~/db';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
 const stateV1 = z.object({
   version: z.literal(1),
@@ -24,29 +24,19 @@ export const LoreModule = defineGameplayModule({
       query: z.string(),
     }),
     execute: async ({ query }, { session }) => {
-      const pattern = `%${query}%`;
-      const entries = await db.select({
-        id: localLoreEntries.id,
-        title: localLoreEntries.title,
-        content: localLoreEntries.content,
-        tags: localLoreEntries.tags,
-      }).from(localLoreEntries)
-        .where(and(
-          eq(localLoreEntries.storyId, session.storyId),
-          or(
-            like(localLoreEntries.title, pattern),
-            like(localLoreEntries.content, pattern),
-          ),
-        ))
-        .orderBy(desc(localLoreEntries.updatedAt))
-        .limit(10);
+      if (!session.storyId) {
+        return toolOk(undefined, {
+          response: JSON.stringify([]),
+        });
+      }
+      const entries = await unwrap(commands.loreQuery(session.storyId, query));
 
       return toolOk(undefined, {
         response: JSON.stringify(entries.map(e => ({
           id: e.id,
           title: e.title,
           content: e.content,
-          tags: e.tags ? JSON.parse(e.tags) : [],
+          tags: e.tags ?? [],
         }))),
       });
     },

@@ -1,5 +1,7 @@
-import { eq } from 'drizzle-orm';
-import { db, localProfiles } from '~/db';
+import type { Profile } from '~/bindings';
+export type { Profile };
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
 const DEFAULT_FIELDS: Record<string, string> = {
   name: '',
@@ -9,82 +11,42 @@ const DEFAULT_FIELDS: Record<string, string> = {
   'favorite color': '',
 };
 
-const MAX_PROFILES = 5;
-
-export type Profile = {
-  id: string;
-  name: string;
-  fields: Record<string, string>;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-
-function parseFields(raw: string): Record<string, string> {
-  try {
-    return JSON.parse(raw) as Record<string, string>;
-  } catch {
-    return { ...DEFAULT_FIELDS };
-  }
-}
-
-function serializeFields(fields: Record<string, string>): string {
-  return JSON.stringify(fields);
-}
-
 const profiles = ref<Profile[] | undefined>(undefined);
-const activeProfile = computed(() => profiles.value?.find(p => p.active) ?? null);
+const activeId = ref<string | null>(null);
+const activeProfile = computed(() => profiles.value?.find(p => p.id === activeId.value) ?? null);
 const ready = computed(() => profiles.value !== undefined);
 
 let initPromise: Promise<void> | null = null;
 
 async function refresh() {
-  const rows = await db.select().from(localProfiles).orderBy(localProfiles.createdAt);
-  profiles.value = rows.map(r => ({
-    id: r.id,
-    name: r.name,
-    fields: parseFields(r.fields),
-    active: r.active === 1,
-    createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
-  }));
+  const result = await unwrap(commands.profileList());
+  profiles.value = result.profiles;
+  activeId.value = result.active_id ?? result.profiles[0]?.id ?? null;
 }
 
 async function create(name: string, fields?: Record<string, string>): Promise<Profile | null> {
-  if ((profiles.value?.length ?? 0) >= MAX_PROFILES) return null;
-
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const initialFields = fields ?? { ...DEFAULT_FIELDS };
 
-  await db.insert(localProfiles).values({
-    id,
-    name,
-    fields: serializeFields(initialFields),
-    active: 0,
-    createdAt: now,
-    updatedAt: now,
-  });
+  await unwrap(commands.profileCreate(id, name, initialFields, now));
 
   await refresh();
   return profiles.value?.find(p => p.id === id) ?? null;
 }
 
 async function update(id: string, patch: { name?: string; fields?: Record<string, string> }) {
-  const set: Partial<typeof localProfiles.$inferInsert> & { updatedAt: string } = {
-    updatedAt: new Date().toISOString(),
-  };
+  const now = new Date().toISOString();
+  const profile = profiles.value?.find(p => p.id === id);
+  if (!profile) return;
 
-  if (patch.name !== undefined) set.name = patch.name;
-  if (patch.fields !== undefined) set.fields = serializeFields(patch.fields);
-
-  await db.update(localProfiles).set(set).where(eq(localProfiles.id, id));
+  await unwrap(commands.profileUpdate(id, patch.name ?? profile.name, patch.fields ?? profile.fields, now));
   await refresh();
 }
 
 async function remove(id: string) {
-  const wasActive = profiles.value?.find(p => p.id === id)?.active ?? false;
-  await db.delete(localProfiles).where(eq(localProfiles.id, id));
+  const wasActive = activeId.value === id;
+  await unwrap(commands.profileDelete(id));
 
   if (wasActive && (profiles.value?.length ?? 0) > 1) {
     const next = profiles.value?.find(p => p.id !== id);
@@ -95,9 +57,7 @@ async function remove(id: string) {
 }
 
 async function setActive(id: string) {
-  await db.update(localProfiles).set({ active: 0 });
-  const now = new Date().toISOString();
-  await db.update(localProfiles).set({ active: 1, updatedAt: now }).where(eq(localProfiles.id, id));
+  await unwrap(commands.profileSetActive(id));
   await refresh();
 }
 
@@ -109,7 +69,7 @@ async function init() {
         if (profiles.value!.length === 0) {
           await create('Default', { ...DEFAULT_FIELDS });
           await setActive(profiles.value![0]!.id);
-        } else if (!profiles.value!.some(p => p.active)) {
+        } else if (!activeId.value) {
           await setActive(profiles.value![0]!.id);
         }
       } catch {
@@ -135,7 +95,6 @@ export function useProfiles() {
     remove,
     setActive,
     init,
-    maxProfiles: MAX_PROFILES,
     defaultFields: { ...DEFAULT_FIELDS },
   };
 }

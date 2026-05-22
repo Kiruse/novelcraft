@@ -87,7 +87,7 @@ A custom Vite plugin (`gui/vite-plugins/auto-import.ts`) automatically injects V
 
 - From `vue`: `ref`, `reactive`, `computed`, `watch`, `readonly`, `onMounted`, `onUnmounted`, `nextTick`
 - From `vue-router`: `useRoute`, `useRouter`
-- **Tauri**: `invoke`, `listen` (declared in `env.d.ts`)
+- **Tauri**: `invoke`, `listen` (declared in `env.d.ts`, only used directly in `tauriLanguageModel.ts` for LLM streaming)
 
 Components are **not** auto-imported — import explicitly:
 
@@ -169,7 +169,7 @@ Tool calls are persisted as JSON on pages via `toolCallRecordSchema`:
 ```typescript
 import { toolCallRecordSchema, type ToolCallRecord } from '~/gameplay';
 
-// Records stored in local_pages.tool_calls as JSON array
+// Records stored in page.tool_calls as JSON array
 const records: ToolCallRecord[] = [{ tool: 'npc::addNPC', params: { name: 'Alice' } }];
 ```
 
@@ -178,11 +178,11 @@ const records: ToolCallRecord[] = [{ tool: 'npc::addNPC', params: { name: 'Alice
 Functions that perform I/O operations should be async:
 
 ```typescript
-export async function loadSessions(storyId: string): Promise<Session[]> {
-  const sessions = await db.select().from(localSessions)
-    .where(eq(localSessions.storyId, storyId))
-    .orderBy(desc(localSessions.createdAt));
-  return sessions;
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
+
+export async function loadSessions() {
+  return await unwrap(commands.sessionList());
 }
 ```
 
@@ -192,12 +192,10 @@ Always use `async/await` for async operations, avoid `.then()` chains:
 
 ```typescript
 // Good
-const sessions = await db.select().from(localSessions)
-  .where(eq(localSessions.storyId, storyId))
-  .orderBy(desc(localSessions.createdAt));
+const sessions = await unwrap(commands.sessionList());
 
 // Avoid
-db.select().from(localSessions).then(sessions => {
+unwrap(commands.sessionList()).then(sessions => {
   // Nested callbacks
 });
 ```
@@ -231,10 +229,8 @@ if (!session) {
 
 ```typescript
 // Good - explicit return type for exported function
-export async function loadSessions(storyId: string): Promise<Session[]> {
-  return await db.select().from(localSessions)
-    .where(eq(localSessions.storyId, storyId))
-    .orderBy(desc(localSessions.createdAt));
+export async function loadSessions() {
+  return await unwrap(commands.sessionList());
 }
 
 // Interface for complex objects
@@ -242,7 +238,7 @@ export interface ProfileFields {
   name: string;
   appearance: string;
   interests: string;
-  [key: string]: string;
+  [key: string]: unknown;
 }
 ```
 
@@ -280,50 +276,53 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages, t
 }
 ```
 
-## Database Query Patterns
+## Data Access Patterns
 
-### Local Database (SQLite via Drizzle ORM)
-
-All data access uses Drizzle ORM through `db` and table references from `gui/src/db/`.
+All data access goes through tauri-specta generated bindings (`commands.xxx()` from `~/bindings`), wrapped with `unwrap()` from `~/utils`. There is no database — data is stored as JSON files managed by the Rust backend.
 
 ```typescript
-import { db, localSessions, localPages, localStateSnapshots } from '~/db';
-import { eq, desc, and, like, or } from 'drizzle-orm';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
-// Query sessions
-const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
+// Sessions
+const sessions = await unwrap(commands.sessionList());
+const result = await unwrap(commands.sessionLoad(id));
+await unwrap(commands.sessionSaveMeta(id, updatedMeta));
+await unwrap(commands.sessionPushPage(id, pageEntry));
+await unwrap(commands.sessionUpdatePage(id, 0, updatedPage));
+await unwrap(commands.sessionTruncatePages(id, 5));
+await unwrap(commands.sessionDelete(id));
 
-// Query with filter
-const pages = await db.select().from(localPages)
-  .where(eq(localPages.sessionId, sessionId))
-  .orderBy(localPages.createdAt);
+// Snapshots
+const head = await unwrap(commands.sessionGetHeadSnapshot(id));
+await unwrap(commands.sessionSaveHeadSnapshot(id, snap));
+await unwrap(commands.sessionDeleteHeadSnapshot(id));
+const snap = await unwrap(commands.sessionFindSnapshotBefore(id, 5));
+await unwrap(commands.sessionSaveCheckpoint(id, 0, snap));
+await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
 
-// Query head snapshot
-const snapshot = await db.select().from(localStateSnapshots)
-  .where(eq(localStateSnapshots.sessionId, sessionId))
-  .orderBy(desc(localStateSnapshots.pageIndex))
-  .limit(1);
+// Profiles
+const { profiles, active_id } = await unwrap(commands.profileList());
+await unwrap(commands.profileCreate(newProfile));
+await unwrap(commands.profileUpdate(profileId, updatedProfile));
+await unwrap(commands.profileDelete(profileId));
+await unwrap(commands.profileSetActive(profileId));
 
-// Insert
-await db.insert(localPages).values({
-  id, sessionId, system, prompt, response, createdAt: new Date().toISOString(),
-});
+// Stories
+const story = await unwrap(commands.storyGet(id));
+await unwrap(commands.storySave(storyEntry));
 
-// Update
-await db.update(localSessions)
-  .set({ title: newTitle, updatedAt: new Date().toISOString() })
-  .where(eq(localSessions.id, sessionId));
+// Lore
+const results = await unwrap(commands.loreQuery(id, 'search term'));
+```
 
-// Delete
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+**No transactions**: Each command call performs a single atomic file operation. The frontend drives sequential operations when multiple steps are needed.
 
-// Multi-step write — use individual calls, NOT db.transaction()
-// The sqlite-proxy adapter simulates transactions by sending raw BEGIN/COMMIT SQL,
-// but @tauri-apps/plugin-sql uses a sqlx::Pool<Sqlite> with max_connections = 10.
-// Each pool.execute() can route to a different connection, so the transaction
-// context is lost — causing silent data loss. Always use individual calls.
-await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+```typescript
+// Sequential operations — each call is independent
+await unwrap(commands.sessionTruncatePages(id, 5));
+await unwrap(commands.sessionDeleteHeadSnapshot(id));
+await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
 ```
 
 ## Rust Backend Formatting
@@ -336,6 +335,6 @@ The Rust backend (`engine/src/`) uses [`rustfmt`](https://rust-lang.github.io/ru
 ## Related Documentation
 
 - [Project Structure](./project-structure.md) - File organization and directory layout
-- [Database Schema](./database-schema.md) - Table definitions and query patterns
+- [Data Storage](./database-schema.md) - JSON file formats and storage layout
 - [API Routes](./api-routes.md) - Tauri command documentation
 - [Frontend Architecture](./frontend-architecture.md) - Pages, components, and styling conventions

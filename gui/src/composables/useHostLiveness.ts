@@ -1,9 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-
-interface UnreachableHost {
-  url: string;
-  error: string;
-}
+import { commands, type UnreachableHost } from '~/bindings';
+import { unwrap } from '~/utils';
 
 const unreachableHosts = ref<UnreachableHost[]>([]);
 const checked = ref(false);
@@ -11,8 +7,7 @@ const checked = ref(false);
 export function useHostLiveness() {
   async function checkHosts() {
     try {
-      const result = await invoke<UnreachableHost[]>('ping_hosts');
-      unreachableHosts.value = result;
+      unreachableHosts.value = await unwrap(commands.pingHosts());
     } catch {
       unreachableHosts.value = [];
     }
@@ -30,6 +25,7 @@ export function useHostLiveness() {
 
   function dismiss() {
     unreachableHosts.value = [];
+    checked.value = false;
   }
 
   return {

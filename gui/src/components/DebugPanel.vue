@@ -17,9 +17,11 @@
       <Collapsible>
         <template #header>Token Usage</template>
         <table v-if="tokenUsage">
-          <tr><th>Prompt</th><td>{{ tokenUsage.prompt_tokens }}</td></tr>
-          <tr><th>Completion</th><td>{{ tokenUsage.completion_tokens }}</td></tr>
-          <tr class="usage-total"><th>Total</th><td>{{ tokenUsage.total_tokens }}</td></tr>
+          <tbody>
+            <tr><th>Prompt</th><td>{{ tokenUsage.prompt_tokens }}</td></tr>
+            <tr><th>Completion</th><td>{{ tokenUsage.completion_tokens }}</td></tr>
+            <tr class="usage-total"><th>Total</th><td>{{ tokenUsage.total_tokens }}</td></tr>
+          </tbody>
         </table>
         <span v-else class="debug-empty">No usage data yet</span>
       </Collapsible>

@@ -1,291 +1,278 @@
-# Database Schema
+# Data Storage
 
-This document describes the local SQLite database schema used for all gameplay state in Novelcraft.
+This document describes the filesystem-based persistence layer used for all gameplay state in Novelcraft.
 
 ## Overview
 
-NovelCraft is a fully offline desktop app. All data lives in a **single local SQLite database** accessed via `tauri-plugin-sql` through **Drizzle ORM**. There is no server database, no PostgreSQL, no sync.
+NovelCraft is a fully offline desktop app. All data lives as **JSON files on disk**, managed by the Rust backend through Tauri commands. There is no database, no SQLite, no server.
 
-- **Local database** (SQLite via `tauri-plugin-sql`) — gameplay state: stories, sessions, pages, state snapshots, lore entries, profiles
-- **DB file**: `sqlite:novelcraft.db` (path managed by Tauri plugin)
-- **Access**: Drizzle ORM through `db` instance and table references from `gui/src/db/`
+- **Persistence layer** — JSON files in the Tauri app data directory, read/written by Rust backend commands
+- **Frontend access** — All data access goes through tauri-specta generated bindings (`commands.xxx()` from `gui/src/bindings.ts`), wrapped with `unwrap()` from `gui/src/utils/index.ts`. The only raw `invoke()` remaining is `invoke('prompt', ...)` in `tauriLanguageModel.ts` for LLM streaming.
+- **Version-gated deserialization** — Every file format includes a `version` field for forward-compatible schema evolution
 
 ### Technology Stack
 
 | Layer | Technology | Access Pattern |
 |-------|-----------|----------------|
-| Client | SQLite via `tauri-plugin-sql` | Drizzle ORM via `db` instance from `gui/src/db/` |
+| Storage | JSON files in `{appData}/` | Rust backend via Tauri commands |
+| Frontend | `commands.xxx()` from `~/bindings` + `unwrap()` from `~/utils` | Composables in `gui/src/composables/` |
 
 ---
 
-## Local Schema (SQLite via Drizzle ORM)
+## File Layout
 
-Client-side gameplay state is stored in local SQLite. Tables are defined in `gui/src/db/schema.ts` using Drizzle ORM's `sqliteTable()`. Schema evolution is managed by Drizzle Kit migrations (see [Migrations](#migrations) below).
+All data is stored under the Tauri app data directory (`{appData}/`). The layout uses loose JSON files organized by entity type.
 
-### local_stories
+### Stories
 
-Stores story metadata and module configuration. Each story defines a set of gameplay modules and their config.
+```
+{appData}/stories/{id}.json
+```
 
-**Columns:**
+Each file contains a single `StoryEntry`:
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | text | PRIMARY KEY, NOT NULL | UUID story identifier |
-| `title` | text | NOT NULL | Story title |
-| `description` | text | nullable | Story description |
-| `config` | text | NOT NULL | JSON blob: `{ [moduleType]: moduleConfig }` — maps module type strings to their configuration |
-| `created_at` | text | NOT NULL | ISO timestamp |
-| `updated_at` | text | NOT NULL | ISO timestamp |
+```typescript
+{
+  version: 1;
+  id: string;           // UUID
+  title: string;
+  description?: string;
+  config: Record<string, unknown>;  // { [moduleType]: moduleConfig }
+  created_at: string;   // ISO timestamp
+  updated_at: string;   // ISO timestamp
+}
+```
 
-### local_sessions
+### Sessions (Vignettes)
 
-Stores vignette/gameplay sessions. Each session is tied to a story.
+```
+{appData}/sessions/{sessionUUID}/meta.json
+{appData}/sessions/{sessionUUID}/pages.{batch:03}.json
+{appData}/sessions/{sessionUUID}/state.head.json
+{appData}/sessions/{sessionUUID}/state.{batch:03}.json
+```
 
-**Columns:**
+#### meta.json — Session Metadata
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | text | PRIMARY KEY, NOT NULL | UUID session identifier |
-| `story_id` | text | NOT NULL | Associated story ID |
-| `title` | text | NOT NULL | Session/vignette title |
-| `description` | text | nullable | Session description |
-| `created_at` | text | NOT NULL | ISO timestamp |
-| `updated_at` | text | NOT NULL | ISO timestamp |
+```typescript
+{
+  version: 1;
+  id: string;               // UUID session identifier
+  story_id?: string | null; // Associated story ID (absent for impromptu/freeform sessions)
+  title: string;
+  description?: string;     // Opening text for the session
+  disposition?: string;     // Opening text for the session
+  created_at: string;       // ISO timestamp
+  updated_at: string;       // ISO timestamp
+}
+```
 
-### local_pages
+#### pages.{batch}.json — Pages Batch
 
-Stores conversation pages within a session. Each page holds one user prompt, one AI response, and optionally a record of tool calls made during that response.
+Pages are stored in batches of 100. The batch index for page N is `floor(N / 100)`. Files are zero-padded to 3 digits: `pages.000.json`, `pages.001.json`, etc.
 
-**Columns:**
+```typescript
+// PagesBatch
+{
+  version: 1;
+  batch: number;        // Batch index (0, 1, 2, ...)
+  pages: PageEntry[];
+}
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | text | PRIMARY KEY, NOT NULL | UUID page identifier |
-| `session_id` | text | NOT NULL | Parent session ID |
-| `system` | text | nullable | System prompt for this page |
-| `prompt` | text | nullable | User's input/prompt |
-| `response` | text | nullable | AI-generated response |
-| `tool_calls` | text | nullable | JSON array of `ToolCallRecord` objects: `{ tool: string, params: Record<string, unknown> }` |
-| `created_at` | text | NOT NULL | ISO timestamp |
+// PageEntry
+{
+  id: string;           // UUID page identifier
+  system?: string;      // System prompt for this page
+  prompt?: string;      // User's input/prompt
+  response?: string;    // AI-generated response
+  tool_calls?: string;  // JSON array of ToolCallRecord objects: { tool: string, params: Record<string, unknown> }
+  created_at: string;   // ISO timestamp
+}
+```
 
-### local_state_snapshots
+#### state.head.json — Head Snapshot
 
-Stores gameplay state snapshots per session. Each snapshot captures the full module state (`{ [moduleType]: moduleState }`) at a specific page index.
+The current gameplay state, updated on every page completion:
 
-**Columns:**
+```typescript
+{
+  version: 1;
+  page_index: number;   // Page index this snapshot corresponds to
+  data: Record<string, unknown>;  // { [moduleType]: moduleState }
+}
+```
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | text | PRIMARY KEY, NOT NULL | UUID snapshot identifier |
-| `session_id` | text | NOT NULL | Parent session ID |
-| `page_index` | integer | NOT NULL | Page index this snapshot corresponds to |
-| `data` | text | NOT NULL | JSON blob: `{ [moduleType]: moduleState }` — maps module type strings to their serialized state |
-| `created_at` | text | NOT NULL | ISO timestamp |
+#### state.{batch}.json — Checkpoint Snapshots
 
-**Snapshot lifecycle:**
+Checkpoint snapshots created every 100 pages. The batch index matches the page batch: `state.000.json`, `state.001.json`, etc.
 
-- **Head snapshot**: The row with the highest `page_index` for a given `session_id`. Represents the current gameplay state.
-- **Checkpoints**: Snapshots at every 100-page boundary are kept permanently. Non-checkpoint snapshots are cleaned up after each `push()` finalization. Enable state reconstruction after forks.
-- **Creation**: Session creation inserts snapshot 0 with empty state `{}`. After each page's tool calls complete, the head snapshot is updated in place (or a new snapshot is inserted at checkpoint boundaries).
-- **Checkpointing**: Every 100 pages, a new snapshot is inserted (rather than updating the head in place). Non-checkpoint snapshots (those not on a 100-page boundary) are cleaned up after each push.
-- **Fork**: When a fork occurs at `page_index`, all snapshots with `page_index >= fork_index` are deleted. The head is recomputed from the youngest snapshot with `page_index < fork_index` by replaying tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state).
-- **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data.
-- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback. `executeTool()` applies this fallback when module state is undefined. This is forward-compatible with module upgrades.
+```typescript
+// Snapshot (generated binding type)
+{
+  version: 1;
+  page_index: number;
+  data: Record<string, unknown>;  // { [moduleType]: moduleState }
+}
+```
 
-### local_lore_entries
+### Profiles
 
-Stores lore/knowledge entries for the lore module. Entries are queryable by the `lore::query` tool during gameplay.
+```
+{appData}/profiles.json
+```
 
-**Columns:**
+A single file containing all profiles and the active profile ID. Held in memory via `OnceCell<Mutex<ProfilesFile>>` in `engine/src/src/commands/profile.rs`, initialized by `init_profiles()` called in `lib.rs` setup.
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | text | PRIMARY KEY, NOT NULL | UUID entry identifier |
-| `story_id` | text | NOT NULL | Parent story ID |
-| `title` | text | NOT NULL | Entry title |
-| `content` | text | NOT NULL | Entry content body |
-| `tags` | text | nullable | JSON array of strings for categorization |
-| `created_at` | text | NOT NULL | ISO timestamp |
-| `updated_at` | text | NOT NULL | ISO timestamp |
+```typescript
+// ProfilesFile
+{
+  version: 1;
+  profiles: Profile[];
+  active_id: string | null;  // ID of the active profile, or null if none set
+}
 
-### local_profiles
-
-Stores user-defined player profiles. Profile data is local-only. The active profile's fields are injected into gameplay LLM prompts.
-
-**Columns:**
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | text | PRIMARY KEY, NOT NULL | UUID profile identifier |
-| `name` | text | NOT NULL | Profile display name |
-| `fields` | text | NOT NULL | JSON-serialized `Record<string, string>` of key-value fields |
-| `active` | integer (boolean) | NOT NULL, default false | Whether this is the currently active profile |
-| `created_at` | text | NOT NULL | ISO timestamp |
-| `updated_at` | text | NOT NULL | ISO timestamp |
+// Profile
+{
+  id: string;           // UUID profile identifier
+  name: string;         // Display name
+  fields: any;          // Key-value fields (serde_json::Value, exported as TS any)
+  created_at: string;   // ISO timestamp
+  updated_at: string;   // ISO timestamp
+}
+```
 
 **Business rules:**
 - Max 5 profiles per user
-- Only one profile may be active at a time
+- Active profile tracked at the file level via `active_id` (not per-profile)
+- `profile_delete` clears `active_id` if the deleted profile was active
 - Default fields prepopulated: `name`, `appearance`, `interests`, `favorite color`
 - Managed via `gui/src/composables/useProfiles.ts`
 
-## Querying Local Database
+### Lore Entries
 
-All queries use Drizzle ORM through `db` and table references from `gui/src/db/`.
+```
+{appData}/lore/{id}.json
+```
+
+Each file contains a single `LoreEntry`:
 
 ```typescript
-import { db, localSessions, localPages, localStateSnapshots, localLoreEntries } from '~/db';
-import { eq, desc, and, like, or } from 'drizzle-orm';
-
-// Query stories
-const stories = await db.select().from(localStories).orderBy(desc(localStories.createdAt));
-
-// Query sessions for a story
-const sessions = await db.select().from(localSessions)
-  .where(eq(localSessions.storyId, storyId))
-  .orderBy(desc(localSessions.createdAt));
-
-// Query pages with tool calls
-const pages = await db.select().from(localPages)
-  .where(eq(localPages.sessionId, sessionId))
-  .orderBy(localPages.createdAt);
-
-// Query head snapshot for a session
-const snapshot = await db.select().from(localStateSnapshots)
-  .where(eq(localStateSnapshots.sessionId, sessionId))
-  .orderBy(desc(localStateSnapshots.pageIndex))
-  .limit(1);
-
-// Query lore entries for a story
-const lore = await db.select().from(localLoreEntries)
-  .where(
-    and(
-      eq(localLoreEntries.storyId, storyId),
-      or(
-        like(localLoreEntries.title, `%${query}%`),
-        like(localLoreEntries.content, `%${query}%`)
-      )
-    )
-  );
-
-// Insert a story
-await db.insert(localStories).values({
-  id, title, description, config: JSON.stringify(config),
-  createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-});
-
-// Insert a snapshot
-await db.insert(localStateSnapshots).values({
-  id, sessionId, pageIndex, data: JSON.stringify(state),
-  createdAt: new Date().toISOString(),
-});
-
-// Update
-await db.update(localSessions)
-  .set({ title: newTitle, updatedAt: new Date().toISOString() })
-  .where(eq(localSessions.id, sessionId));
-
-// Delete
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
-
-// Multi-step write — use individual calls, NOT db.transaction()
-// (see "Transaction Constraint" below)
-await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+{
+  version: 1;
+  id: string;           // UUID entry identifier
+  story_id: string;     // Parent story ID
+  title: string;
+  content: string;
+  tags?: string[];      // Array of strings for categorization
+  created_at: string;   // ISO timestamp
+  updated_at: string;   // ISO timestamp
+}
 ```
 
-### Transaction Constraint
+---
 
-**Do not use `db.transaction()`.** The `drizzle-orm/sqlite-proxy` adapter simulates transactions by sending raw `BEGIN`/`COMMIT` SQL statements. However, `@tauri-apps/plugin-sql` uses a `sqlx::Pool<Sqlite>` with a default `max_connections` of 10. Each `pool.execute()` call within the simulated transaction can be routed to a **different pool connection**, so the transaction context is lost. Operations that appear atomic will actually execute on separate connections — causing silent data loss (e.g., deletes in a "transaction" that silently roll back while inserts commit).
+## Snapshot Lifecycle
 
-**Correct pattern:** Use individual `await db.insert()` / `db.update()` / `db.delete()` calls in sequence. Each call auto-commits on its own connection.
+State snapshots enable undo/fork by capturing module state at each page:
+
+- **Session creation** → head snapshot with empty state `{}`
+- **After each page's tool calls** → head snapshot (`state.head.json`) updated in place
+- **Every 100 pages** → copy current head as checkpoint (`state.{batch}.json`) before updating
+- **Fork** → delete head snapshot + checkpoints with `page_index >= fork_index`, recompute head from youngest checkpoint before `fork_index` via tool call replay through `registry.executeTool()` (with `init()` fallback for uninitialized module state), then `push()` to create a new page
+- **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data
+- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback (forward-compatible with module upgrades). `executeTool()` applies this fallback when module state is undefined.
+
+---
+
+## Version-Gated Deserialization
+
+Every JSON file includes a `version` field. The Rust backend uses `read_versioned_json()` to:
+
+1. Deserialize the JSON into a generic `Value`
+2. Extract the `version` field
+3. Match on the version number
+4. Dispatch to the correct typed deserializer (currently only v1)
+
+This allows future format changes to add new match arms without breaking existing files.
+
+---
+
+## Data Access from Frontend
+
+All data access goes through tauri-specta generated bindings — never direct file I/O from the frontend. The `unwrap()` helper converts the `typedError` discriminated union back to throw-on-error behavior.
 
 ```typescript
-// WRONG — transaction context is lost across pool connections
-await db.transaction(async (tx) => {
-  await tx.delete(localPages).where(eq(localPages.sessionId, sessionId));
-  await tx.delete(localSessions).where(eq(localSessions.id, sessionId));
-});
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
-// CORRECT — individual auto-commit calls
-await db.delete(localPages).where(eq(localPages.sessionId, sessionId));
-await db.delete(localSessions).where(eq(localSessions.id, sessionId));
+// Sessions
+const sessions = await unwrap(commands.sessionList());
+const result = await unwrap(commands.sessionLoad(id));
+await unwrap(commands.sessionCreate(id, storyId ?? null, 'New Session'));
+await unwrap(commands.sessionDelete(id));
+await unwrap(commands.sessionSaveMeta(id, meta));
+await unwrap(commands.sessionPushPage(id, pageEntry));
+await unwrap(commands.sessionUpdatePage(id, 0, pageEntry));
+await unwrap(commands.sessionTruncatePages(id, 5));
+
+// Snapshots
+const head = await unwrap(commands.sessionGetHeadSnapshot(id));
+await unwrap(commands.sessionSaveHeadSnapshot(id, snapshotEntry));
+await unwrap(commands.sessionDeleteHeadSnapshot(id));
+const snap = await unwrap(commands.sessionFindSnapshotBefore(id, 5));
+await unwrap(commands.sessionSaveCheckpoint(id, 0, snapshotEntry));
+await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
+
+// Profiles
+const { profiles, active_id } = await unwrap(commands.profileList());
+await unwrap(commands.profileCreate(profileEntry));
+await unwrap(commands.profileUpdate(profileId, updatedEntry));
+await unwrap(commands.profileDelete(profileId));
+await unwrap(commands.profileSetActive(profileId));
+
+// Stories
+const story = await unwrap(commands.storyGet(id));
+await unwrap(commands.storySave(storyEntry));
+
+// Lore
+const results = await unwrap(commands.loreQuery(id, 'search term'));
 ```
 
-This constraint applies everywhere the `db` instance from `gui/src/db/` is used. There is no workaround short of replacing the `sqlite-proxy` adapter with a direct SQLite driver that supports true single-connection transactions.
+**No transactions**: Each file operation is independent. The frontend drives sequential operations. There is no `db.transaction()` — each bindings call performs a single atomic file read or write.
 
-## Migrations
+---
 
-Schema evolution is managed by **Drizzle Kit** migrations. Migration SQL files live in `gui/drizzle/` and are bundled at build time via `import.meta.glob`. They are applied automatically on first DB connection by `runMigrations()` in `gui/src/db/index.ts`.
+## Composables Mapping
 
-### Configuration
+| Composable | Tauri Commands Used |
+|-----------|-------------------|
+| `useVignettes` | `session_list`, `session_create`, `session_delete` |
+| `useVignette` | `session_load`, `session_save_meta`, `session_push_page`, `session_update_page`, `session_truncate_pages`, `session_get_head_snapshot`, `session_save_head_snapshot`, `session_delete_head_snapshot`, `session_find_snapshot_before`, `session_save_checkpoint`, `session_delete_checkpoints_from` |
+| `useProfiles` | `profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active` |
+| `useStoryBuilder` | `story_get`, `story_save` |
+| `loreModule` | `lore_query` |
 
-`gui/drizzle.config.ts` configures Drizzle Kit:
+---
 
-```typescript
-import { defineConfig } from 'drizzle-kit';
+## Profile Fields in Prompts
 
-export default defineConfig({
-  schema: './src/db/schema.ts',
-  out: './drizzle',
-  dialect: 'sqlite',
-});
-```
+The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/composables/useGame.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
 
-### Migration Files
+---
 
-Generated migrations are stored in `gui/drizzle/`:
+## Advantages Over SQLite
 
-- `0000_legal_venom.sql` — Initial migration that creates all 6 tables
-- `0001_brainy_morph.sql` — Drops the `local_onboarding` table (migrated to tauri-plugin-store)
-- `meta/_journal.json` — Drizzle Kit migration journal (tracks migration order and checksums)
+- **No connection pool issues**: Eliminates the `db.transaction()` bug where sqlite-proxy + sqlx pool connection routing broke transaction semantics
+- **Easy inspection**: JSON files can be read with any text editor or tool
+- **Simple backup**: Copy the entire `{appData}/` directory
+- **Future "mod" support**: Loose file structure enables loading external data files
+- **No migration system needed**: Version-gated deserialization handles schema evolution inline
 
-Each migration SQL file may contain multiple statements separated by `--> statement-breakpoint` markers. The migration runner splits on this marker and executes each statement sequentially.
-
-### Workflow
-
-1. Modify `gui/src/db/schema.ts` (add/modify table definitions)
-2. Run `just generate-migration` — generates a new numbered SQL migration in `gui/drizzle/`
-3. Migration is automatically applied on next app launch
-
-```bash
-# After modifying schema.ts
-just generate-migration
-```
-
-### How Migrations Run
-
-The migration runner in `gui/src/db/index.ts` (`runMigrations()`):
-
-1. Creates a `_migrations` tracking table (`id`, `name`, `applied_at`) if it does not exist
-2. Queries already-applied migration names from `_migrations`
-3. For each pending migration (not yet applied):
-   - Splits the SQL on `--> statement-breakpoint`
-   - Executes each statement sequentially
-   - Records the migration as applied in `_migrations`
-4. Migrations are bundled at build time via `import.meta.glob('../../drizzle/*.sql', { query: '?raw', eager: true, import: 'default' })` — no runtime file I/O needed
-
-### Baseline Detection
-
-For databases created before the migration system existed:
-
-1. The runner checks if `_migrations` table exists AND `local_stories` table exists
-2. If `local_stories` exists but no migrations have been applied → the database is a pre-migration database
-3. All current migrations are marked as applied (inserted into `_migrations`) without executing their SQL
-4. This prevents re-creating tables that already exist
-
-### Adding Schema Changes
-
-To modify the local SQLite schema:
-
-1. Add/modify table definitions in `gui/src/db/schema.ts` (Drizzle `sqliteTable()` definitions)
-2. Run `just generate-migration` to generate a new migration SQL file
-3. The migration runs automatically on the next app launch
-4. No manual `ALTER TABLE` or DB recreation needed — Drizzle Kit generates the appropriate SQL
+---
 
 ## Related Documentation
 
-- [Code Conventions](./code-conventions.md) - Query patterns and type safety
-- [Project Structure](./project-structure.md) - Schema file organization
-- [API Routes](./api-routes.md) - Tauri command documentation
-- [Frontend Architecture](./frontend-architecture.md) - How the frontend uses local SQLite
+- [Code Conventions](./code-conventions.md) - Import patterns and async functions
+- [Project Structure](./project-structure.md) - File organization for persistence commands
+- [API Routes](./api-routes.md) - Full Tauri command documentation with parameters and return types
+- [Frontend Architecture](./frontend-architecture.md) - How the frontend uses Tauri commands for data access

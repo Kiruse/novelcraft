@@ -226,7 +226,7 @@ const { isDebugMode } = useDebugMode();
 
 const title = computed(() => props.vignette.meta.value.title);
 const pages = computed(() => props.vignette.pages.value);
-const hasDispositionPage = computed(() => !!props.vignette.meta.value.disposition?.trim());
+const hasDispositionPage = computed(() => !!props.vignette.meta.value.description?.trim());
 const totalPages = computed(() => pages.value.length + (hasDispositionPage.value ? 1 : 0));
 const realPageIndex = computed(() => hasDispositionPage.value ? currentPage.value - 1 : currentPage.value);
 
@@ -255,7 +255,7 @@ const renderedResponse = computed(() => {
 });
 
 const renderedDisposition = computed(() => {
-  const disposition = props.vignette.meta.value.disposition?.trim();
+  const disposition = props.vignette.meta.value.description?.trim();
   if (!disposition) return '';
   return renderMarkdown(disposition);
 });

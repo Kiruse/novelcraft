@@ -11,7 +11,8 @@ The frontend is built with Vue 3 + Vite + Vue Router, running inside a Tauri web
 - **Vue 3**: Progressive JavaScript framework (Composition API)
 - **Vite**: Build tool and dev server
 - **Vue Router**: Client-side routing
-- **tauri-plugin-sql**: Local SQLite for gameplay state
+- **Tauri IPC** (`invoke`): All data persistence, LLM proxy, file operations
+- **tauri-specta**: Generated TypeScript bindings (`gui/src/bindings.ts`) for type-safe command calls
 - **tauri-plugin-store**: Persistent key/value store for simple flags and preferences
 - **Open Props**: CSS custom property design tokens
 
@@ -19,8 +20,8 @@ The frontend is built with Vue 3 + Vite + Vue Router, running inside a Tauri web
 
 All gameplay runs client-side inside the Tauri webview:
 
-- **Tauri IPC** (`invoke`) — LLM proxy, file operations, model configuration
-- **Local SQLite** (`db` from `~/db`) — stories, vignettes, pages, state snapshots, lore entries, profiles
+- **Tauri IPC** — LLM proxy, file operations, model configuration, session/profile/story/lore management via tauri-specta generated bindings (`commands.xxx()` from `gui/src/bindings.ts`). The only raw `invoke()` is `invoke('prompt', ...)` in `tauriLanguageModel.ts` (fire-and-forget for LLM streaming).
+- **Filesystem persistence** — JSON files managed by Rust backend commands (no database)
 - **LLM streaming** (`useLlmStream`) — text generation via Tauri events
 
 ## Pages
@@ -41,7 +42,7 @@ The home page shows a hero section, the most recent vignettes, and an empty stat
 
 ### Vignette Pages
 
-Vignettes are purely client-side — they use local SQLite.
+Vignettes are purely client-side — data is persisted via Tauri commands to JSON files.
 
 #### Vignette List (`gui/src/pages/vignettes/index.vue`)
 
@@ -49,7 +50,7 @@ Displays the user's local vignette sessions.
 
 **Route:** `/vignettes`
 
-**Data source:** Reads from local SQLite (`local_sessions` table via `useVignettes`, queried through Drizzle ORM)
+**Data source:** Reads sessions via `commands.sessionList()` through `useVignettes`
 
 #### Vignette Play (`gui/src/pages/vignettes/[id].vue`)
 
@@ -57,7 +58,7 @@ The main vignette gameplay page.
 
 **Route:** `/vignettes/:id` (also supports `/vignettes/new` for creating new vignettes)
 
-**Data source:** Reads/writes to local SQLite (`local_sessions`, `local_pages`, `local_state_snapshots`, `local_stories`)
+**Data source:** Reads/writes via session Tauri commands through `useVignette`
 
 **Features:**
 - Supports both `new` (from home page "New vignette" button) and existing session IDs
@@ -105,9 +106,9 @@ Page creation in the Vignette Play page follows a 2-step push/fork pattern coord
 
 1. **Push/Fork**: Call `vignette.push({prompt})` to append a new page (or `vignette.fork({pageIndex})` to truncate and branch). Both return a `PromptUpdater` function.
 2. **Run**: Call `game.run({session, ...})` to stream the LLM response. This is stateless — it returns `{ response, toolCalls, state }` without persisting.
-3. **Finalize**: Call the `PromptUpdater(response, toolCalls, state)` to persist the response and state transition to the DB.
+3. **Finalize**: Call the `PromptUpdater(response, toolCalls, state)` to persist the response and state transition via Tauri commands.
 
-When `fork()` is used, it deletes pages and snapshots at/after the fork index, replays tool calls from surviving pages via `registry.executeTool()` to rebuild state (with `init()` fallback for uninitialized module state), then calls `push()` internally to create the new page.
+When `fork()` is used, it deletes pages and snapshots at/after the fork index via Tauri commands, replays tool calls from surviving pages via `registry.executeTool()` to rebuild state (with `init()` fallback for uninitialized module state), then calls `push()` internally to create the new page.
 
 ### App Root (`gui/src/App.vue`)
 
@@ -132,42 +133,24 @@ const routes = [
 
 ## Composables
 
-Composables are located in `gui/src/composables/`. Vue composition API functions (`ref`, `computed`, `watch`, etc.) and vue-router functions (`useRoute`, `useRouter`) are auto-imported at build time by a custom Vite plugin (`gui/vite-plugins/auto-import.ts`). Database access uses Drizzle ORM via `import { db, ... } from '~/db'`.
-
-### Drizzle ORM Database Layer
-
-All SQLite access goes through Drizzle ORM, defined in `gui/src/db/`.
-
-**Location:** `gui/src/db/`
-
-**Files:**
-- `schema.ts` — Drizzle table definitions for all 6 SQLite tables using `sqliteTable()` from `drizzle-orm/sqlite-core`. Column property names are camelCase mapping to snake_case SQL columns.
-- `index.ts` — Drizzle instance using `drizzle-orm/sqlite-proxy` adapter bridged to `@tauri-apps/plugin-sql`. Exports `db` (the Drizzle instance), `schema`, `SQLiteTx`, `SQLiteTxCallback`, and re-exports all individual table objects. Runs drizzle-kit migrations on first connection (lazy singleton), with baseline detection for pre-migration databases.
-
-**Exports:** `db` (Drizzle instance), `schema`, and all table objects (`localStories`, `localSessions`, `localPages`, `localStateSnapshots`, `localLoreEntries`, `localProfiles`)
-
-```typescript
-import { db, localSessions } from '~/db';
-import { eq, desc } from 'drizzle-orm';
-
-const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
-```
+Composables are located in `gui/src/composables/`. Vue composition API functions (`ref`, `computed`, `watch`, etc.) and vue-router functions (`useRoute`, `useRouter`) are auto-imported at build time by a custom Vite plugin (`gui/vite-plugins/auto-import.ts`). All data access goes through tauri-specta generated bindings (`commands.xxx()` from `~/bindings`), wrapped with `unwrap()` from `~/utils` for throw-on-error behavior. The `invoke` and `listen` identifiers from `@tauri-apps/api/core` are auto-imported but only used directly in `tauriLanguageModel.ts` for LLM streaming.
 
 ### useProfiles
 
-Wraps the `local_profiles` SQLite table for managing player profiles.
+Manages player profiles via generated bindings (`commands.profileList()`, `commands.profileCreate()`, etc., wrapped with `unwrap()`). Profiles are persisted as `profiles.json` via the Rust backend using `OnceCell<Mutex<ProfilesFile>>` in `engine/src/src/commands/profile.rs`. Active profile tracking is at the file level (`active_id` in `ProfilesFile`), not per-profile.
 
 **Location:** `gui/src/composables/useProfiles.ts`
 
-**Returns:** `{ profiles, activeProfile, refresh, create, update, remove, setActive, init, maxProfiles, defaultFields }`
+**Returns:** `{ profiles, activeId, activeProfile, refresh, create, update, remove, setActive, init, maxProfiles, defaultFields }`
 
-- `profiles` — `readonly` reactive array of all profiles
-- `activeProfile` — computed reference to the profile with `active: true`
-- `init()` — loads profiles from local DB, auto-creates a "Default" profile if none exist
-- `create(name, fields?)` — creates a new profile (max 5)
-- `update(id, patch)` — updates name and/or fields
-- `remove(id)` — deletes a profile; if it was active, activates the next available
-- `setActive(id)` — sets exactly one profile as active
+- `profiles` — `readonly` reactive array of all profiles (`Profile[]` from generated bindings)
+- `activeId` — `Ref<string | null>` reactive ref tracking the active profile ID from `ProfileListResult.active_id`
+- `activeProfile` — computed reference to the profile whose ID matches `activeId.value`
+- `init()` — loads profiles via `commands.profileList()`, unpacks `{ profiles, active_id }`, auto-creates a "Default" profile if none exist or if no active ID is set
+- `create(name, fields?)` — creates a new profile (max 5) via `commands.profileCreate({ id, name, fields, created_at })`
+- `update(id, patch)` — updates name and/or fields via `commands.profileUpdate({ id, name, fields })`
+- `remove(id)` — deletes a profile via `commands.profileDelete()`; if it was active, activates the next available
+- `setActive(id)` — sets the active profile via `commands.profileSetActive({ id })`
 
 **Default fields:** `{ name, appearance, interests, favorite color }`
 
@@ -234,7 +217,7 @@ for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })
 
 ### useStoryBuilder
 
-Story builder logic. Saves to `local_stories` table instead of `local_sessions`. Default module types are `['npc', 'plan', 'lore']`.
+Story builder logic. Saves stories via `commands.storySave()`, loads via `commands.storyGet()` (wrapped with `unwrap()`). Default module types are `['npc', 'plan', 'lore']`.
 
 **Location:** `gui/src/composables/useStoryBuilder.ts`
 
@@ -242,7 +225,7 @@ Uses `createDefaultRegistry()` from `~/gameplay`.
 
 ### useVignettes
 
-Vignette list data and CRUD operations. `create()` inserts a session and snapshot 0 (empty state `{}`) into `local_state_snapshots`. `remove()` deletes `local_pages`, `local_state_snapshots`, and `local_sessions` for the session.
+Vignette list data and CRUD operations. `create()` calls `commands.sessionCreate()` which creates the session directory with initial head snapshot. `remove()` calls `commands.sessionDelete()` which removes the entire session directory.
 
 **Location:** `gui/src/composables/useVignettes.ts`
 
@@ -253,14 +236,14 @@ Vignette list data and CRUD operations. `create()` inserts a session and snapsho
 - `vignettes` — `Readonly<Ref<VignetteRow[] | undefined>>` — all vignettes (loaded on demand via `loadVignettes`; `undefined` until loaded, empty array after)
 - `recent` — `Readonly<Ref<VignetteRow[]>>` — up to 3 most recent vignettes
 - `hasMore` — `Readonly<Ref<boolean>>` — whether more than 3 vignettes exist
-- `create()` — creates a new session with snapshot 0, returns the session ID
-- `remove(id)` — deletes session, its pages, and snapshots
+- `create()` — creates a new impromptu session via `commands.sessionCreate()` (passes `null` for `story_id`), returns the session ID
+- `remove(id)` — deletes session via `commands.sessionDelete()`
 - `refresh()` — refreshes both recent and full list (if loaded)
 - `loadVignettes()` — async wrapper around `refreshAll()` that loads the full vignette list
 
 ### useVignette
 
-Manages a single vignette session — its metadata, pages, state snapshots, and database mutations. Exposes a 2-step push/fork pattern where `push()`/`fork()` return a `PromptUpdater` that consumers call after `run()` completes.
+Manages a single vignette session — its metadata, pages, state snapshots, and persistence via Tauri commands. Exposes a 2-step push/fork pattern where `push()`/`fork()` return a `PromptUpdater` that consumers call after `run()` completes.
 
 **Location:** `gui/src/composables/useVignette.ts`
 
@@ -271,16 +254,16 @@ Manages a single vignette session — its metadata, pages, state snapshots, and 
 - `pages` — `Readonly<Ref<VignettePage[]>>` — reactive page array. Each `VignettePage` includes an optional `toolCalls` field (serialized JSON).
 - `snapshot` — `Readonly<Ref<Snapshot>>` — readonly ref exposing the current state snapshot
 - `error` — `Readonly<Ref<string | undefined>>`
-- `save()` — persists `meta` changes to `local_sessions`
-- `push({ prompt?, system? })` — inserts a new page into the DB and reactive array. Returns a `PromptUpdater` function `(response, toolCalls, state) => Promise<void>` that finalizes the page with the LLM's response, tool calls, and state transition (including snapshot management).
-- `fork({ pageIndex, system?, prompt? })` — truncates pages >= `pageIndex` (DB + reactive), deletes snapshots >= `pageIndex`, loads the youngest snapshot before `pageIndex`, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page. Returns a `PromptUpdater`. System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
-- `update({ pageIndex, system?, prompt?, response? })` — edits page text without AI involvement. Null clears, undefined keeps existing.
-- `getGameplaySession()` — returns a `GameplaySession` derived from the current snapshot: `{ sessionId, storyId, state: snapshot.data }`
+- `save()` — persists `meta` changes via `commands.sessionSaveMeta()`
+- `push({ prompt?, system? })` — inserts a new page via `commands.sessionPushPage()` and returns a `PromptUpdater` function `(response, toolCalls, state) => Promise<void>` that finalizes the page with the LLM's response, tool calls, and state transition (including snapshot management via `commands.sessionSaveHeadSnapshot()` and checkpoint logic).
+- `fork({ pageIndex, system?, prompt? })` — truncates pages via `commands.sessionTruncatePages()`, deletes head snapshot via `commands.sessionDeleteHeadSnapshot()`, deletes checkpoints via `commands.sessionDeleteCheckpointsFrom()`, loads the youngest snapshot before `pageIndex` via `commands.sessionFindSnapshotBefore()`, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page. Returns a `PromptUpdater`. System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
+- `update({ pageIndex, system?, prompt?, response? })` — edits page text via `commands.sessionUpdatePage()` without AI involvement. Null clears, undefined keeps existing.
+- `getGameplaySession()` — returns a `GameplaySession` derived from the current snapshot: `{ sessionId, storyId: string | undefined, state: snapshot.data }`. `storyId` is undefined for impromptu/freeform sessions.
 
-**Fork semantics:** `fork()` deletes the target page and all subsequent pages from the DB, deletes orphaned snapshots, rewinds state by loading the youngest snapshot before the fork index and replaying tool calls via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page. The `PromptUpdater` returned by `push()` handles snapshot checkpointing (every 100 pages) and state persistence.
+**Fork semantics:** `fork()` deletes the target page and all subsequent pages via generated bindings, deletes orphaned snapshots (head + checkpoints), rewinds state by finding the youngest snapshot before the fork index and replaying tool calls via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page. The `PromptUpdater` returned by `push()` handles snapshot checkpointing (every 100 pages via `commands.sessionSaveCheckpoint()`) and state persistence.
 
 **Exported types:**
-- `VignetteMeta` — `{ title, storyId, disposition, createdAt, updatedAt }`
+- `VignetteMeta` — `{ title, storyId: string | undefined, disposition, createdAt, updatedAt }`. `storyId` is undefined for impromptu/freeform sessions.
 - `VignettePage` — `{ id, sessionId, system?, prompt?, response?, toolCalls? }`
 - `ForkOpts` — `{ pageIndex, system?: string | null, prompt?: string | null }`
 - `UpdateOpts` — `{ pageIndex, system?: string | null, prompt?: string | null, response?: string | null }`
@@ -339,7 +322,7 @@ Singleton composable that checks which configured LLM hosts are unreachable. Use
 
 - `unreachableHosts` — `Readonly<Ref<UnreachableHost[]>>` — list of hosts that failed the liveness check
 - `checked` — `Readonly<Ref<boolean>>` — whether at least one check has been performed
-- `checkHosts()` — calls `invoke('ping_hosts')` and populates `unreachableHosts`
+- `checkHosts()` — calls `commands.pingHosts()` (wrapped with `unwrap()`) and populates `unreachableHosts`
 - `isHostUnreachable(baseUrl: string)` — returns `true` if the given URL is in the unreachable list
 - `dismiss()` — clears the unreachable hosts list
 
@@ -352,7 +335,7 @@ interface UnreachableHost {
 
 ### useOnboarding
 
-Singleton composable that tracks whether first-run onboarding has been completed. Uses **tauri-plugin-store** (`LazyStore` from `@tauri-apps/plugin-store`) to persist a boolean flag instead of a SQLite table.
+Singleton composable that tracks whether first-run onboarding has been completed. Uses **tauri-plugin-store** (`LazyStore` from `@tauri-apps/plugin-store`) to persist a boolean flag.
 
 **Location:** `gui/src/composables/useOnboarding.ts`
 
@@ -658,7 +641,7 @@ Encapsulated LLM model configuration card. Handles all edit state, save/cancel l
 
 - Uses `v-model` for expanded/collapsed state (wraps `Collapsible` internally)
 - Internally manages `pinging` and `pingError` refs for liveness checking
-- On `base_url` change, a debounced (1s) ping runs via `invoke('ping_host')`
+- On `base_url` change, a debounced (1s) ping runs via `commands.pingHost()` (wrapped with `unwrap()`)
 - Shows a red border on the URL input when `pingError` is set
 - Shows a `Tooltip` below the Base URL input when `pingError` is set, displaying the error message
 - Shows a `Spinner` in front of Save/Cancel buttons while a ping is in flight
@@ -673,7 +656,7 @@ Reusable section component for LLM model configuration. Contains the models list
 **Location:** `gui/src/components/ModelsConfigurator.vue`
 
 **Behavior:**
-- Loads models on mount via `invoke('list_models')` and saves via `invoke('save_models', { models })`
+- Loads models on mount via `commands.listModels()` and saves via `commands.saveModels()` (wrapped with `unwrap()`)
 - The set of usage IDs is fixed (`storyteller`, `suggestions`) and cannot be added or removed
 - Each model is rendered as a `ModelConfigBox` component
 - The models path hint displays a description prefix "Your model configuration is saved to:" followed by the path in monospace font, with a guaranteed separator between directory and filename
@@ -814,16 +797,16 @@ const router = useRouter();
 </script>
 ```
 
-### Local DB Access
+### Data Access
 
-Drizzle ORM provides type-safe queries. Import `db` and table references from `~/db`, operators from `drizzle-orm`:
+All data access goes through tauri-specta generated bindings. Import `commands` from `~/bindings` and use `unwrap()` from `~/utils`:
 
 ```typescript
-import { db, localSessions } from '~/db';
-import { eq, desc } from 'drizzle-orm';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
-const sessions = await db.select().from(localSessions).orderBy(desc(localSessions.createdAt));
-await db.delete(localSessions).where(eq(localSessions.id, id));
+const sessions = await unwrap(commands.sessionList());
+await unwrap(commands.sessionDelete({ sessionId: id }));
 ```
 
 ### Components
@@ -861,4 +844,4 @@ Registered in `gui/src/pages/vignettes/index.vue` on `document` via `onMounted`.
 - [Project Structure](./project-structure.md) - File organization for frontend code
 - [Code Conventions](./code-conventions.md) - Component patterns and styling guidelines
 - [API Routes](./api-routes.md) - Tauri commands used by the frontend
-- [Database Schema](./database-schema.md) - Local SQLite schema for gameplay state
+- [Data Storage](./database-schema.md) - JSON file formats and storage layout

@@ -11,15 +11,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+bytes = "1.11.1"
+chrono = "0.4"
+dirs = "6"
+env_logger = "0.11"
+log = "0.4"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["serde_json"] }
+specta-typescript = "0.0.12"
 tauri = { version = "2", features = [] }
-tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", features = ["stream", "json"] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-dirs = "6"
-bytes = "1.11.1"
+uuid = { version = "1.23.1", features = ["v4"] }

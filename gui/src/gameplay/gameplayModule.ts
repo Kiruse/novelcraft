@@ -8,7 +8,7 @@ import { DeepReadonly } from 'vue';
 type MaybePromise<T> = T | Promise<T>;
 
 export interface GameplaySession {
-  storyId: string;
+  storyId?: string;
   sessionId: string;
   /** Complete game session state. Modules lens into this object. */
   state: Record<string, unknown>;

@@ -18,34 +18,30 @@
 </template>
 
 <script setup lang="ts">
-import { invoke } from '@tauri-apps/api/core';
-import { appDataDir } from '@tauri-apps/api/path';
 import ModelConfigBox from '~/components/ModelConfigBox.vue';
 import { useHostLiveness } from '~/composables/useHostLiveness';
-
-interface ModelConfig {
-  base_url: string;
-  model_id: string;
-  api_key?: string;
-}
+import { commands, type ModelConfig, type ModelConfig_Deserialize } from '~/bindings';
+import { unwrap } from '~/utils';
 
 const { isHostUnreachable } = useHostLiveness();
 
 const models = ref<Record<string, ModelConfig>>({});
 const modelsPath = ref('');
 
-onMounted(async () => {
-  const dir = await appDataDir();
-  const sep = dir.endsWith('/') || dir.endsWith('\\') ? '' : '/';
-  modelsPath.value = `${dir}${sep}models.json`;
-  models.value = await invoke<Record<string, ModelConfig>>('list_models');
-});
-
 async function onSave(id: string, updated: ModelConfig) {
   const all = { ...models.value, [id]: updated };
-  await invoke('save_models', { models: all });
+  await unwrap(commands.saveModels(all as Record<string, ModelConfig_Deserialize>));
   models.value = all;
 }
+
+onMounted(async () => {
+  const [path, list] = await Promise.all([
+    unwrap(commands.datapath('models.json')),
+    unwrap(commands.listModels()),
+  ]);
+  modelsPath.value = path;
+  models.value = list;
+});
 </script>
 
 <style scoped>

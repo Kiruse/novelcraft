@@ -1,29 +1,17 @@
-import { eq, desc, and, lte, inArray, sql, gte } from 'drizzle-orm';
-import type { DeepReadonly, Ref } from "vue";
-import { db, localSessions, localPages, localStateSnapshots, SQLiteTx } from "~/db";
-import { createDefaultRegistry, type GameplaySession, type ToolCallRecord, toolCallRecordSchema } from "~/gameplay";
-import type { GameState } from "~/utils";
+import type { DeepReadonly, Ref } from 'vue';
+import { commands } from '~/bindings';
+import type { PageEntry_Serialize, SessionMeta_Serialize, Snapshot as SnapshotEntry } from '~/bindings';
+import { createDefaultRegistry, type GameplaySession, type ToolCallRecord, toolCallRecordSchema } from '~/gameplay';
+import type { GameState } from '~/utils';
+import { marshal, unwrap } from '~/utils';
 
 type LoadingState = 'loading' | 'ready' | 'error';
 
 export type Vignette = ReturnType<typeof useVignette>;
 
-export interface VignetteMeta {
-  title: string;
-  storyId: string;
-  disposition: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export type VignetteMeta = SessionMeta_Serialize;
 
-export interface VignettePage {
-  id: string;
-  sessionId: string;
-  system?: string;
-  prompt?: string;
-  response?: string;
-  toolCalls?: string;
-}
+export type VignettePage = PageEntry_Serialize;
 
 export interface ForkOpts {
   pageIndex: number;
@@ -45,18 +33,28 @@ interface Snapshot {
   sessionId: string;
   pageIndex: number;
   data: GameState;
-  createdAt: Date;
 }
 
-/** Interval between snapshot checkpoints, i.e. these snapshots are kept to speed up
- * snapshot replay
- */
 const SNAPSHOT_CHECKPOINT_INTERVAL = 100;
+
+function snapshotToEntry(s: Snapshot, sessionId: string): SnapshotEntry {
+  return { version: 1, id: s.id, sessionId, pageIndex: s.pageIndex, data: s.data };
+}
+
+function entryToSnapshot(e: SnapshotEntry): Snapshot {
+  return { id: e.id, sessionId: e.sessionId, pageIndex: e.pageIndex, data: e.data as GameState };
+}
 
 export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
   const now = new Date();
   const status = ref<LoadingState>('loading');
-  const meta = ref<VignetteMeta>({ title: '', storyId: '', disposition: '', createdAt: now, updatedAt: now });
+  const meta = ref<VignetteMeta>({
+    id: sessionId.value,
+    version: 1,
+    title: '',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  });
   const pages = ref<VignettePage[]>([]);
   const error = ref<string | undefined>();
   const snapshot = ref<Snapshot>({
@@ -64,24 +62,23 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
     sessionId: sessionId.value,
     pageIndex: 0,
     data: {},
-    createdAt: new Date(),
   });
 
   const registry = createDefaultRegistry();
 
   const getSession = (): GameplaySession => ({
     sessionId: sessionId.value,
-    storyId: meta.value.storyId,
+    storyId: meta.value.storyId ?? undefined,
     state: snapshot.value.data,
   });
 
   async function replay(
-    snapshot: Snapshot,
-    pages: VignettePage[],
+    _snapshot: Snapshot,
+    _pages: VignettePage[],
   ) {
     const session = getSession();
 
-    for (const page of pages.slice(snapshot.pageIndex + 1)) {
+    for (const page of _pages.slice(_snapshot.pageIndex + 1)) {
       if (!page.toolCalls) continue;
 
       const toolCalls = toolCallRecordSchema.array().parse(JSON.parse(page.toolCalls));
@@ -91,85 +88,29 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
 
         const result = await registry.executeTool(
           session, modType, toolName, toolCall.params,
-          (mt) => snapshot.data[mt],
+          (mt) => _snapshot.data[mt],
         );
-        snapshot.data[modType] = result.newState;
+        _snapshot.data[modType] = result.newState;
       }
     }
   }
 
-  /** Load the youngest snapshot before the given page index, including a snapshot
-   * on the page index itself.
-   */
-  async function loadSnapshot(pageIndex: number): Promise<Snapshot> {
-    const [snapshot] = await db.select({
-      id: localStateSnapshots.id,
-      sessionId: localStateSnapshots.sessionId,
-      pageIndex: localStateSnapshots.pageIndex,
-      data: localStateSnapshots.data,
-      createdAt: localStateSnapshots.createdAt,
-    }).from(localStateSnapshots)
-      .where(and(
-        eq(localStateSnapshots.sessionId, sessionId.value),
-        lte(localStateSnapshots.pageIndex, pageIndex),
-      ))
-      .orderBy(desc(localStateSnapshots.pageIndex))
-      .limit(1);
-    if (!snapshot) throw new Error(`No snapshot found before page index ${pageIndex}`);
-    return {
-      id: snapshot.id,
-      sessionId: snapshot.sessionId,
-      pageIndex: snapshot.pageIndex,
-      data: JSON.parse(snapshot.data),
-      createdAt: new Date(snapshot.createdAt),
-    };
-  }
-
   async function load(id: string) {
-    const sessionRows = await db.select().from(localSessions).where(eq(localSessions.id, id));
-    const session = sessionRows[0];
-    if (!session) throw new Error(`Session ${id} not found`);
-
-    const loadedPages = await db.select()
-      .from(localPages)
-      .where(eq(localPages.sessionId, session.id));
-
-    return {
-      title: session.title,
-      storyId: session.storyId,
-      disposition: session.description ?? '',
-      createdAt: new Date(session.createdAt),
-      updatedAt: new Date(session.updatedAt),
-      pages: loadedPages.map((p): VignettePage => ({
-        id: p.id,
-        sessionId: p.sessionId,
-        system: p.system ?? undefined,
-        prompt: p.prompt ?? undefined,
-        response: p.response ?? undefined,
-        toolCalls: p.toolCalls ?? undefined,
-      })),
-    };
+    return await unwrap(commands.sessionLoad(id));
   }
 
   async function save() {
-    const now = new Date();
+    const now = new Date().toISOString();
     meta.value.updatedAt = now;
-    await db.update(localSessions).set({
-      title: meta.value.title,
-      description: meta.value.disposition,
-      updatedAt: now.toISOString(),
-    }).where(eq(localSessions.id, sessionId.value));
+    await unwrap(commands.sessionSaveMeta(marshal(meta.value)));
   }
 
   /** Push a new page to the vignette.
    * @returns an updater that can be called once the AI has finished generating its response.
    */
   async function push({ prompt, system }: { prompt?: string, system?: string }): Promise<PromptUpdater> {
-    const ts = new Date().toISOString();
     const sid = sessionId.value;
     const pageIndex = pages.value.length;
-    // used for updating current snapshot, if it still exists
-    const currSnapId = snapshot.value.id;
 
     const page: VignettePage = {
       id: crypto.randomUUID(),
@@ -178,14 +119,7 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
       prompt,
     };
 
-    await db.transaction(async (tx) => {
-      await tx.update(localSessions).set({ updatedAt: ts }).where(eq(localSessions.id, sid));
-      await tx.insert(localPages).values({
-        ...page,
-        createdAt: ts,
-      });
-    });
-
+    await unwrap(commands.sessionUpsertPage({ session_id: sid, page_index: null, page: marshal(page) }));
     pages.value.push(page);
 
     return async (response, toolCalls, data) => {
@@ -194,37 +128,24 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
         sessionId: sid,
         pageIndex,
         data,
-        createdAt: new Date(),
       };
 
       page.response = response;
 
       if (toolCalls.length) {
         const toolCallsSerialized = page.toolCalls = JSON.stringify(toolCalls);
-        await db.transaction(async (tx) => {
-          await tx.update(localPages)
-            .set({
-              response,
-              toolCalls: toolCallsSerialized,
-            })
-            .where(eq(localPages.id, page.id));
-          await pushSnapshot(tx, _snapshot);
-        });
+        await unwrap(commands.sessionUpsertPage({ session_id: sid, page_index: pageIndex, page: marshal(page) }));
+        await unwrap(commands.sessionSaveHeadSnapshot(sid, snapshotToEntry(_snapshot, sid)));
         snapshot.value = _snapshot;
       } else {
-        await db.transaction(async (tx) => {
-          await tx.update(localPages)
-            .set({ response })
-            .where(eq(localPages.id, page.id));
-          if (pageIndex % SNAPSHOT_CHECKPOINT_INTERVAL !== 0) {
-            await tx.update(localStateSnapshots)
-              .set({ pageIndex })
-              .where(eq(localStateSnapshots.id, currSnapId));
-          } else {
-            await pushSnapshot(tx, _snapshot);
-            snapshot.value = _snapshot;
-          }
-        });
+        await unwrap(commands.sessionUpsertPage({ session_id: sid, page_index: pageIndex, page: marshal(page) }));
+
+        if (pageIndex > 0 && pageIndex % SNAPSHOT_CHECKPOINT_INTERVAL === 0) {
+          await unwrap(commands.sessionSaveCheckpoint(sid, snapshotToEntry(_snapshot, sid)));
+        }
+
+        await unwrap(commands.sessionSaveHeadSnapshot(sid, snapshotToEntry({ ..._snapshot, id: snapshot.value.id }, sid)));
+        snapshot.value = { ..._snapshot, id: snapshot.value.id };
       }
     };
   }
@@ -237,61 +158,50 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
     const page = _pages[pageIndex];
     if (!page) throw new RangeError(`Page index ${pageIndex} out of bounds`);
 
-    const ts = new Date().toISOString();
-    const truncateIds = _pages.slice(pageIndex).map(p => p.id);
-
-    // Nuke all pages including the page to fork
     pages.value = _pages = _pages.slice(0, pageIndex);
 
-    await db.transaction(async (tx) => {
-      await tx.delete(localPages).where(inArray(localPages.id, truncateIds));
-      await tx.delete(localStateSnapshots).where(gte(localStateSnapshots.pageIndex, pageIndex));
-      await tx.update(localSessions).set({ updatedAt: ts });
-    });
+    await unwrap(commands.sessionTruncatePages(sessionId.value, pageIndex));
+    await unwrap(commands.sessionDeleteCheckpointsFrom(sessionId.value, pageIndex));
+    await unwrap(commands.sessionDeleteHeadSnapshot(sessionId.value));
 
-    const _snapshot = await loadSnapshot(pageIndex - 1);
+    let _snapshot: Snapshot;
+    if (pageIndex > 0) {
+      const found = await unwrap(commands.sessionFindSnapshotBefore(sessionId.value, pageIndex - 1));
+      if (found) {
+        _snapshot = entryToSnapshot(found);
+      } else {
+        _snapshot = { id: crypto.randomUUID(), sessionId: sessionId.value, pageIndex: 0, data: {} };
+      }
+    } else {
+      _snapshot = { id: crypto.randomUUID(), sessionId: sessionId.value, pageIndex: 0, data: {} };
+    }
+
     await replay(_snapshot, _pages);
     snapshot.value = _snapshot;
 
-    // if value === null, clear
-    // if value === undefined, use old
-    // otherwise, use new
     return await push({
-      system: system === null ? undefined : system ?? page.system,
-      prompt: prompt === null ? undefined : prompt ?? page.prompt,
+      system: system === null ? undefined : system ?? page.system ?? undefined,
+      prompt: prompt === null ? undefined : prompt ?? page.prompt ?? undefined,
     });
   }
 
-  async function pushSnapshot(tx: SQLiteTx, snapshot: Snapshot) {
-    // delete any snapshots that aren't on backup intervals
-    await tx.delete(localStateSnapshots)
-      .where(and(
-        eq(localStateSnapshots.sessionId, snapshot.sessionId),
-        sql`${localStateSnapshots.pageIndex} % ${SNAPSHOT_CHECKPOINT_INTERVAL} <> 0`,
-      ));
-
-    await tx.insert(localStateSnapshots).values({
-      id: snapshot.id,
-      sessionId: snapshot.sessionId,
-      pageIndex: snapshot.pageIndex,
-      data: JSON.stringify(snapshot.data),
-      createdAt: snapshot.createdAt.toISOString(),
-    });
-  }
-
-  /** Update only the wording of system prompt, user prompt & AI response. Is NOT intended
-   * for receiving an AI response and thus does not return an updater.
-   */
   async function update({ pageIndex, system, prompt, response }: UpdateOpts): Promise<void> {
     const page = pages.value[pageIndex];
     if (!page) throw new RangeError(`Page index ${pageIndex} out of bounds`);
-    await db.update(localPages)
-      .set({
-        system: system === null ? null : system ?? page.system,
-        prompt: prompt === null ? null : prompt ?? page.prompt,
-        response: response === null ? null : response ?? page.response,
-      })
-      .where(eq(localPages.id, page.id));
+
+    const newSystem = system === null ? null : system ?? page.system ?? null;
+    const newPrompt = prompt === null ? null : prompt ?? page.prompt ?? null;
+    const newResponse = response === null ? null : response ?? page.response ?? null;
+
+    await unwrap(commands.sessionUpsertPage({
+      session_id: sessionId.value,
+      page_index: pageIndex,
+      page: marshal({ ...page, system: newSystem, prompt: newPrompt, response: newResponse }),
+    }));
+
+    page.system = newSystem ?? undefined;
+    page.prompt = newPrompt ?? undefined;
+    page.response = newResponse ?? undefined;
   }
 
   watch(sessionId, async (newId, _oldId, onCleanup) => {
@@ -303,9 +213,19 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
 
     try {
       status.value = 'loading';
-      const { pages: vignettePages, ...vignetteMeta } = await load(newId);
-      const pageIndex = vignettePages.length - 1;
-      const _snapshot = await loadSnapshot(pageIndex);
+      const { pages: vignettePages, meta: vignetteMeta } = await load(newId);
+      if (!mounted) return;
+
+      const headResult = await unwrap(commands.sessionGetHeadSnapshot(newId));
+      if (!mounted) return;
+
+      let _snapshot: Snapshot;
+      if (headResult) {
+        _snapshot = entryToSnapshot(headResult);
+      } else {
+        _snapshot = { id: '', sessionId: newId, pageIndex: 0, data: {} };
+      }
+
       await replay(_snapshot, vignettePages);
       if (!mounted) return;
 
@@ -332,7 +252,7 @@ export function useVignette(sessionId: DeepReadonly<Ref<string, any>>) {
     update,
     getGameplaySession: (): GameplaySession => ({
       sessionId: sessionId.value,
-      storyId: meta.value.storyId,
+      storyId: meta.value.storyId ?? undefined,
       state: snapshot.value.data,
     }),
   };

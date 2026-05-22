@@ -56,12 +56,7 @@ import { invoke } from '@tauri-apps/api/core';
 import Collapsible from '~/components/Collapsible.vue';
 import Spinner from '~/components/Spinner.vue';
 import Tooltip from '~/components/Tooltip.vue';
-
-interface ModelConfig {
-  base_url: string;
-  model_id: string;
-  api_key?: string;
-}
+import type { ModelConfig } from '~/bindings';
 
 const props = defineProps<{
   id: string;

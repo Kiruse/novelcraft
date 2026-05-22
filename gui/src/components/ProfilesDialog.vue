@@ -13,7 +13,7 @@
               v-for="p in profiles"
               :key="p.id"
               class="profile-card"
-              :class="{ 'profile-card--active': p.active }"
+              :class="{ 'profile-card--active': activeProfile?.id === p.id }"
               role="button"
               tabindex="0"
               @click="selectProfile(p.id)"
@@ -102,7 +102,7 @@
           </div>
 
           <button
-            v-else-if="profiles.length < maxProfiles"
+            v-else
             class="add-profile-btn"
             @click="startCreate"
           >
@@ -140,7 +140,6 @@ const props = defineProps<{
   open: boolean;
   profiles: readonly Profile[];
   activeProfile: Profile | null;
-  maxProfiles: number;
   defaultFields: Record<string, string>;
 }>();
 
@@ -210,9 +209,8 @@ function startCreate() {
     id,
     name: '',
     fields: { ...props.defaultFields },
-    active: false,
-    createdAt: now,
-    updatedAt: now,
+    created_at: now,
+    updated_at: now,
   };
   editName.value = '';
   editFields.value = Object.entries(props.defaultFields).map(([key, value]) => ({

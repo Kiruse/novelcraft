@@ -1,8 +1,8 @@
 import type { Component } from 'vue';
 import NpcConfig from '~/components/builder/NpcConfig.vue';
 import { createDefaultRegistry } from '~/gameplay';
-import { eq } from 'drizzle-orm';
-import { db, localStories } from '~/db';
+import { commands } from '~/bindings';
+import { unwrap } from '~/utils';
 
 export interface StoryForm {
   storyId: string;
@@ -186,26 +186,28 @@ export function useStoryBuilder() {
       const id = result.value?.id ?? crypto.randomUUID();
       const now = new Date().toISOString();
 
-      const existing = await db.select({ id: localStories.id })
-        .from(localStories)
-        .where(eq(localStories.id, id));
+      const existing = await unwrap(commands.storyGet(id));
 
-      if (existing.length > 0) {
-        await db.update(localStories).set({
-          title: payload.title ?? 'Untitled',
-          description: payload.description ?? null,
-          config: JSON.stringify(payload.modules),
-          updatedAt: now,
-        }).where(eq(localStories.id, id));
-      } else {
-        await db.insert(localStories).values({
+      if (existing) {
+        await unwrap(commands.storySave({
+          version: 1,
           id,
           title: payload.title ?? 'Untitled',
           description: payload.description ?? null,
           config: JSON.stringify(payload.modules),
-          createdAt: now,
-          updatedAt: now,
-        });
+          created_at: now,
+          updated_at: now,
+        }));
+      } else {
+        await unwrap(commands.storySave({
+          version: 1,
+          id,
+          title: payload.title ?? 'Untitled',
+          description: payload.description ?? null,
+          config: JSON.stringify(payload.modules),
+          created_at: now,
+          updated_at: now,
+        }));
       }
 
       const saved: SavedStory = {

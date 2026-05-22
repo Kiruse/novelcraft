@@ -33,8 +33,3 @@ fmt:
 
 fmt-check:
     cd engine && cargo fmt --check
-
-# ── Database ──────────────────────────────────────────────────
-
-generate-migration:
-    cd gui && bunx drizzle-kit generate

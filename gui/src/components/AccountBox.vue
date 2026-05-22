@@ -28,7 +28,6 @@
       :open="profilesOpen"
       :profiles="profileStore.profiles.value ?? []"
       :active-profile="activeProfile"
-      :max-profiles="profileStore.maxProfiles"
       :default-fields="profileStore.defaultFields"
       @close="profilesOpen = false"
       @create="onCreateProfile"

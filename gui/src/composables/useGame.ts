@@ -77,7 +77,7 @@ export function useGame({ meta, pages }: UseGameOpts) {
       const { context, messages } = buildMessages({
         session,
         title: meta.value.title,
-        description: meta.value.disposition.trim() || undefined,
+        description: meta.value.description?.trim() || undefined,
         profile: activeProfile.value ?? undefined,
         pages: pages.value,
       });
