@@ -1,2 +1,2 @@
-pub mod api;
+pub mod openai;
 pub mod internal;

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-#[derive(Debug, thiserror::Error, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum AppError {
   #[error("IO error: {0}")]
@@ -21,6 +21,12 @@ pub enum AppError {
 
   #[error("parse error: {0}")]
   Parse(String),
+
+  #[error("input error: {0}")]
+  Input(String),
+
+  #[error("invalid state: {0}")]
+  State(String),
 
   #[error("{0}")]
   Internal(String),
@@ -45,6 +51,18 @@ impl AppError {
 
   pub fn parse(msg: impl Into<String>) -> Self {
     Self::Parse(msg.into())
+  }
+
+  pub fn input(msg: impl Into<String>) -> Self {
+    Self::Input(msg.into())
+  }
+
+  pub fn no_input() -> Self {
+    Self::input("no input provided")
+  }
+
+  pub fn state(msg: impl Into<String>) -> Self {
+    Self::State(msg.into())
   }
 
   pub fn internal(msg: impl Into<String>) -> Self {

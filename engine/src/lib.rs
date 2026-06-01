@@ -1,5 +1,7 @@
 mod commands;
-mod error;
+pub mod config;
+pub mod error;
+pub mod game;
 mod infer;
 mod util;
 
@@ -11,6 +13,10 @@ pub fn run() {
   let builder = tauri_specta::Builder::<tauri::Wry>::new()
     .commands(tauri_specta::collect_commands![
       cmds::fs::datapath,
+      cmds::game::game_fork,
+      cmds::game::game_page,
+      cmds::game::game_prompt,
+      cmds::game::game_sessions,
       cmds::llm::prompt,
       cmds::llm::list_models,
       cmds::llm::save_models,
@@ -55,6 +61,8 @@ pub fn run() {
     .setup(move |app| {
       let app_handle = app.handle().clone();
       tauri::async_runtime::spawn(async move {
+        let config = config::load_config(&app_handle).await.unwrap_or_default();
+        cmds::game::init_engine(&app_handle, &config).await;
         cmds::profile::init_profiles(&app_handle).await;
         cmds::llm::init_models(&app_handle).await;
       });

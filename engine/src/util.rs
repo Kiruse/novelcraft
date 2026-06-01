@@ -1,9 +1,20 @@
 use std::path::{Path, PathBuf};
 
+use crate::commands::llm::ModelConfig;
 use crate::error::AppError;
-use crate::infer::api::{StreamResponse, StreamUsage};
+use crate::infer::openai::{OpenAiChatMessage, OpenAiTool, OpenAiCompletionRequest, OpenAiStreamOptions, OpenAiStreamResponse, OpenAiStreamUsage};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use reqwest::{Client, Response};
+use serde::{Deserialize, Deserializer, Serializer};
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::sync::OnceCell;
+
+const CLIENT: OnceCell<Client> = OnceCell::const_new();
+
+pub async fn reqwester() -> Client {
+  CLIENT.get_or_init(async || Client::new()).await.clone()
+}
 
 pub enum StreamEvent {
   Text(String),
@@ -14,20 +25,22 @@ pub enum StreamEvent {
     name: Option<String>,
     arguments_delta: String,
   },
-  Done {
-    finish_reason: String,
-    usage: Option<StreamUsage>,
-  },
 }
 
-pub async fn process_stream<S, F>(stream: S, on_event: &F) -> Result<(), AppError>
+#[derive(Debug, Clone)]
+pub struct StreamDone {
+  pub finish_reason: String,
+  pub usage: Option<OpenAiStreamUsage>,
+}
+
+pub async fn process_stream<S, F>(stream: S, on_event: &mut F) -> Result<StreamDone, AppError>
 where
   S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin,
-  F: Fn(StreamEvent),
+  F: FnMut(StreamEvent),
 {
   let mut buffer = String::new();
-  let mut finish_reason: Option<String> = None;
-  let mut usage: Option<StreamUsage> = None;
+  let mut finish_reason = "stop".to_string();
+  let mut usage: Option<OpenAiStreamUsage> = None;
 
   let mut stream = Box::pin(stream);
 
@@ -44,16 +57,13 @@ where
         if line.is_empty() || line.starts_with(':') {
           continue;
         }
+
         let line = line.strip_prefix("data: ").unwrap_or(line);
         if line == "[DONE]" {
-          on_event(StreamEvent::Done {
-            finish_reason: finish_reason.unwrap_or_else(|| "stop".to_string()),
-            usage,
-          });
-          return Ok(());
+          return Ok(StreamDone { finish_reason, usage });
         }
 
-        if let Ok(parsed) = serde_json::from_str::<StreamResponse>(line) {
+        if let Ok(parsed) = serde_json::from_str::<OpenAiStreamResponse>(line) {
           if let Some(u) = parsed.usage {
             usage = Some(u);
           }
@@ -61,7 +71,7 @@ where
           if let Some(choice) = parsed.choices.as_ref().and_then(|choices| choices.first()) {
             if let Some(fr) = &choice.finish_reason {
               if !fr.is_empty() {
-                finish_reason = Some(fr.clone());
+                finish_reason = fr.clone();
               }
             }
 
@@ -95,12 +105,7 @@ where
     }
   }
 
-  on_event(StreamEvent::Done {
-    finish_reason: finish_reason.unwrap_or_else(|| "stop".to_string()),
-    usage,
-  });
-
-  Ok(())
+  Ok(StreamDone { finish_reason, usage })
 }
 
 pub fn canonical_path(path: &Path) -> Result<PathBuf, AppError> {
@@ -129,4 +134,53 @@ pub async fn serialize(path: &Path, obj: &impl Serialize) -> Result<(), AppError
   tokio::fs::write(path, content)
     .await
     .map_err(|e| AppError::io(format!("Write error: {}", e)))
+}
+
+pub async fn request_prompt(
+  client: &Client,
+  config: &ModelConfig,
+  messages: Vec<OpenAiChatMessage>,
+  tools: Option<Vec<OpenAiTool>>,
+) -> Result<Response, AppError> {
+  let body = OpenAiCompletionRequest {
+    model: config.model_id.clone(),
+    messages,
+    stream: true,
+    stream_options: OpenAiStreamOptions {
+      include_usage: true,
+    },
+    tools,
+  };
+
+  Ok(client
+    .post(format!("{}/chat/completions", config.base_url))
+    .header("Content-Type", "application/json")
+    .header(
+      "Authorization",
+      match &config.api_key {
+        Some(key) => format!("Bearer {}", key),
+        None => "Bearer no-key".to_string(),
+      },
+    )
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| AppError::llm(format!("Request failed: {}", e)))?)
+}
+
+/// Serde Serializer to be used with the `#[serde(serialize_with = "...")]` attribute.
+pub fn serialize_timestamp<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where S: Serializer
+{
+  serializer.serialize_str(&value.to_rfc3339())
+}
+
+/// Serde Deserializer to be used with the `#[serde(deserialize_with = "...")]` attribute.
+pub fn deserialize_timestamp<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+where D: Deserializer<'de>
+{
+  let s = String::deserialize(deserializer)?;
+  Ok(DateTime::parse_from_rfc3339(&s)
+    .map_err(|e| serde::de::Error::custom(e.to_string()))?
+    .to_utc())
 }
