@@ -4,15 +4,14 @@ use crate::error::AppError;
 
 use super::internal;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCall {
   pub name: String,
   pub arguments: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
   pub id: String,
   pub r#type: String,
@@ -32,7 +31,6 @@ impl From<internal::ToolCall> for ToolCall {
   }
 }
 
-// TODO: turn this into an enum + internal struct for clarity
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenAiChatMessage {
   role: OpenAiChatRole,
@@ -214,7 +212,7 @@ pub struct OpenAiStreamResponse {
   pub choices: Option<Vec<OpenAiStreamChoice>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAiStreamUsage {
   pub prompt_tokens: u64,
   pub completion_tokens: u64,

@@ -2,8 +2,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
-use specta::Type;
-use tauri::AppHandle;
 
 use crate::error::AppError;
 use crate::game::session::SessionV1;
@@ -16,7 +14,6 @@ pub type Snapshot = Map<String, serde_json::Value>;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PageBatchRecord {
   pub pages: Vec<PageV1>,
-  /// Gamestate snapshot at the first page of this batch. Used to replay state based on page tool calls.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub snapshot: Option<Snapshot>,
 }
@@ -50,26 +47,24 @@ pub struct PageBatch {
 }
 
 impl PageBatch {
-  // NOTE: If changing this, we will need a pseudo-migration to adjust all existing batches
-  // because the engine assumes each batch except the last contains exactly this amount of pages
   pub const MAX_PAGES_PER_BATCH: usize = 100;
 
-  pub fn path(app: &AppHandle, session_id: &String, batch: usize) -> Result<PathBuf, AppError> {
-    Ok(Self::join_path(&SessionV1::dir(app, session_id)?, batch))
+  pub fn path(session_id: &str, batch: usize) -> Result<PathBuf, AppError> {
+    Ok(Self::join_path(&SessionV1::dir(session_id)?, batch))
   }
 
   pub fn join_path(dir: &Path, batch: usize) -> PathBuf {
     dir.join(format!("pages.{:03}.json", batch))
   }
 
-  pub async fn load(app: &AppHandle, session_id: String, batch: usize) -> Result<PageBatch, AppError> {
-    let path = Self::path(app, &session_id, batch)?;
+  pub async fn load(session_id: String, batch: usize) -> Result<PageBatch, AppError> {
+    let path = Self::path(&session_id, batch)?;
     let rec: PageBatchRecord = deserialize(&path).await?;
     Ok(rec.to_page_batch(session_id, batch))
   }
 
-  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
-    let path = Self::path(app, &self.session_id, self.offset)?;
+  pub async fn save(&self) -> Result<(), AppError> {
+    let path = Self::path(&self.session_id, self.offset)?;
     serialize(&path, &PageBatchRecord::from(self)).await?;
     Ok(())
   }
@@ -97,7 +92,7 @@ impl PageBatch {
   }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PageV1 {
   pub system: Option<String>,
   pub prompt: Option<String>,
@@ -135,14 +130,14 @@ impl PageV1 {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseV1 {
   pub content: Option<String>,
   pub tool_calls: Vec<ToolCall>,
   pub tool_results: Option<Vec<ToolResult>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
   pub id: String,
   pub result: Result<String, String>,

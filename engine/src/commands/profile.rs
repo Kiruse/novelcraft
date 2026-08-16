@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use tauri::{AppHandle, Manager, State};
 
 use crate::error::AppError;
 use crate::game::state::AppState;
+use crate::commands::paths;
 use crate::util;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
   pub id: String,
   pub name: String,
@@ -18,7 +17,7 @@ pub struct Profile {
   pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileListResult {
   pub profiles: Vec<Profile>,
   pub active_id: Option<String>,
@@ -32,8 +31,8 @@ pub struct Profiles {
 }
 
 impl Profiles {
-  pub async fn load(app: &AppHandle) -> Result<Profiles, AppError> {
-    let path = Self::default_path(app)?;
+  pub async fn load() -> Result<Profiles, AppError> {
+    let path = Self::default_path()?;
     if path.exists() {
       let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
       Ok(serde_json::from_str(&content).unwrap_or_default())
@@ -42,18 +41,12 @@ impl Profiles {
     }
   }
 
-  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
-    util::serialize(&Self::default_path(app)?, self).await
+  pub async fn save(&self) -> Result<(), AppError> {
+    util::serialize(&Self::default_path()?, self).await
   }
 
-  fn default_path(app: &AppHandle) -> Result<PathBuf, AppError> {
-    Ok(
-      app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::internal(e.to_string()))?
-        .join("profiles.json"),
-    )
+  fn default_path() -> Result<PathBuf, AppError> {
+    Ok(paths::data_dir()?.join("profiles.json"))
   }
 }
 
@@ -67,9 +60,7 @@ impl Default for Profiles {
   }
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn profile_list(state: State<'_, AppState>) -> Result<ProfileListResult, AppError> {
+pub async fn profile_list(state: &AppState) -> Result<ProfileListResult, AppError> {
   let guard = state.profiles.lock().await;
   Ok(ProfileListResult {
     profiles: guard.profiles.clone(),
@@ -77,16 +68,13 @@ pub async fn profile_list(state: State<'_, AppState>) -> Result<ProfileListResul
   })
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn profile_create(
-  app: AppHandle,
+  state: &AppState,
   id: String,
   name: String,
   fields: HashMap<String, String>,
   created_at: String,
 ) -> Result<(), AppError> {
-  let state = AppState::get(&app);
   let mut guard = state.profiles.lock().await;
   guard.profiles.push(Profile {
     id,
@@ -95,19 +83,16 @@ pub async fn profile_create(
     created_at: created_at.clone(),
     updated_at: created_at,
   });
-  guard.save(&app).await
+  guard.save().await
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn profile_update(
-  app: AppHandle,
+  state: &AppState,
   id: String,
   name: String,
   fields: HashMap<String, String>,
   updated_at: String,
 ) -> Result<(), AppError> {
-  let state = AppState::get(&app);
   let mut guard = state.profiles.lock().await;
   let profile = guard
     .profiles
@@ -117,26 +102,20 @@ pub async fn profile_update(
   profile.name = name;
   profile.fields = fields;
   profile.updated_at = updated_at;
-  guard.save(&app).await
+  guard.save().await
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn profile_delete(app: AppHandle, id: String) -> Result<(), AppError> {
-  let state = AppState::get(&app);
+pub async fn profile_delete(state: &AppState, id: String) -> Result<(), AppError> {
   let mut guard = state.profiles.lock().await;
   guard.profiles.retain(|p| p.id != id);
   if guard.active_id.as_deref() == Some(id.as_str()) {
     guard.active_id = None;
   }
-  guard.save(&app).await
+  guard.save().await
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn profile_set_active(app: AppHandle, id: String) -> Result<(), AppError> {
-  let state = AppState::get(&app);
+pub async fn profile_set_active(state: &AppState, id: String) -> Result<(), AppError> {
   let mut guard = state.profiles.lock().await;
   guard.active_id = Some(id);
-  guard.save(&app).await
+  guard.save().await
 }

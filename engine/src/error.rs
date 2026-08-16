@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
-#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum AppError {
   #[error("IO error: {0}")]
@@ -73,12 +72,6 @@ impl AppError {
 impl From<std::io::Error> for AppError {
   fn from(e: std::io::Error) -> Self {
     Self::Io(e.to_string())
-  }
-}
-
-impl From<tauri::Error> for AppError {
-  fn from(e: tauri::Error) -> Self {
-    Self::internal(e.to_string())
   }
 }
 

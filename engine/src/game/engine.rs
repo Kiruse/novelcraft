@@ -1,28 +1,21 @@
 use std::cmp::max;
 use std::ffi::OsString;
 
-use tauri::AppHandle;
-
 use crate::error::AppError;
 use crate::game::pages::{PageBatch, PageV1, ResponseV1};
 use crate::game::session::SessionV1;
 
-pub struct GameEngine<'a> {
-  app: &'a AppHandle,
-  /// Active game session, if any
+pub struct GameEngine {
   session: Option<GameSession>,
 }
 
-/// Active session abstraction
 struct GameSession {
-  /// Active story session
   session: SessionV1,
-  /// Last 2 page batches of this session
   page_batches: (PageBatch, PageBatch),
 }
 
 impl GameSession {
-  fn batch<'a>(&'a self, batch_index: usize) -> Option<&'a PageBatch> {
+  fn batch(&self, batch_index: usize) -> Option<&PageBatch> {
     if batch_index == self.page_batches.0.offset {
       Some(&self.page_batches.0)
     } else if batch_index == self.page_batches.1.offset {
@@ -66,25 +59,21 @@ impl UpdatePageOps {
   }
 }
 
-impl<'a> GameEngine<'a> {
-  pub fn from_app(app: &'a AppHandle) -> GameEngine<'a> {
-    Self {
-      app,
-      session: None,
+impl GameEngine {
+  pub fn from_session_id(session_id: &str) -> impl std::future::Future<Output = Result<GameEngine, AppError>> + Send {
+    let session_id = session_id.to_string();
+    async move {
+      let (session, batches) = tokio::join!(
+        SessionV1::load(&session_id),
+        Self::load_tail_batches(session_id.clone()),
+      );
+      Ok(Self {
+        session: Some(GameSession {
+          session: session?,
+          page_batches: batches?,
+        }),
+      })
     }
-  }
-  pub async fn from_app_and_session_id(app: &'a AppHandle, session_id: &String) -> Result<GameEngine<'a>, AppError> {
-    let (session, batches) = tokio::join!(
-      SessionV1::load(app, &session_id),
-      Self::load_tail_batches(app, session_id.clone()),
-    );
-    Ok(Self {
-      app,
-      session: Some(GameSession {
-        session: session?,
-        page_batches: batches?,
-      }),
-    })
   }
 
   fn session(&self) -> Result<&GameSession, AppError> {
@@ -97,9 +86,8 @@ impl<'a> GameEngine<'a> {
     Ok(&self.session()?.session.id)
   }
 
-  /// List the saved sessions by ID.
-  pub async fn list_sessions(app: &AppHandle) -> Result<Vec<OsString>, AppError> {
-    let path = SessionV1::root(app)?;
+  pub async fn list_sessions() -> Result<Vec<OsString>, AppError> {
+    let path = SessionV1::root()?;
     let mut dir_iter = tokio::fs::read_dir(&path).await?;
     let mut result = Vec::new();
     while let Some(entry) = dir_iter.next_entry().await? {
@@ -108,8 +96,7 @@ impl<'a> GameEngine<'a> {
     Ok(result)
   }
 
-  /// Get the most recent `count` pages for prompting.
-  pub fn history<'b>(&'b self, count: usize) -> Result<Vec<&'b PageV1>, AppError> {
+  pub fn history(&self, count: usize) -> Result<Vec<&PageV1>, AppError> {
     let session = self.session()?;
     let total_pages = session.page_batches.0.pages.len() + session.page_batches.1.pages.len();
 
@@ -126,14 +113,13 @@ impl<'a> GameEngine<'a> {
     if let Some(loaded_batch) = session.batch(page_batch) {
       Ok(loaded_batch.pages[PageBatch::page_offset(page_index)].clone())
     } else {
-      let batch = PageBatch::load(self.app, session.session.id.clone(), page_batch).await?;
+      let sid = session.session.id.clone();
+      let batch = PageBatch::load(sid.clone(), page_batch).await?;
       Ok(batch.pages[PageBatch::page_offset(page_index)].clone())
     }
   }
 
-  /// Create a new page with the given prompt.
   pub async fn create_page(&mut self, prompt: String) -> Result<(), AppError> {
-    let app = self.app.clone();
     let session = self.session_mut()?;
     session.session.page_count += 1;
 
@@ -151,33 +137,27 @@ impl<'a> GameEngine<'a> {
       prompt: Some(prompt),
       ..Default::default()
     });
-    session.page_batches.1.save(&app).await?;
+    session.page_batches.1.save().await?;
     Ok(())
   }
 
-  /// Update the last page in the active session.
   pub async fn update_page(&mut self, ops: UpdatePageOps) -> Result<(), AppError> {
     let session = self.session_mut()?;
     if session.session.page_count == 0 {
       return Err(AppError::state("empty session"));
     }
 
-    // This little trick works only cus we exclusively work on the last page
     let page = session.page_batches.1.pages.pop().unwrap();
     session.page_batches.1.pages.push(ops.apply(page));
     Ok(())
   }
 
-  /// Fork the current page history, truncating all pages after `page_index`.
-  ///
-  /// **Note:** In the future, this may/will be changed to allow "parallel timelines"
-  /// rather than annihilating this one session.
   pub async fn fork(&mut self, page_index: usize) -> Result<(), AppError> {
     let batch_index = PageBatch::batch_of(page_index);
-    Self::truncate_batches(self.app, self.session_id()?, batch_index).await?;
+    Self::truncate_batches(self.session_id()?, batch_index).await?;
 
     if batch_index != self.session()?.page_batches.1.offset {
-      self.session_mut()?.page_batches = Self::load_tail_batches(self.app, self.session_id()?.clone()).await?;
+      self.session_mut()?.page_batches = Self::load_tail_batches(self.session_id()?.clone()).await?;
     }
 
     let cutoff = page_index - self.session()?.page_batches.1.offset * PageBatch::MAX_PAGES_PER_BATCH;
@@ -185,16 +165,15 @@ impl<'a> GameEngine<'a> {
     Ok(())
   }
 
-  /// Truncate page batches after the given `batch_index`
-  async fn truncate_batches(app: &AppHandle, sid: &String, batch_index: usize) -> Result<(), AppError> {
-    let batches = SessionV1::batches(app, sid).await?;
+  async fn truncate_batches(sid: &String, batch_index: usize) -> Result<(), AppError> {
+    let batches = SessionV1::batches(sid).await?;
     let batches = batches
       .iter()
       .map(|b| PageBatch::parse_batch_idx(b.to_string_lossy()))
       .filter(Option::is_some)
       .map(|idx| idx.unwrap())
       .filter(|idx| *idx > batch_index);
-    let dir = SessionV1::dir(app, sid)?;
+    let dir = SessionV1::dir(sid)?;
     for batch in batches {
       let path = PageBatch::join_path(&dir, batch);
       tokio::fs::remove_file(&path).await?;
@@ -202,9 +181,8 @@ impl<'a> GameEngine<'a> {
     Ok(())
   }
 
-  /// Load the last 2 `PageBatch`es for the given session
-  async fn load_tail_batches(app: &AppHandle, sid: String) -> Result<(PageBatch, PageBatch), AppError> {
-    let batch_idx = SessionV1::count_batches(app, &sid).await?;
-    Ok((PageBatch::load(app, sid.clone(), batch_idx - 1).await?, PageBatch::load(app, sid, batch_idx).await?))
+  async fn load_tail_batches(sid: String) -> Result<(PageBatch, PageBatch), AppError> {
+    let batch_idx = SessionV1::count_batches(&sid).await?;
+    Ok((PageBatch::load(sid.clone(), batch_idx - 1).await?, PageBatch::load(sid, batch_idx).await?))
   }
 }

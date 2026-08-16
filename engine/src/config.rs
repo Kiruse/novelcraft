@@ -1,28 +1,27 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
+use crate::commands::paths;
 use crate::util::{deserialize, serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NovelCraftConfig {
   pub max_agent_steps: u8,
 }
 
 impl NovelCraftConfig {
-  pub async fn load(app: &AppHandle) -> Result<NovelCraftConfig, AppError> {
-    deserialize(&Self::default_path(app)?).await
+  pub async fn load() -> Result<NovelCraftConfig, AppError> {
+    deserialize(&Self::default_path()?).await
   }
 
-  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
-    serialize(&Self::default_path(app)?, self).await
+  pub async fn save(&self) -> Result<(), AppError> {
+    serialize(&Self::default_path()?, self).await
   }
 
-  fn default_path(app: &AppHandle) -> Result<PathBuf, AppError> {
-    Ok(app.path().app_config_dir()?.join("config.json"))
+  fn default_path() -> Result<PathBuf, AppError> {
+    Ok(paths::config_dir()?.join("config.json"))
   }
 }
 

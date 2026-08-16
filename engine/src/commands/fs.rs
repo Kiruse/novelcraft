@@ -1,17 +1,11 @@
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
 
+use crate::commands::paths as cmd_paths;
 use crate::error::AppError;
-use crate::util::canonical_path;
 
-#[tauri::command]
-#[specta::specta]
-pub async fn datapath(app: AppHandle, path: String) -> Result<String, AppError> {
-  let basepath = app
-    .path()
-    .app_data_dir()
-    .map_err(|e| AppError::internal(e.to_string()))?;
-  let basepath = canonical_path(&basepath)?;
+pub async fn datapath(path: String) -> Result<String, AppError> {
+  let basepath = cmd_paths::data_dir()?;
+  let basepath = std::fs::canonicalize(&basepath).map_err(|e| AppError::io(e.to_string()))?;
 
   let path = basepath.join(PathBuf::from(path));
   if !path.starts_with(basepath) {

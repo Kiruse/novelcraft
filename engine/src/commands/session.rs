@@ -1,16 +1,14 @@
 use chrono::Utc;
 use log::warn;
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Any;
-use uuid::Uuid;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use uuid::Uuid;
 
+use crate::commands::paths as cmd_paths;
 use crate::error::AppError;
 use crate::util;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
   pub version: u32,
@@ -42,22 +40,16 @@ impl SessionMeta {
     self.updated_at = Utc::now().to_string();
   }
 
-  /// Get the root directory of all session-related data
-  pub fn root(app: &AppHandle) -> Result<PathBuf, AppError> {
-    Ok(app
-      .path()
-      .app_data_dir()?
-      .join("sessions"))
+  pub fn root() -> Result<PathBuf, AppError> {
+    cmd_paths::sessions_dir()
   }
 
-  /// Get the directory containing session-specific data
-  pub fn dir(app: &AppHandle, id: &String) -> Result<PathBuf, AppError> {
-    Ok(Self::root(app)?.join(id))
+  pub fn dir(id: &str) -> Result<PathBuf, AppError> {
+    Ok(Self::root()?.join(id))
   }
 
-  /// Get the directory containing session-specific data & assert that it exists
-  pub fn dir_exists(app: &AppHandle, id: &String) -> Result<PathBuf, AppError> {
-    let dir = Self::dir(app, id)?;
+  pub fn dir_exists(id: &str) -> Result<PathBuf, AppError> {
+    let dir = Self::dir(id)?;
     if !dir.exists() {
       Err(AppError::not_found(format!("Session {} not found", id)))
     } else {
@@ -85,7 +77,7 @@ impl Default for SessionMeta {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageEntry {
   pub id: String,
@@ -100,7 +92,7 @@ pub struct PageEntry {
   pub tool_calls: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PagesBatch {
   version: u32,
@@ -132,14 +124,13 @@ impl Default for PagesBatch {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
   pub version: u32,
   pub id: String,
   pub session_id: String,
   pub page_index: u32,
-  #[specta(type = Any)]
   pub data: serde_json::Value,
 }
 
@@ -151,12 +142,10 @@ impl Snapshot {
     Ok(())
   }
 
-  /// Attach the filename of the head state snapshot to `dir`
   pub fn join_head_path(dir: &Path) -> PathBuf {
     dir.join("state.head.json")
   }
 
-  /// Attach the filename of the specified batch state snapshot to `dir`
   pub fn join_path(dir: &Path, batch: usize) -> PathBuf {
     dir.join(format!("state.{:03}.json", batch))
   }
@@ -174,7 +163,7 @@ impl Default for Snapshot {
   }
 }
 
-#[derive(Debug, Serialize, Type)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLoadResult {
   pub meta: SessionMeta,
@@ -235,10 +224,8 @@ async fn read_all_pages(dir: &std::path::Path) -> Result<Vec<PageEntry>, AppErro
   Ok(pages)
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn session_list(app: AppHandle) -> Result<Vec<SessionMeta>, AppError> {
-  let dir = SessionMeta::root(&app)?;
+pub async fn session_list() -> Result<Vec<SessionMeta>, AppError> {
+  let dir = SessionMeta::root()?;
   if !dir.exists() {
     return Ok(Vec::new());
   }
@@ -260,31 +247,28 @@ pub async fn session_list(app: AppHandle) -> Result<Vec<SessionMeta>, AppError> 
   Ok(sessions)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCreateRequest {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub story_id: Option<String>,
   pub title: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCreateResult {
   pub session_id: String,
   pub snapshot_id: String,
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_create(
-  app: AppHandle,
   req: SessionCreateRequest,
 ) -> Result<SessionCreateResult, AppError> {
   let session_id = Uuid::new_v4().to_string();
-  let dir = SessionMeta::dir(&app, &session_id)?;
+  let dir = SessionMeta::dir(&session_id)?;
   util::ensure_dir(&dir).await?;
 
   let meta = SessionMeta {
-    id: session_id,
+    id: session_id.clone(),
     story_id: req.story_id,
     title: req.title,
     ..Default::default()
@@ -306,40 +290,33 @@ pub async fn session_create(
   })
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn session_delete(app: AppHandle, id: String) -> Result<(), AppError> {
-  let dir = SessionMeta::dir(&app, &id)?;
+pub async fn session_delete(id: String) -> Result<(), AppError> {
+  let dir = SessionMeta::dir(&id)?;
   if dir.exists() {
     tokio::fs::remove_dir_all(&dir).await?;
   }
   Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn session_load(app: AppHandle, id: String) -> Result<SessionLoadResult, AppError> {
-  let dir = SessionMeta::dir_exists(&app, &id)?;
+pub async fn session_load(id: String) -> Result<SessionLoadResult, AppError> {
+  let dir = SessionMeta::dir_exists(&id)?;
   let meta: SessionMeta = util::deserialize(&SessionMeta::join_path(&dir)).await?;
   let pages = read_all_pages(&dir).await?;
   Ok(SessionLoadResult { meta, pages })
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_save_meta(
-  app: AppHandle,
   mut meta: SessionMeta,
 ) -> Result<(), AppError> {
   meta.touch();
   meta.validate()?;
 
-  let dir = SessionMeta::dir(&app, &meta.id)?;
+  let dir = SessionMeta::dir(&meta.id)?;
   util::ensure_dir(&dir).await?;
   util::serialize(&SessionMeta::join_path(&dir), &meta).await
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionUpsertPageRequest {
   pub session_id: String,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -347,13 +324,10 @@ pub struct SessionUpsertPageRequest {
   pub page: PageEntry,
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_upsert_page(
-  app: AppHandle,
   req: SessionUpsertPageRequest,
 ) -> Result<(), AppError> {
-  let dir = SessionMeta::dir_exists(&app, &req.session_id)?;
+  let dir = SessionMeta::dir_exists(&req.session_id)?;
 
   match req.page_index {
     None => {
@@ -393,14 +367,11 @@ pub async fn session_upsert_page(
   Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_truncate_pages(
-  app: AppHandle,
   session_id: String,
   from_index: u32,
 ) -> Result<(), AppError> {
-  let dir = SessionMeta::dir_exists(&app, &session_id)?;
+  let dir = SessionMeta::dir_exists(&session_id)?;
 
   let from_bi = PagesBatch::idx(from_index as usize);
   let li = PagesBatch::offset(from_index as usize);
@@ -430,13 +401,10 @@ pub async fn session_truncate_pages(
   Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_get_head_snapshot(
-  app: AppHandle,
   session_id: String,
 ) -> Result<Option<Snapshot>, AppError> {
-  let dir = SessionMeta::dir(&app, &session_id)?;
+  let dir = SessionMeta::dir(&session_id)?;
   let path = Snapshot::join_head_path(&dir);
   if path.exists() {
     Ok(Some(util::deserialize(&path).await?))
@@ -445,24 +413,18 @@ pub async fn session_get_head_snapshot(
   }
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_save_head_snapshot(
-  app: AppHandle,
   session_id: String,
   snapshot: Snapshot,
 ) -> Result<(), AppError> {
-  let dir = SessionMeta::dir_exists(&app, &session_id)?;
+  let dir = SessionMeta::dir_exists(&session_id)?;
   util::serialize(&Snapshot::join_head_path(&dir), &snapshot).await
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_delete_head_snapshot(
-  app: AppHandle,
   session_id: String,
 ) -> Result<(), AppError> {
-  let dir = SessionMeta::dir(&app, &session_id)?;
+  let dir = SessionMeta::dir(&session_id)?;
   let path = Snapshot::join_head_path(&dir);
   if path.exists() {
     tokio::fs::remove_file(&path).await?;
@@ -470,14 +432,11 @@ pub async fn session_delete_head_snapshot(
   Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_find_snapshot_before(
-  app: AppHandle,
   session_id: String,
   page_index: u32,
 ) -> Result<Option<Snapshot>, AppError> {
-  let dir = SessionMeta::dir(&app, &session_id)?;
+  let dir = SessionMeta::dir(&session_id)?;
   let max_batch = PagesBatch::idx(page_index as usize);
 
   for bi in (0..=max_batch).rev() {
@@ -493,26 +452,20 @@ pub async fn session_find_snapshot_before(
   Ok(None)
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_save_checkpoint(
-  app: AppHandle,
   session_id: String,
   snapshot: Snapshot,
 ) -> Result<(), AppError> {
-  let dir = SessionMeta::dir_exists(&app, &session_id)?;
+  let dir = SessionMeta::dir_exists(&session_id)?;
   let bi = PagesBatch::idx(snapshot.page_index as usize);
   util::serialize(&Snapshot::join_path(&dir, bi), &snapshot).await
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn session_delete_checkpoints_from(
-  app: AppHandle,
   session_id: String,
   from_page_index: u32,
 ) -> Result<(), AppError> {
-  let dir = SessionMeta::dir_exists(&app, &session_id)?;
+  let dir = SessionMeta::dir_exists(&session_id)?;
   let first_batch = (from_page_index as usize).div_ceil(PagesBatch::SIZE);
 
   let mut bi = first_batch;

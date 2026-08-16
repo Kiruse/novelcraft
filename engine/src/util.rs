@@ -1,6 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::commands::llm::ModelConfig;
 use crate::error::AppError;
 use crate::infer::openai::{OpenAiChatMessage, OpenAiTool, OpenAiCompletionRequest, OpenAiStreamOptions, OpenAiStreamResponse, OpenAiStreamUsage};
 use chrono::{DateTime, Utc};
@@ -108,10 +107,6 @@ where
   Ok(StreamDone { finish_reason, usage })
 }
 
-pub fn canonical_path(path: &Path) -> Result<PathBuf, AppError> {
-  std::fs::canonicalize(path).map_err(|e| AppError::io(e.to_string()))
-}
-
 pub async fn ensure_dir(path: &Path) -> Result<(), AppError> {
   tokio::fs::create_dir_all(path)
     .await
@@ -138,7 +133,7 @@ pub async fn serialize(path: &Path, obj: &impl Serialize) -> Result<(), AppError
 
 pub async fn request_prompt(
   client: &Client,
-  config: &ModelConfig,
+  config: &crate::commands::llm::ModelConfig,
   messages: Vec<OpenAiChatMessage>,
   tools: Option<Vec<OpenAiTool>>,
 ) -> Result<Response, AppError> {
@@ -168,14 +163,12 @@ pub async fn request_prompt(
     .map_err(|e| AppError::llm(format!("Request failed: {}", e)))?)
 }
 
-/// Serde Serializer to be used with the `#[serde(serialize_with = "...")]` attribute.
 pub fn serialize_timestamp<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
 where S: Serializer
 {
   serializer.serialize_str(&value.to_rfc3339())
 }
 
-/// Serde Deserializer to be used with the `#[serde(deserialize_with = "...")]` attribute.
 pub fn deserialize_timestamp<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where D: Deserializer<'de>
 {

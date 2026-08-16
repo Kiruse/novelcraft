@@ -1,4 +1,5 @@
-use tauri::{AppHandle, Manager, State};
+use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
 use crate::commands::llm::Models;
@@ -6,30 +7,23 @@ use crate::commands::profile::Profiles;
 use crate::config::NovelCraftConfig;
 use crate::error::AppError;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct AppState {
-  pub config: Mutex<NovelCraftConfig>,
-  pub profiles: Mutex<Profiles>,
-  pub models: Mutex<Models>,
+  pub config: Arc<Mutex<NovelCraftConfig>>,
+  pub profiles: Arc<Mutex<Profiles>>,
+  pub models: Arc<Mutex<Models>>,
 }
 
 impl AppState {
-  pub fn get(app: &AppHandle) -> State<'_, AppState> {
-    app.state::<AppState>()
-  }
+  pub async fn init() -> Result<AppState, AppError> {
+    let config = NovelCraftConfig::load().await?;
+    let profiles = Profiles::load().await?;
+    let models = Models::load().await?;
 
-  pub async fn init(app: &AppHandle) -> Result<(), AppError> {
-    let state = Self::get(app);
-
-    let mut guard = state.config.lock().await;
-    *guard = NovelCraftConfig::load(app).await?;
-
-    let mut guard = state.profiles.lock().await;
-    *guard = Profiles::load(app).await?;
-
-    let mut guard = state.models.lock().await;
-    *guard = Models::load(app).await?;
-
-    Ok(())
+    Ok(Self {
+      config: Arc::new(Mutex::new(config)),
+      profiles: Arc::new(Mutex::new(profiles)),
+      models: Arc::new(Mutex::new(models)),
+    })
   }
 }

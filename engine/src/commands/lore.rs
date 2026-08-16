@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
-use specta::Type;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
 
+use crate::commands::paths as cmd_paths;
 use crate::error::AppError;
 use crate::util;
 
@@ -19,7 +18,7 @@ pub struct LoreEntry {
   pub updated_at: String,
 }
 
-#[derive(Debug, Serialize, Type)]
+#[derive(Debug, Serialize)]
 pub struct LoreQueryResult {
   pub id: String,
   pub title: String,
@@ -28,24 +27,15 @@ pub struct LoreQueryResult {
   pub tags: Option<Vec<String>>,
 }
 
-fn lore_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
-  Ok(
-    app
-      .path()
-      .app_data_dir()
-      .map_err(|e| AppError::internal(e.to_string()))?
-      .join("lore"),
-  )
+fn lore_dir() -> Result<PathBuf, AppError> {
+  cmd_paths::lore_dir()
 }
 
-#[tauri::command]
-#[specta::specta]
 pub async fn lore_query(
-  app: AppHandle,
   story_id: String,
   query: String,
 ) -> Result<Vec<LoreQueryResult>, AppError> {
-  let dir = lore_dir(&app)?;
+  let dir = lore_dir()?;
   if !dir.exists() {
     return Ok(Vec::new());
   }

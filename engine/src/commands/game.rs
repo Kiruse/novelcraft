@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 
-use log::{warn};
+use log::warn;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use tauri::{AppHandle, Emitter, Manager};
-use uuid::Uuid;
 
 use crate::commands::llm::{ModelConfig, ModelUsage};
 use crate::error::AppError;
@@ -17,12 +14,12 @@ use crate::infer::openai::{OpenAiChatMessage, OpenAiTool};
 use crate::infer::internal::{LlmUsage, ToolCall};
 use crate::util::{StreamDone, StreamEvent, process_stream, request_prompt, reqwester};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GamePromptResult {
   pub stream_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GamePromptEvent {
   Reasoning {
     step: u8,
@@ -44,7 +41,7 @@ pub enum GamePromptEvent {
   Error(GamePromptError),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "domain")]
 #[serde(rename_all = "snake_case")]
 pub enum GamePromptError {
@@ -80,71 +77,99 @@ enum StepResult {
   Final(String, StreamDone),
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn game_sessions(app: AppHandle) -> Result<Vec<SessionV1>, AppError> {
-  Ok(SessionV1::list(&app).await?)
+pub async fn game_sessions() -> Result<Vec<SessionV1>, AppError> {
+  Ok(SessionV1::list().await?)
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn game_page(app: AppHandle, session_id: String, page: u32) -> Result<PageV1, AppError> {
-  let engine = GameEngine::from_app_and_session_id(&app, &session_id).await?;
+pub async fn game_page(session_id: &str, page: u32) -> Result<PageV1, AppError> {
+  let engine = GameEngine::from_session_id(session_id).await?;
   Ok(engine.page(page as usize).await?)
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn game_prompt(app: AppHandle, session_id: String, prompt: String) -> Result<GamePromptResult, AppError> {
-  let stream_id = Uuid::new_v4().to_string();
+pub async fn game_prompt<F>(
+  state: &AppState,
+  session_id: &str,
+  prompt: String,
+  on_event: F,
+) -> Result<GamePromptResult, AppError>
+where
+  F: Fn(GamePromptEvent) + Send + Sync + 'static,
+{
+  let stream_id = uuid::Uuid::new_v4().to_string();
   let prompt = prompt.trim().to_string();
   let res = GamePromptResult { stream_id: stream_id.clone() };
+  let state = state.clone();
+  let session_id = session_id.to_string();
 
   tokio::spawn(async move {
-    if let Err(e) = agent_loop(&app, &session_id, &stream_id, prompt).await {
+    if let Err(e) = agent_loop(&state, &session_id, &stream_id, prompt, &on_event).await {
       warn!("Error in agent loop: {}", e);
-      let ev = GamePromptEvent::Error(GamePromptError::Internal(e));
-      app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
+      on_event(GamePromptEvent::Error(GamePromptError::Internal(e)));
     }
   });
 
   Ok(res)
 }
 
-// NOTE: Uses the same events as game_prompt as it is really just a fork + prompt!
-#[tauri::command]
-#[specta::specta]
-pub async fn game_fork(app: AppHandle, session_id: String, page_index: u32, prompt: String) -> Result<GamePromptResult, AppError> {
-  let stream_id = Uuid::new_v4().to_string();
+pub async fn game_fork<F>(
+  state: &AppState,
+  session_id: &str,
+  page_index: u32,
+  prompt: String,
+  on_event: F,
+) -> Result<GamePromptResult, AppError>
+where
+  F: Fn(GamePromptEvent) + Send + Sync + 'static,
+{
+  let stream_id = uuid::Uuid::new_v4().to_string();
   let prompt = prompt.trim().to_string();
   let res = GamePromptResult { stream_id: stream_id.clone() };
+  let state = state.clone();
+  let session_id = session_id.to_string();
 
   tokio::spawn(async move {
-    if let Err(e) = fork_internal(&app, &session_id, &stream_id, page_index as usize, prompt).await {
+    if let Err(e) = fork_internal(&state, &session_id, &stream_id, page_index as usize, prompt, &on_event).await {
       warn!("Error in agent loop: {}", e);
-      let ev = GamePromptEvent::Error(GamePromptError::Internal(e));
-      app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
+      on_event(GamePromptEvent::Error(GamePromptError::Internal(e)));
     }
   });
 
   Ok(res)
 }
 
-async fn fork_internal(app: &AppHandle, session_id: &String, stream_id: &String, page_index: usize, prompt: String) -> Result<(), AppError> {
-  GameEngine::from_app_and_session_id(app, session_id).await?.fork(page_index).await?;
-  agent_loop(app, session_id, stream_id, prompt).await?;
+async fn fork_internal<F>(
+  state: &AppState,
+  session_id: &String,
+  stream_id: &String,
+  page_index: usize,
+  prompt: String,
+  on_event: &F,
+) -> Result<(), AppError>
+where
+  F: Fn(GamePromptEvent) + Send + Sync,
+{
+  GameEngine::from_session_id(session_id).await?.fork(page_index).await?;
+  agent_loop(state, session_id, stream_id, prompt, on_event).await?;
   Ok(())
 }
 
-async fn agent_loop(app: &AppHandle, session_id: &String, stream_id: &String, prompt: String) -> Result<AgentLoopResult, AppError> {
-  let engine = GameEngine::from_app_and_session_id(app, session_id).await?;
+async fn agent_loop<F>(
+  state: &AppState,
+  session_id: &String,
+  stream_id: &String,
+  prompt: String,
+  on_event: &F,
+) -> Result<AgentLoopResult, AppError>
+where
+  F: Fn(GamePromptEvent) + Send + Sync,
+{
+  let engine = GameEngine::from_session_id(session_id).await?;
   let history = engine.history(PageBatch::MAX_PAGES_PER_BATCH)?;
   let mut msgs: Vec<OpenAiChatMessage> = PageV1::to_openai_messages(&history);
   let mut step_idx = 0u8;
 
-  let app_state = AppState::get(app);
-  let max_steps = app_state.config.lock().await.max_agent_steps;
-  let config = app_state.models.lock().await.get_config(ModelUsage::Storyteller);
+  let max_steps = state.config.lock().await.max_agent_steps;
+  let config = state.models.lock().await.get_config(ModelUsage::Storyteller);
 
   let client = reqwester().await;
 
@@ -156,12 +181,12 @@ async fn agent_loop(app: &AppHandle, session_id: &String, stream_id: &String, pr
   let mut result = AgentLoopResult::default();
   while !done && step_idx < max_steps {
     let step_result = step(
-      app,
-      stream_id,
       &client,
       &config,
       &msgs,
       step_idx,
+      stream_id,
+      on_event,
     ).await?;
 
     match step_result {
@@ -173,7 +198,7 @@ async fn agent_loop(app: &AppHandle, session_id: &String, stream_id: &String, pr
             .map(|tc| tc.clone().into())
             .collect::<Vec<_>>(),
         ));
-        for toolcall in toolcalls.iter() {
+        for _toolcall in toolcalls.iter() {
           todo!("implement actual tool calling");
         }
       }
@@ -194,33 +219,33 @@ async fn agent_loop(app: &AppHandle, session_id: &String, stream_id: &String, pr
   if &result.finish_reason == "error" {
     Err(AppError::internal("agent loop failed to converge"))
   } else {
-    let ev = GamePromptEvent::Done {
+    on_event(GamePromptEvent::Done {
       finish_reason: result.finish_reason.clone(),
       usage: result.usage.clone(),
-    };
-    app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
+    });
     Ok(result)
   }
 }
 
-async fn step(
-  app: &AppHandle,
-  stream_id: &String,
+async fn step<F>(
   client: &Client,
   config: &ModelConfig,
   msgs: &Vec<OpenAiChatMessage>,
   step_idx: u8,
-) -> Result<StepResult, AppError> {
+  _stream_id: &String,
+  on_event: &F,
+) -> Result<StepResult, AppError>
+where
+  F: Fn(GamePromptEvent) + Send + Sync,
+{
   let tools: Vec<OpenAiTool> = vec![];
 
-  // TODO: truncate msgs & inject historical context
   let response = request_prompt(&client, &config, msgs.clone(), Some(tools)).await?;
 
   if !response.status().is_success() {
     let status = response.status().as_u16();
     let body = response.text().await.ok();
-    let ev = GamePromptEvent::Error(GamePromptError::Request { status, body: body.clone() });
-    app.emit(&format!("gamePrompt[{}]", stream_id), ev)?;
+    on_event(GamePromptEvent::Error(GamePromptError::Request { status, body: body.clone() }));
     return Err(AppError::llm(format!("LLM request failed with status {}, message: {}", status, body.unwrap_or("None".to_string()))));
   }
 
@@ -229,18 +254,14 @@ async fn step(
 
   let done = process_stream(response.bytes_stream(), &mut |event| match event {
     StreamEvent::Reasoning(delta) => {
-      // We're not actually interested in the reasoning at all, beyond debugging in FE
       if !delta.is_empty() {
-        let ev = GamePromptEvent::Reasoning { step: step_idx, delta };
-        app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
+        on_event(GamePromptEvent::Reasoning { step: step_idx, delta });
       }
     }
     StreamEvent::Text(delta) => {
-      // Collect streaming text & pipe to FE
       if !delta.is_empty() {
         text += &delta;
-        let ev = GamePromptEvent::Text { step: step_idx, delta };
-        app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
+        on_event(GamePromptEvent::Text { step: step_idx, delta });
       }
     }
     StreamEvent::ToolCall { index, id, name, arguments_delta } => {
@@ -267,13 +288,11 @@ async fn step(
       Some(text.trim().to_string())
     };
 
-    // Event is emitted only for visualization & debugging purposes
-    let ev = GamePromptEvent::ToolCalls {
+    on_event(GamePromptEvent::ToolCalls {
       step: step_idx,
       text: text.clone(),
       calls: toolcalls.clone(),
-    };
-    app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
+    });
 
     Ok(StepResult::ToolCalls {
       text,

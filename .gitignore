@@ -1,12 +1,5 @@
-# Tauri
-engine/target/
-engine/gen/
-
-# Vite
-dist/
-
-# Node
-node_modules/
+# Cargo
+target/
 
 # Logs
 logs/

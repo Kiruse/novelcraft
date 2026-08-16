@@ -6,16 +6,17 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 ## Architecture Overview
 
-NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, no server.
+NovelCraft is a **Rust/Cargo workspace desktop app** using gpui for rendering — fully offline-first, single-user, no server.
 
-- **Rust backend** (`engine/src/`) handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`), file operations (export/import, file dialogs), and all data persistence (sessions, profiles, stories, lore as JSON files)
-- **Vue 3 frontend** (`gui/src/`) runs in a webview via Vite — manages gameplay state, LLM orchestration, and all UI
-- **Filesystem persistence** via Tauri commands — all data (stories, sessions, pages, state snapshots, lore entries, profiles) stored as JSON files in the Tauri app data directory. The Rust backend handles all file I/O; the frontend accesses data through **tauri-specta generated bindings** (`gui/src/bindings.ts`), with `invoke('prompt', ...)` as the sole raw invoke for LLM streaming (fire-and-forget).
-- **Persistent key/value store** via `tauri-plugin-store` — simple flags and preferences (e.g. onboarding completed) stored as JSON on disk.
+- **Engine** (`engine/`, crate `novelcraft-engine`) — pure Rust library crate with all business logic. Handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`), file operations (export/import, file dialogs), data persistence (sessions, profiles, stories, lore as JSON files), and game agent loop. No UI framework coupling.
+- **GUI** (`gui/`, crate `novelcraft-gui`, binary `novelcraft`) — Rust binary crate using **gpui** and **gpui_platform** (from the Zed repo) for native rendering. Depends on `novelcraft-engine` as a library. Entry point is `gui/src/main.rs`.
+- **Filesystem persistence** — all data (stories, sessions, pages, state snapshots, lore entries, profiles) stored as JSON files under the platform data directory (resolved via `dirs::data_dir()`). Path resolution is centralized in `engine/src/commands/paths.rs`.
 - **No server, no auth, no database** — single-user desktop application with loose JSON files
-- **LLM calls** go through Rust Tauri commands — `useLlmStream` internally uses `ConversationalArchetype` from `@stegakir/aikit` with `createTauriModel()` (which implements `LanguageModelV3` from `@ai-sdk/provider`). The AI SDK bridge calls `invoke('prompt', ...)` and maps Tauri events (`llm:text`, `llm:reasoning`, `llm:tool_call`, `llm:error`, `llm:done`) to AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
+- **LLM calls** go through engine functions — `commands::llm::prompt()` takes a request struct and streams responses via callback closures (`on_text`, `on_reasoning`, `on_tool_call`, `on_done`, `on_error`). The game agent loop (`commands::game`) uses a generic `on_event: F` callback.
 - **Story sharing** is file-based — export/import JSON files via native file dialogs
-- **Build orchestration** is via a root `justfile` — no top-level `package.json`
+- **Build orchestration** is via a root `justfile` — single Cargo workspace, no top-level `package.json`
+- **AppState** uses `Arc<Mutex<T>>` pattern — constructed via `AppState::init()`, shared across engine functions by reference (`&AppState`). No framework-managed state.
+- **Rust toolchain** pinned to 1.97.1 via `rust-toolchain.toml` (required by gpui)
 
 ## Quick Reference
 
@@ -23,52 +24,39 @@ NovelCraft is a **Tauri v2 desktop app** — fully offline-first, single-user, n
 
 ```
 novelcraft/
-├── justfile                # Build orchestration (just commands)
-├── engine/                 # Rust backend (Tauri v2)
+├── justfile                    # Build orchestration (just commands)
+├── Cargo.toml                  # Workspace root (members = ["engine", "gui"], resolver = "2")
+├── rust-toolchain.toml         # Pins Rust 1.97.1
+├── engine/                     # Rust library crate (novelcraft-engine)
+│   ├── Cargo.toml              # Engine dependencies
 │   └── src/
-│       ├── src/
-│       │   ├── main.rs     # Entry point
-│       │   ├── lib.rs      # App builder, plugin registration, command handler
-│       │   ├── util.rs     # SSE stream parsing (StreamEvent enum, process_stream())
-│       │   ├── commands/
-│       │   │   ├── mod.rs  # Module barrel
-│       │   │   ├── llm.rs  # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
-│       │   │   ├── game.rs  # Game agent loop (game_prompt, game_fork, game_sessions, game_page)
-│       │   │   ├── profile.rs  # Profile persistence (OnceCell<Mutex<ProfilesFile>>)
-│       │   │   ├── session.rs  # Session/page/snapshot persistence (JSON files)
-│       │   │   ├── story.rs    # Story persistence (JSON files)
-│       │   │   ├── lore.rs     # Lore persistence (JSON files)
-│       │   │   └── fs.rs       # File operations (export/import, file dialogs)
-│       │   └── infer/
-│       │       ├── mod.rs  # Module barrel (pub mod api, pub mod internal)
-│       │       ├── api.rs  # OpenAI API types (request/response structs for SSE)
-│       │       └── internal.rs  # Command-level types (ModelConfig, LlmMessage, LlmTool, LlmPromptRequest, etc.)
-│       ├── Cargo.toml      # Rust dependencies
-│       └── tauri.conf.json # Tauri configuration
-├── gui/                    # Vue 3 frontend (Vite + Vue Router)
-│   ├── src/
-│   │   ├── main.ts         # App entry, mounts Vue + Router
-│   │   ├── App.vue         # Root component — switches between Onboarding and Main
-│   │   ├── Main.vue        # Main app shell (sidebar, router view, shortcuts, dialogs)
-│   │   ├── Onboarding.vue  # Step-based first-run onboarding flow
-│   │   ├── bindings.ts     # tauri-specta generated command bindings (auto-generated in debug builds)
-│   │   ├── env.d.ts        # Global type declarations & auto-imports
-│   │   ├── pages/          # Vue Router pages
-│   │   ├── components/     # Vue components
-│   │   ├── composables/    # Vue composables
-│   │   ├── utils/          # Frontend utilities (includes unwrap helper for bindings)
-│   │   ├── gameplay/       # Game modules (barrel via index.ts)
-│   │   ├── prompts.ts      # Prompts & personas (single source of truth)
-│   │   ├── router/         # Vue Router configuration
-│   │   └── assets/css/     # Open Props CSS
-│   ├── index.html          # Vite entry HTML
-│   ├── vite.config.ts      # Vite config with ~ alias
-│   ├── tsconfig.json       # TypeScript config with ~/* paths
-│   └── package.json        # Dependencies
-└── docs/                   # Comprehensive documentation
+│       ├── lib.rs              # Crate root — re-exports modules
+│       ├── util.rs             # SSE stream parsing (StreamEvent enum, process_stream()), file I/O helpers
+│       ├── config.rs           # App configuration
+│       ├── error.rs            # Error types
+│       ├── commands/
+│       │   ├── mod.rs          # Module barrel
+│       │   ├── paths.rs        # Centralized data/config directory resolution (dirs::data_dir, dirs::config_dir)
+│       │   ├── llm.rs          # LLM proxy (HTTP streaming via reqwest, callback-based events, model config)
+│       │   ├── game.rs         # Game agent loop (game_prompt, game_fork, game_sessions, game_page)
+│       │   ├── profile.rs      # Profile persistence (OnceCell<Mutex<ProfilesFile>>)
+│       │   ├── session.rs      # Session/page/snapshot persistence (JSON files)
+│       │   ├── story.rs        # Story persistence (JSON files)
+│       │   ├── lore.rs         # Lore persistence (JSON files)
+│       │   └── fs.rs           # File operations (export/import, file dialogs)
+│       ├── game/               # Game engine types (GameEngine, SessionV1, etc.)
+│       └── infer/              # Inference types
+│           ├── mod.rs          # Module barrel (pub mod api, pub mod internal)
+│           ├── api.rs          # OpenAI API types (request/response structs for SSE)
+│           └── internal.rs     # Command-level types (ModelConfig, LlmMessage, LlmTool, LlmPromptRequest, etc.)
+├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
+│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform)
+│   └── src/
+│       └── main.rs             # Entry point — gpui app initialization
+└── docs/                       # Comprehensive documentation
 ```
 
-**Detailed docs:** [Project Structure](./docs/project-structure.md)
+**Note:** The `gui/` directory also contains vestigial Vue 3 frontend files (`package.json`, `src/App.vue`, etc.) from the previous Tauri architecture. These are no longer used and should not be modified.
 
 ---
 
@@ -78,253 +66,106 @@ novelcraft/
 
 | Category | Location | Pattern |
 |----------|----------|---------|
-| Pages | `gui/src/pages/` | `[route].vue`, `[param].vue` for dynamic |
-| Components | `gui/src/components/` | PascalCase `.vue` |
-| Composables | `gui/src/composables/` | `use*.ts` |
-| Utilities | `gui/src/utils/` | Named exports |
-| Router | `gui/src/router/` | `index.ts` with `createRouter()` |
-| Gameplay Modules | `gui/src/gameplay/` | Named exports, barrel via `index.ts` |
-| Prompts | `gui/src/prompts.ts` | Single source of truth |
-| Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `game.rs`, `profile.rs`, `session.rs`, `story.rs`, `lore.rs`, `fs.rs`) |
-| Rust Utilities | `engine/src/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`), file I/O helpers (`serialize`, `deserialize`, `ensure_dir`) |
-| Generated Bindings | `gui/src/bindings.ts` | tauri-specta auto-generated typescript bindings (debug builds) |
-
-**Detailed docs:** [Code Conventions](./docs/code-conventions.md)
+| Engine Commands | `engine/src/commands/` | One file per domain (`llm.rs`, `game.rs`, `profile.rs`, `session.rs`, `story.rs`, `lore.rs`, `fs.rs`, `paths.rs`) |
+| Engine Utilities | `engine/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`), file I/O helpers (`serialize`, `deserialize`, `ensure_dir`) |
+| Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
+| Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
+| GUI Entry | `gui/src/main.rs` | Binary entry point, gpui app setup |
+| Path Resolution | `engine/src/commands/paths.rs` | `data_dir()`, `config_dir()` — single source of truth for filesystem paths |
 
 ### Import Patterns
 
-**Always use the `~/` alias — never relative `../` paths.**
-
-| Alias | Resolves to | Use in |
-|-------|------------|----------|
-| `~/` | `gui/src/` | All frontend code (pages, components, composables, utils, gameplay) |
-
-- **Auto-imports**: A custom Vite plugin (`gui/vite-plugins/auto-import.ts`) automatically injects the following identifiers into all `.ts` and `.vue` (`<script setup>`) files at build time. **Never import these manually** — it causes duplicate import conflicts:
-  - From `vue`: `ref`, `reactive`, `computed`, `watch`, `readonly`, `onMounted`, `onUnmounted`, `nextTick`
-  - From `vue-router`: `useRoute`, `useRouter`
-- Type declarations for these are in `gui/src/env.d.ts` (for TypeScript). The Vite plugin handles runtime injection.
-- **Components**: Import explicitly with `~/components/...` paths (not auto-imported)
-- **No `@/`, `#shared/`, or `#server/` aliases** — those were removed
+- **Within engine**: Standard Rust `mod`/`use` paths. No special aliases.
+- **GUI depends on engine**: `use novelcraft_engine::commands::...` (or re-exports from `novelcraft_engine::*`).
 
 ### AI / Model Configuration
 
 Models are configured in Rust, persisted to disk as JSON, and held in `AppState`.
 
-- **Rust side**: `engine/src/game/state.rs` — `AppState` holds `models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()` (called from `lib.rs` setup). The `Models` struct (defined in `engine/src/commands/llm.rs`) has fields `storyteller: ModelConfig` and `suggestions: ModelConfig`, plus instance methods `get_config(usage)`, `all_configs()`, `load(app)`, `save(app)`.
-- **Frontend side**: Call `commands.listModels()` to read (returns `Models` struct), `commands.saveModels(models)` to write (from generated bindings)
-- Each model entry maps a **usage role** (e.g. `"storyteller"`, `"suggestions"`) → `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
+- **Engine side**: `AppState` holds `models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()`. The `Models` struct (defined in `engine/src/commands/llm.rs`) has fields `storyteller: ModelConfig` and `suggestions: ModelConfig`, plus instance methods `get_config(usage)`, `all_configs()`, `load()`, `save()`.
+- Each model entry maps a **usage role** (e.g. `"storyteller"`, `"suggestions"`) to `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
 - Default models point to `http://localhost:1234/v1` (local LLM server)
 
 ### Agent / LLM Integration
 
-**All LLM calls go through the Rust backend via Tauri commands.**
+**All LLM calls go through engine functions.**
 
-- **`invoke('prompt', { request })`** — takes `{ model, messages[], persona?, context?, request_id?, tools? }` and streams the response. The invoke is fire-and-forget (not awaited) because the Rust command resolves only after `llm:done` is emitted.
-- Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames via `util::process_stream()`, and emits Tauri events:
-  - `llm:text` — text content chunk
-  - `llm:reasoning` — reasoning/thinking chunk
-  - `llm:tool_call` — tool/function call streaming delta (`{ index, id?, name?, arguments_delta }`)
-  - `llm:error` — error message
-  - `llm:done` — stream complete (payload: `{ finish_reason, usage? }`)
-- Events are scoped with `request_id` when provided: `llm:{event}:{request_id}`. This enables concurrent LLM streams without event collisions.
-- **Frontend composable**: `gui/src/composables/useLlmStream.ts` creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. The AI SDK stream parts are mapped to `StreamEvent` objects (`text`, `reasoning`, `error`, `done`, `tool-call`, `tool-result`). Tool-call events yield `{ id, tool, args }` as JSON. Tool-result events yield `{ id, tool, result }` as JSON.
-- **AI SDK bridge**: `gui/src/utils/tauriLanguageModel.ts` — `createTauriModel(modelId)` returns a `LanguageModelV3` implementation that bridges Tauri events to Vercel AI SDK stream parts. Request ID scoping is managed internally by `TauriLanguageModel.doStream()`.
-
-**Prompts and personas** are defined in `gui/src/prompts.ts`.
-Always import from `~/prompts` & maintain them there as a single source of truth.
+- **`commands::llm::prompt(app, request, callbacks)`** — takes `&AppState`, an `LlmPromptRequest`, and callback closures. Streams the response by calling callbacks as SSE frames arrive:
+  - `on_text(chunk)` — text content chunk
+  - `on_reasoning(chunk)` — reasoning/thinking chunk
+  - `on_tool_call(delta)` — tool/function call streaming delta (`{ index, id?, name?, arguments_delta }`)
+  - `on_error(message)` — error message
+  - `on_done(finish_reason, usage?)` — stream complete
+- Rust backend calls the OpenAI-compatible chat completions API, parses SSE frames via `util::process_stream()`, and invokes the appropriate callback. No event bus or pub/sub — direct callback invocation.
 
 **Important terminology:** A "persona" is ONLY the system prompt passed as the `persona` parameter to the LLM call — it defines who the agent *is*. The sole persona used throughout the app is `PERSONA_PLATFORM`. Everything else — scene instructions (`SYSTEM_VIGNETTE_OPEN`), steering notes (`SYSTEM_STEER`), editor requests (`SYSTEM_INSTRUCT`), page-level `system` fields — are **NOT** personas. They are regular messages with `author: 'system'` injected into the conversation history to guide the agent's behavior.
 
-### Persistent Key/Value Store — tauri-plugin-store
+### Data Persistence — Filesystem via Engine Commands
 
-Simple flags, preferences, and single-row settings are stored in **tauri-plugin-store** (a JSON file on disk). Used for single-value, non-queryable data like onboarding state.
+All structured data (stories, sessions, pages, state snapshots, lore entries, profiles) is stored as **JSON files** on disk, managed by engine command functions.
 
-- **Frontend**: `LazyStore` from `@tauri-apps/plugin-store` — lazy-loads a store file (e.g. `app.json`) and provides `get()`/`set()`/`has()` methods
-- **Store file**: `app.json` in the Tauri app data directory
-- **Rust side**: `tauri-plugin-store = "2"` in `Cargo.toml`, `.plugin(tauri_plugin_store::Builder::default().build())` in `lib.rs`
-- **Capabilities**: `store:default` in `engine/capabilities/default.json`
-- **Current usage**: Onboarding completed flag (`onboarding_completed` boolean in `app.json`), managed by `gui/src/composables/useOnboarding.ts`
-
-**Convention**: Use `tauri-plugin-store` for simple key/value pairs (flags, preferences). Use Tauri backend commands for structured, multi-entity data (sessions, profiles, stories, lore).
-
-### Data Persistence — Filesystem via Tauri Commands
-
-All structured data (stories, sessions, pages, state snapshots, lore entries, profiles) is stored as **JSON files** on disk, managed by Rust backend commands. The frontend never performs direct file I/O.
-
-- **File layout** (under Tauri app data directory):
-  - `{appData}/sessions/{sessionUUID}/meta.json` — session metadata
-  - `{appData}/sessions/{sessionUUID}/pages.{batch:03}.json` — pages batched in groups of 100
-  - `{appData}/sessions/{sessionUUID}/state.head.json` — current head snapshot
-  - `{appData}/sessions/{sessionUUID}/state.{batch:03}.json` — checkpoint snapshots
-  - `{appData}/profiles.json` — all profiles
-  - `{appData}/stories/{id}.json` — story definitions
-  - `{appData}/lore/{id}.json` — lore entries
-  - `{appData}/models.json` — LLM model configuration
+- **File layout** (under platform data directory, resolved by `commands::paths::data_dir()`):
+  - `{dataDir}/sessions/{sessionUUID}/meta.json` — session metadata
+  - `{dataDir}/sessions/{sessionUUID}/pages.{batch:03}.json` — pages batched in groups of 100
+  - `{dataDir}/sessions/{sessionUUID}/state.head.json` — current head snapshot
+  - `{dataDir}/sessions/{sessionUUID}/state.{batch:03}.json` — checkpoint snapshots
+  - `{dataDir}/profiles.json` — all profiles
+  - `{dataDir}/stories/{id}.json` — story definitions
+  - `{dataDir}/lore/{id}.json` — lore entries
+  - `{dataDir}/models.json` — LLM model configuration
 - **Version-gated deserialization**: Every file format includes a `version` field. `read_versioned_json()` reads the version first, then dispatches to the correct deserializer (currently only v1). Future format changes add new match arms.
-- **No transactions**: Each command call performs a single atomic file operation. The frontend drives sequential operations when multiple steps are needed.
-- **Rust command files**:
-  - `engine/src/src/commands/session.rs` — session, page, and snapshot commands (`session_list`, `session_create`, `session_delete`, `session_load`, `session_save_meta`, `session_push_page`, `session_update_page`, `session_truncate_pages`, `session_get_head_snapshot`, `session_save_head_snapshot`, `session_delete_head_snapshot`, `session_find_snapshot_before`, `session_save_checkpoint`, `session_delete_checkpoints_from`)
-  - `engine/src/src/commands/profile.rs` — profile commands (`profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active`). Uses `OnceCell<Mutex<ProfilesFile>>` pattern. Initialized via `init_profiles()` called in `lib.rs` setup.
-  - `engine/src/src/commands/story.rs` — story commands (`story_get`, `story_save`)
-  - `engine/src/src/commands/lore.rs` — lore commands (`lore_query`)
-- **Frontend composables**: Each composable wraps the relevant Tauri commands:
-  - `useVignettes` — `session_list`, `session_create`, `session_delete`
-  - `useVignette` — all session/page/snapshot commands
-  - `useProfiles` — all profile commands
-  - `useStoryBuilder` — `story_get`, `story_save`
-  - `loreModule` — `lore_query`
+- **No transactions**: Each command call performs a single atomic file operation. Consumers drive sequential operations when multiple steps are needed.
+- **Path resolution**: All file paths go through `engine/src/commands/paths.rs` which uses `dirs::data_dir()` and `dirs::config_dir()`. This replaced Tauri's `app.path()` API.
 
-**Profile fields in prompts:** The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/composables/useGame.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
+### Engine Command Functions
 
-```typescript
-import { commands } from '~/bindings';
-import { unwrap } from '~/utils';
+All command functions are plain `pub async fn` taking `&AppState` (or no state for read-only ops). No `#[tauri::command]` or `#[specta::specta]` decorators.
 
-// Sessions
-const sessions = await unwrap(commands.sessionList());
-const result = await unwrap(commands.sessionLoad(id));
-await unwrap(commands.sessionSaveMeta(id, updatedMeta));
-await unwrap(commands.sessionPushPage(id, pageEntry));
-await unwrap(commands.sessionDelete(id));
+- **`engine/src/commands/session.rs`** — `session_list`, `session_create`, `session_delete`, `session_load`, `session_save_meta`, `session_push_page`, `session_update_page`, `session_truncate_pages`, `session_get_head_snapshot`, `session_save_head_snapshot`, `session_delete_head_snapshot`, `session_find_snapshot_before`, `session_save_checkpoint`, `session_delete_checkpoints_from`
+- **`engine/src/commands/profile.rs`** — `profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active`. Uses `OnceCell<Mutex<ProfilesFile>>` pattern.
+- **`engine/src/commands/story.rs`** — `story_get`, `story_save`
+- **`engine/src/commands/lore.rs`** — `lore_query`
+- **`engine/src/commands/llm.rs`** — `prompt` (streaming via callbacks), `list_models`, `save_models`, `ping_hosts`, `ping_host`
+- **`engine/src/commands/game.rs`** — `game_prompt`, `game_fork`, `game_sessions`, `game_page` (agent loop with generic `on_event: F` callback)
+- **`engine/src/commands/fs.rs`** — `export_session`, `import_session`, `pick_file`, `pick_folder`
 
-// Profiles
-const { profiles, active_id } = await unwrap(commands.profileList());
-await unwrap(commands.profileCreate(newProfile));
-await unwrap(commands.profileSetActive(profileId));
+```rust
+use novelcraft_engine::AppState;
+use novelcraft_engine::commands::{session, profile, story, lore};
 
-// Stories
-const story = await unwrap(commands.storyGet(id));
-await unwrap(commands.storySave(storyEntry));
+let sessions = session::session_list(&app).await?;
+let loaded = session::session_load(&app, id).await?;
+session::session_save_meta(&app, id, updated_meta).await?;
+session::session_push_page(&app, id, page_entry).await?;
+session::session_delete(&app, id).await?;
 
-// Lore
-const results = await unwrap(commands.loreQuery(id, 'search'));
+let result = profile::profile_list(&app).await?;
+profile::profile_create(&app, new_profile).await?;
+profile::profile_set_active(&app, profile_id).await?;
+
+let story = story::story_get(&app, id).await?;
+story::story_save(&app, story_entry).await?;
+
+let results = lore::lore_query(&app, id, "search").await?;
 ```
-
-**Detailed docs:** [Data Storage](./docs/database-schema.md)
-
-### LLM Streaming — useLlmStream
-
-All LLM streaming goes through `gui/src/composables/useLlmStream.ts`.
-
-- `streamLlm(options)` — async generator yielding text chunks only
-- `streamLlmFull(options)` — async generator yielding full `StreamEvent` objects (`text`, `reasoning`, `error`, `done`, `tool-call`, `tool-result`). Done events include `finishReason` and `usage` fields. Tool-call events yield `{ id, tool, args }` as JSON. Tool-result events yield `{ id, tool, result }` as JSON.
-- `StreamLlmOptions` accepts optional `model`, `context`, and `tools` parameters. The `context` is passed to `ConversationalArchetype` as the context parameter. The `tools` is an optional Vercel AI SDK `ToolSet` (built via `GameplayModuleRegistry.getToolSet()`) passed through to `ConversationalArchetype` for gameplay module tool use.
-- Replaces any inline Tauri event listening — never duplicate event logic in components
-- Internally creates a `MemoryMessageStore` + `Conversation` from the messages array, then uses `ConversationalArchetype.prompt()` with `createTauriModel(modelId)`. AI SDK `TextStreamPart` events are mapped to `StreamEvent` objects (`text-delta` → text, `reasoning-delta` → reasoning, `finish` → done with usage, `error` → error, `tool-call` → tool-call with `{ id, tool, args }` JSON, `tool-result` → tool-result with `{ id, tool, result }` JSON).
-- Request ID scoping is managed internally by `TauriLanguageModel.doStream()` — no need to pass `requestId` from callers.
-
-```typescript
-import { streamLlmFull } from '~/composables/useLlmStream';
-
-for await (const event of streamLlmFull({ persona, messages })) {
-  if (event.type === 'text') { /* append text */ }
-  if (event.type === 'reasoning') { /* append reasoning */ }
-  if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
-  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
-  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
-}
-```
-
-### Gameplay Module System (`gui/src/gameplay/`)
-
-Modules define gameplay mechanics via tools exposed to the LLM.
-
-**Core types** (`gameplayModule.ts`):
-- `GameplaySession` — simplified to `{ storyId: string | undefined, sessionId, state: Record<string, unknown> }`. No `modules` field. State is a flat map from module type to module-specific data. `storyId` is undefined for impromptu/freeform sessions. Managed by `useVignette` (via `getGameplaySession()`) rather than a dedicated composable.
-- `GameplayModuleContext` — has `session`, `module`, `state` fields (access `storyId`/`sessionId` via `ctx.session.storyId`/`ctx.session.sessionId`)
-- `ToolResult<S>` — `{ success: true; state?: S; response?: string } | { success: false; error: string }`. When `state` is omitted on success, the draft mutations from immer are used. The `response` field is used by query-only tools (like lore) to return data to the LLM without mutating state.
-- `ExecuteToolResult` — `{ success: true; newState: unknown; response: string }`. Returned by `executeTool()`.
-- `GameplayModuleRegistry` — class with `get()`, `getAll()`, `executeTool()`, `getToolSet()` methods. `executeTool()` is the single method encapsulating the init-draft-execute-finalize sequence (handles `init()` fallback, immer `createDraft`/`finishDraft`, and state finalization). Both `getToolSet()` (live tool execution during LLM streaming) and `replay()` in `useVignette` delegate to `executeTool()`. Tool names in module definitions are unprefixed (e.g. `'move'`); `getToolSet()` auto-prefixes them to `${modType}::${toolDef.name}`. The `onToolCall` callback receives the full prefixed key (see below)
-- `createDefaultRegistry()` — factory that creates a registry pre-loaded with `NPCModule`, `PlanModule`, `LoreModule`. Uses `GameplayModuleRegistry` constructor (no `register()` method).
-- `defineGameplayModule()` — factory with `.withTool()` builder pattern for adding tools to a module. Requires an `init()` method returning the default state (supports `MaybePromise`).
-- `MaybePromise<T>` — local type alias in `gameplayModule.ts` for `T | Promise<T>`
-- `OnToolCall` — type alias for tool call callback
-- `Subagent` — interface for sub-agent definitions
-- `toolCallRecordSchema` — zod schema for tool call records stored in pages
-- `toolOk(state?, opts?)` — `state` is optional. `toolOk()` means success with no state override (draft mutations apply). `toolOk(newState)` means success, override entire state. Accepts optional `{ response?: string }` as second arg
-- `toolErr(error)` — returns a failure result
-
-**Immer state transitions** (centralized in `GameplayModuleRegistry.executeTool()`):
-
-Tool execution uses `immer` for immutable state updates. Both `getToolSet()` (live tool execution during LLM streaming) and `replay()` in `useVignette` delegate to `executeTool()`, which handles the full init-draft-execute-finalize sequence:
-1. When module state is undefined, `module.init()` is called to produce default state
-2. `createDraft(base)` creates a mutable draft proxy
-3. Draft is passed as `ctx.state` to the tool — the tool mutates `ctx.state` directly
-4. If `result.state` is provided, it overrides the draft entirely
-5. If `result.state` is undefined, `finishDraft(draft)` produces the new immutable state
-6. On error (tool returns `toolErr()`), `executeTool()` throws — the draft is discarded (no state change). `getToolSet()` catches this and wraps it in an `Error: ...` string for the AI SDK
-
-Modules use direct draft mutation instead of spread operators:
-- `npcModule.ts`: `state.npcs[name]!.location = destination; return toolOk();`
-- `planModule.ts`: `state.roadmap = roadmap; return toolOk();`
-- `loreModule.ts`: `return toolOk(undefined, { response: ... });` (query-only, no state mutation)
-
-**Dependency:** `immer` ^11.1.6
-
-**Registered modules** (via `createDefaultRegistry()`):
-- `NPCModule` — NPC management, tool `move` (defined unprefixed, auto-prefixed to `npc::move`)
-- `PlanModule` — `getKnowledge()` returns `{ roadmap }`, tool `updateRoadmap` (auto-prefixed to `plan::updateRoadmap`)
-- `LoreModule` — no knowledge injection, tool `query` (auto-prefixed to `lore::query`) queries lore entries via `commands.loreQuery()`. Returns empty array when `session.storyId` is undefined (impromptu sessions have no lore).
-
-**Deleted modules:** `eventModule.ts`, `graphMapModule.ts`, `systemPromptModule.ts` — removed during the module system redesign.
 
 ### Snapshot Lifecycle
 
 State snapshots enable undo/fork by capturing module state at each page:
 
-- **Session creation** → head snapshot (`state.head.json`) with empty state `{}`
-- **After each page's tool calls** → head snapshot updated in place via `commands.sessionSaveHeadSnapshot()`
-- **Every 100 pages** → copy current head as checkpoint (`state.{batch}.json`) via `commands.sessionSaveCheckpoint()` before updating
-- **Fork** → delete head snapshot and checkpoints with `page_index >= fork_index` via `commands.sessionDeleteHeadSnapshot()` and `commands.sessionDeleteCheckpointsFrom()`, recompute head from youngest snapshot before `fork_index` via `commands.sessionFindSnapshotBefore()` and tool call replay through `registry.executeTool()` (with `init()` fallback for uninitialized module state), then `push()` to create a new page
-- **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data
-- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback (forward-compatible with module upgrades). `executeTool()` applies this fallback when module state is undefined.
+- **Session creation** — head snapshot (`state.head.json`) with empty state `{}`
+- **After each page's tool calls** — head snapshot updated in place via `session::session_save_head_snapshot()`
+- **Every 100 pages** — copy current head as checkpoint (`state.{batch}.json`) via `session::session_save_checkpoint()` before updating
+- **Fork** — delete head snapshot and checkpoints with `page_index >= fork_index`, recompute head from youngest snapshot before `fork_index` via `session::session_find_snapshot_before()`, replay tool calls, then push a new page
+- **State is immutable** — the canonical state is the snapshot data
 
-### LLM Helpers — buildMessages
+### Game Agent Loop
 
-`buildMessages()` is defined in `gui/src/composables/useGame.ts` (moved from deleted `llmHelpers.ts`):
-- `buildMessages()` now accepts optional `gameplaySession?: GameplaySession`
-- When provided, calls each module's `getKnowledge()` and injects results into context under `context.modules`
-- `buildProfileContext()` — injects active profile fields as `[Player profile]` block
+The game agent loop (`commands::game`) iterates LLM calls until a final text response is received or tool calls are resolved.
 
-### useVignette — Push/Fork Coordination
-
-`useVignette` manages a single vignette session and exposes a 2-step push/fork pattern:
-
-- **`push({ prompt?, system? })`** — inserts a page via `commands.sessionPushPage()` into the reactive array and returns a `PromptUpdater` function. The updater is called later with `(response, toolCalls, state)` to finalize the page with the LLM's response and state transition (via `commands.sessionUpdatePage()` and `commands.sessionSaveHeadSnapshot()`).
-- **`fork({ pageIndex, system?, prompt? })`** — based on `push()`: truncates pages via `commands.sessionTruncatePages()`, deletes snapshots via `commands.sessionDeleteHeadSnapshot()` and `commands.sessionDeleteCheckpointsFrom()`, loads the youngest snapshot before pageIndex via `commands.sessionFindSnapshotBefore()`, replays tool calls from surviving pages via `registry.executeTool()` (with `init()` fallback for uninitialized module state), then calls `push()` to create a new page (returning its updater). System/prompt follow null=clear, undefined=keep-old, otherwise=override semantics.
-- **`update({ pageIndex, system?, prompt?, response? })`** — edits page text via `commands.sessionUpdatePage()` without AI involvement. Null clears, undefined keeps existing.
-- **`getGameplaySession()`** — returns a `GameplaySession` derived from the current snapshot. `storyId` is undefined for impromptu/freeform sessions.
-- **`snapshot`** — readonly ref exposing the current state snapshot.
-- **`run()`** (from `useGame`) is stateless — it takes a `GameplaySession`, builds messages, streams the LLM, and returns `{ response, toolCalls, state }`. It does NOT persist anything. Consumers coordinate persistence by calling the `PromptUpdater` returned by `push()`/`fork()`.
-
-### TypeScript — No `as any`
-
-**Never use `as any` casts.** If a type incompatibility arises, fix the root cause:
-
-- Widen or narrow the source/target types (e.g. `Record<string, unknown>` instead of `unknown`)
-- Fix schema types
-- Remove unnecessary type wrappers (e.g. `DeepReadonly` that creates cascading `Readonly<unknown>` constraints)
-- Use targeted type assertions like `as ExpectedType` when crossing package boundaries
-- If a genuine cross-package type mismatch exists, **inform the user** rather than silently casting to `any`
-
-### Module Type
-
-ESM modules (`"type": "module"` in gui/package.json)
-
-### Styling — Open Props
-
-The project uses [Open Props](https://open-props.style/) as its styling foundation. It provides CSS custom property design tokens for spacing, color, typography, shadows, radii, animations, and more.
-
-- **Global styles**: `gui/src/assets/css/` — imports `open-props` (tokens) and `normalize` (reset)
-- **Usage**: Reference tokens via `var(--size-3)`, `var(--gray-7)`, `var(--radius-2)`, `var(--shadow-2)`, `var(--font-size-4)`, etc.
-- **Semantic tokens**: `--text-1`/`--text-2`, `--surface-1`..`--surface-4` for colors that adapt to dark mode
-- **Brand**: `--brand-gradient` defined in global CSS for the app's gradient
-- **Rules**:
-  - Never hardcode colors, spacing, radii, shadows, or font sizes — use Open Props tokens
-  - Use logical properties (`inline-size`/`block-size`, `margin-block-start`, etc.)
-  - Write scoped `<style scoped>` in Vue components
-  - No class-name frameworks (Tailwind, etc.)
+- **`game_prompt(app, session_id, prompt, on_event)`** — reads session history, adds prompt as user message, iterates LLM calls (up to `max_agent_steps` from `AppState.config`)
+- **`game_fork(app, session_id, page_index, prompt, on_event)`** — forks at page, then runs agent loop
+- Event callback receives variants: `Reasoning { step, delta }`, `Text { step, delta }`, `ToolCalls { step, text?, calls }`, `Done { finish_reason, usage? }`, `Error(...)`
 
 ---
 
@@ -335,29 +176,24 @@ The project uses [Open Props](https://open-props.style/) as its styling foundati
 All commands are managed by the root `justfile`. Run `just` with no arguments to list available recipes.
 
 ```bash
-# Frontend only (Vite dev server on :5173)
-just dev-frontend
+# Run the app (cargo run --bin novelcraft)
+just dev
 
-# Engine (cargo tauri dev, requires frontend already running)
-just dev-engine
-
-# Build frontend (Vite production build)
-just build-frontend
-
-# Build engine (cargo tauri build)
-just build-engine
-
-# Build both frontend + engine
+# Build
 just build
+
+# Check (cargo check)
+just check
+
+# Per-crate checking
+just check-engine
+just check-gui
 ```
 
 ### Type Checking & Linting
 
 ```bash
-# TypeScript (vue-tsc --noEmit in gui/)
-just typecheck
-
-# Typecheck + cargo check
+# Cargo check (entire workspace)
 just check
 
 # Cargo clippy
@@ -372,251 +208,134 @@ just fmt-check
 
 ## Data Access Patterns
 
-### All Data via Generated Bindings
+### All Data via Engine Functions
 
-All data access uses `commands.xxx()` from `gui/src/bindings.ts` (tauri-specta generated bindings) — never direct file I/O from the frontend. The `unwrap()` helper in `gui/src/utils/index.ts` converts the `typedError` discriminated union back to throw-on-error behavior.
+All data access goes through engine command functions — never direct file I/O from the GUI layer.
 
-```typescript
-import { commands } from '~/bindings';
-import { unwrap } from '~/utils';
+```rust
+use novelcraft_engine::AppState;
+use novelcraft_engine::commands::{session, profile, story, lore};
 
-// Sessions
-const sessions = await unwrap(commands.sessionList());
-await unwrap(commands.sessionCreate(id, storyId ?? null, 'New'));
-const loaded = await unwrap(commands.sessionLoad(id));
-await unwrap(commands.sessionSaveMeta(id, updatedMeta));
-await unwrap(commands.sessionPushPage(id, pageEntry));
-await unwrap(commands.sessionUpdatePage(id, 0, updatedPage));
-await unwrap(commands.sessionTruncatePages(id, 5));
-await unwrap(commands.sessionDelete(id));
+let sessions = session::session_list(&app).await?;
+await session::session_create(&app, id, story_id, title, description)?;
+let loaded = session::session_load(&app, id).await?;
+session::session_save_meta(&app, id, updated_meta).await?;
+session::session_push_page(&app, id, page_entry).await?;
+session::session_update_page(&app, id, 0, updated_page).await?;
+session::session_truncate_pages(&app, id, 5).await?;
+session::session_delete(&app, id).await?;
 
-// Snapshots
-const head = await unwrap(commands.sessionGetHeadSnapshot(id));
-await unwrap(commands.sessionSaveHeadSnapshot(id, snap));
-await unwrap(commands.sessionDeleteHeadSnapshot(id));
-const snap = await unwrap(commands.sessionFindSnapshotBefore(id, 5));
-await unwrap(commands.sessionSaveCheckpoint(id, 0, snap));
-await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
+let head = session::session_get_head_snapshot(&app, id).await?;
+session::session_save_head_snapshot(&app, id, snap).await?;
+session::session_delete_head_snapshot(&app, id).await?;
+let snap = session::session_find_snapshot_before(&app, id, 5).await?;
+session::session_save_checkpoint(&app, id, 0, snap).await?;
+session::session_delete_checkpoints_from(&app, id, 5).await?;
 
-// Profiles
-const { profiles, active_id } = await unwrap(commands.profileList());
-await unwrap(commands.profileCreate(newProfile));
-await unwrap(commands.profileUpdate(profileId, updatedProfile));
-await unwrap(commands.profileDelete(profileId));
-await unwrap(commands.profileSetActive(profileId));
+let result = profile::profile_list(&app).await?;
+profile::profile_create(&app, new_profile).await?;
+profile::profile_update(&app, profile_id, updated_profile).await?;
+profile::profile_delete(&app, profile_id).await?;
+profile::profile_set_active(&app, profile_id).await?;
 
-// Stories
-const story = await unwrap(commands.storyGet(id));
-await unwrap(commands.storySave(storyEntry));
+let story = story::story_get(&app, id).await?;
+story::story_save(&app, story_entry).await?;
 
-// Lore
-const results = await unwrap(commands.loreQuery(id, 'search'));
+let results = lore::lore_query(&app, id, "search").await?;
 ```
 
-**No transactions**: Each bindings call is independent. The frontend drives sequential operations.
-
-**Detailed docs:** [Data Storage](./docs/database-schema.md)
+**No transactions**: Each function call is independent. Consumers drive sequential operations.
 
 ---
 
-## Tauri Commands
+## Engine API Reference
 
-### Available Commands
+### LLM Proxy
 
-**LLM Proxy:**
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `prompt` | `&AppState, LlmPromptRequest, callbacks` | `Result<()>` | Stream LLM response via callbacks |
+| `list_models` | `&AppState` | `Result<Models>` | Get configured models |
+| `save_models` | `&AppState, Models` | `Result<()>` | Save model configuration |
+| `ping_hosts` | `&AppState` | `Result<Vec<UnreachableHost>>` | Check all LLM host liveness |
+| `ping_host` | `url, api_key?` | `Result<Option<String>>` | Check single host liveness |
 
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `prompt` | `{ request: { model, messages[], persona?, context?, request_id?, tools? } }` | `void` (emits events) | Stream LLM response |
-| `list_models` | none | `Models` | Get configured models |
-| `save_models` | `{ models: Models }` | `void` | Save model configuration |
-| `ping_hosts` | none | `Vec<UnreachableHost>` | Check all LLM host liveness |
-| `ping_host` | `{ request: { url, api_key? } }` | `Option<string>` | Check single host liveness |
+### File Operations
 
-**File Operations:**
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `export_session` | `&AppState, session_id, file_path, ExportData` | `Result<()>` | Write session to file |
+| `import_session` | `file_path` | `Result<ExportData>` | Read session from file |
+| `pick_file` | `filters?` | `Result<Option<String>>` | Open native file picker |
+| `pick_folder` | — | `Result<Option<String>>` | Open native folder picker |
 
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `export_session` | `{ session_id, file_path, data: ExportData }` | `void` | Write session to file |
-| `import_session` | `{ file_path }` | `ExportData` | Read session from file |
-| `pick_file` | `{ filters? }` | `string \| null` | Open native file picker |
-| `pick_folder` | none | `string \| null` | Open native folder picker |
+### Game Agent
 
-**Game Agent:**
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `game_prompt` | `&AppState, session_id, prompt, on_event` | `Result<GamePromptResult>` | Start agent loop, streams via callback |
+| `game_fork` | `&AppState, session_id, page_index, prompt, on_event` | `Result<GamePromptResult>` | Fork at page, then run agent loop |
+| `game_sessions` | `&AppState` | `Result<Vec<SessionV1>>` | List all game sessions |
+| `game_page` | `&AppState, session_id, page` | `Result<PageV1>` | Get a specific page from a game session |
 
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `game_prompt` | `{ session_id, prompt }` | `GamePromptResult` | Start agent loop, streams events as `gamePrompt[{stream_id}]` |
-| `game_fork` | `{ session_id, page_index, prompt }` | `GamePromptResult` | Fork at page, then run agent loop (same events as `game_prompt`) |
-| `game_sessions` | none | `Vec<SessionV1>` | List all game sessions |
-| `game_page` | `{ session_id, page }` | `PageV1` | Get a specific page from a game session |
+### Sessions
 
-The `game_prompt` command spawns an agent loop that reads session history, adds the prompt as a user message (if non-empty), and iterates LLM calls (up to `max_agent_steps` from `AppState.config`) until a final text response is received or tool calls are resolved. Events are emitted as `gamePrompt[{stream_id}]` with variants: `Reasoning { step, delta }`, `Text { step, delta }`, `ToolCalls { step, text?, calls }`, `Done { finish_reason, usage? }`, `Error(...)`.
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `session_list` | `&AppState` | `Result<Vec<SessionMeta>>` | List all sessions |
+| `session_create` | `&AppState, sessionId, storyId?, title, description?` | `Result<()>` | Create session with initial snapshot |
+| `session_delete` | `&AppState, sessionId` | `Result<()>` | Delete session directory |
+| `session_load` | `&AppState, sessionId` | `Result<SessionLoadResult>` | Load full session |
+| `session_save_meta` | `&AppState, sessionId, meta` | `Result<()>` | Update session metadata |
+| `session_push_page` | `&AppState, sessionId, page` | `Result<()>` | Append a new page |
+| `session_update_page` | `&AppState, sessionId, pageIndex, page` | `Result<()>` | Update page in place |
+| `session_truncate_pages` | `&AppState, sessionId, pageIndex` | `Result<()>` | Delete pages at/after index |
+| `session_get_head_snapshot` | `&AppState, sessionId` | `Result<Option<Snapshot>>` | Get current head snapshot |
+| `session_save_head_snapshot` | `&AppState, sessionId, snapshot` | `Result<()>` | Write head snapshot |
+| `session_delete_head_snapshot` | `&AppState, sessionId` | `Result<()>` | Delete head snapshot |
+| `session_find_snapshot_before` | `&AppState, sessionId, pageIndex` | `Result<Option<Snapshot>>` | Find youngest checkpoint before index |
+| `session_save_checkpoint` | `&AppState, sessionId, batch, snapshot` | `Result<()>` | Save checkpoint snapshot |
+| `session_delete_checkpoints_from` | `&AppState, sessionId, pageIndex` | `Result<()>` | Delete checkpoints at/after index |
 
-**Sessions:**
+### Profiles
 
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `session_list` | none | `SessionMeta[]` | List all sessions |
-| `session_create` | `{ sessionId, storyId?, title, description? }` | `void` | Create session with initial snapshot (storyId null for impromptu) |
-| `session_delete` | `{ sessionId }` | `void` | Delete session directory |
-| `session_load` | `{ sessionId }` | `SessionLoadResult` | Load full session (meta + pages + head snapshot) |
-| `session_save_meta` | `{ sessionId, meta }` | `void` | Update session metadata |
-| `session_push_page` | `{ sessionId, page }` | `void` | Append a new page |
-| `session_update_page` | `{ sessionId, pageIndex, page }` | `void` | Update page in place |
-| `session_truncate_pages` | `{ sessionId, pageIndex }` | `void` | Delete pages at/after index |
-| `session_get_head_snapshot` | `{ sessionId }` | `Snapshot \| null` | Get current head snapshot |
-| `session_save_head_snapshot` | `{ sessionId, snapshot }` | `void` | Write head snapshot |
-| `session_delete_head_snapshot` | `{ sessionId }` | `void` | Delete head snapshot |
-| `session_find_snapshot_before` | `{ sessionId, pageIndex }` | `Snapshot \| null` | Find youngest checkpoint before index |
-| `session_save_checkpoint` | `{ sessionId, batch, snapshot }` | `void` | Save checkpoint snapshot |
-| `session_delete_checkpoints_from` | `{ sessionId, pageIndex }` | `void` | Delete checkpoints at/after index |
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `profile_list` | `&AppState` | `Result<ProfileListResult>` | List all profiles with active ID |
+| `profile_create` | `&AppState, id, name, fields, created_at` | `Result<()>` | Create a profile |
+| `profile_update` | `&AppState, id, name, fields` | `Result<()>` | Update a profile's name and fields |
+| `profile_delete` | `&AppState, id` | `Result<()>` | Delete a profile |
+| `profile_set_active` | `&AppState, id` | `Result<()>` | Set profile as active |
 
-**Profiles:**
+### Stories
 
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `profile_list` | none | `ProfileListResult` | List all profiles with active ID |
-| `profile_create` | `{ id, name, fields, created_at }` | `void` | Create a profile |
-| `profile_update` | `{ id, name, fields }` | `void` | Update a profile's name and fields |
-| `profile_delete` | `{ id }` | `void` | Delete a profile (clears `active_id` if active) |
-| `profile_set_active` | `{ id }` | `void` | Set profile as active |
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `story_get` | `&AppState, storyId` | `Result<StoryEntry>` | Get story by ID |
+| `story_save` | `&AppState, story` | `Result<()>` | Create or replace story |
 
-**Stories:**
+### Lore
 
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `story_get` | `{ storyId }` | `StoryEntry` | Get story by ID |
-| `story_save` | `{ story }` | `void` | Create or replace story |
-
-**Lore:**
-
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `lore_query` | `{ storyId, query }` | `LoreQueryResult` | Search lore entries |
-
-### Calling Commands from Frontend
-
-```typescript
-import { commands } from '~/bindings';
-import { unwrap } from '~/utils';
-
-// LLM streaming (use the composable — never call invoke('prompt', ...) directly)
-// import { streamLlmFull } from '~/composables/useLlmStream';
-
-// Get/save models
-const models = await unwrap(commands.listModels());
-await unwrap(commands.saveModels(updatedModels));
-
-// File dialogs
-const filePath = await unwrap(commands.pickFile({
-  filters: [{ name: 'JSON', extensions: ['json'] }],
-}));
-
-// Export/import
-await unwrap(commands.exportSession(id, filePath, exportData));
-const imported = await unwrap(commands.importSession(filePath));
-```
-
-### Listening for LLM Events
-
-```typescript
-import { streamLlmFull } from '~/composables/useLlmStream';
-
-for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
-  if (event.type === 'text') { /* append text */ }
-  if (event.type === 'reasoning') { /* append reasoning */ }
-  if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
-  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
-  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
-}
-```
-
-**Do not use `listen('llm:*', ...)` directly** — always go through `useLlmStream`. For AI SDK integration, use `createTauriModel()` from `~/utils/tauriLanguageModel` instead.
-
-**Detailed docs:** [API Routes](./docs/api-routes.md)
-
----
-
-## Frontend Patterns
-
-### Routing (Vue Router)
-
-```typescript
-// Navigation
-const router = useRouter();
-router.push('/vignettes');
-router.push({ name: 'vignette', params: { id: sessionId } });
-
-// Route params
-const route = useRoute();
-const id = route.params.id;
-```
-
-**Routes** (defined in `gui/src/router/index.ts`):
-
-| Path | Name | Component |
-|------|------|-----------|
-| `/` | home | `gui/src/pages/index.vue` |
-| `/vignettes` | vignettes | `gui/src/pages/vignettes/index.vue` |
-| `/vignettes/:id` | vignette | `gui/src/pages/vignettes/[id].vue` |
-| `/builder` | builder | `gui/src/pages/builder.vue` |
-| `/settings` | settings | `gui/src/pages/settings.vue` |
-
-### Component Props
-
-```typescript
-interface Props {
-  story: {
-    id: string;
-    title: string;
-  };
-}
-
-defineProps<Props>();
-```
-
-### LLM Streaming
-
-```typescript
-import { streamLlmFull } from '~/composables/useLlmStream';
-
-for await (const event of streamLlmFull({ persona: PERSONA_PLATFORM, messages })) {
-  if (event.type === 'text') { /* append text */ }
-  if (event.type === 'error') { /* handle error */ }
-  if (event.type === 'done') { /* event.finishReason, event.usage available */ }
-  if (event.type === 'tool-call') { /* event.data = { id, tool, args } JSON */ }
-  if (event.type === 'tool-result') { /* event.data = { id, tool, result } JSON */ }
-}
-```
-
-### Data Access
-
-```typescript
-import { commands } from '~/bindings';
-import { unwrap } from '~/utils';
-
-const sessions = await unwrap(commands.sessionList());
-```
-
-**Detailed docs:** [Frontend Architecture](./docs/frontend-architecture.md)
+| Function | Parameters | Returns | Description |
+|----------|-----------|---------|-------------|
+| `lore_query` | `&AppState, storyId, query` | `Result<LoreQueryResult>` | Search lore entries |
 
 ---
 
 ## Agent Guidelines
 
-### When to Add a Tauri Command
+### When to Add an Engine Command
 
-- Frontend needs access to a system capability (file system, native dialogs, etc.)
+- GUI needs access to a system capability (file system, native dialogs, etc.)
 - New data persistence operations (new entity types, new query patterns)
-- Operations that should run outside the webview sandbox
+- New operations on existing entities
 
 **Process:**
-1. Create a new function with `#[tauri::command]` and `#[specta::specta]` in the appropriate `engine/src/src/commands/*.rs` file
-2. Ensure all parameter/return structs derive `specta::Type` (use `#[specta(type = Any)]` for `serde_json::Value` fields, or the `JsonAny` wrapper for command parameters)
-3. Register it in `engine/src/src/lib.rs` via `tauri::generate_handler![]` (the tauri-specta `Builder` picks it up automatically)
-4. Bindings are auto-generated at app startup in debug builds to `gui/src/bindings.ts` — call from frontend via `commands.commandName(params)`
+1. Create a new `pub async fn` in the appropriate `engine/src/commands/*.rs` file
+2. Take `&AppState` as the first parameter (or omit for stateless operations)
+3. Return `Result<T>` using the engine's error type
+4. Ensure parameter/return types derive `Serialize`/`Deserialize` as needed
+5. Call from the GUI crate via `novelcraft_engine::commands::*`
 
 ### When to Modify Data Formats
 
@@ -625,42 +344,29 @@ const sessions = await unwrap(commands.sessionList());
 - Page or snapshot formats need updating
 
 **Process:**
-1. Add/modify Rust structs in `engine/src/src/commands/session.rs`, `engine/src/src/commands/story.rs`, or `engine/src/src/commands/lore.rs`
+1. Add/modify Rust structs in `engine/src/commands/session.rs`, `engine/src/commands/story.rs`, or `engine/src/commands/lore.rs`
 2. Add a new version arm in `read_versioned_json()` if the format is backward-incompatible
-3. Update the corresponding composable in `gui/src/composables/` to use the new fields
-4. Old-format files continue to work via version-gated deserialization
+3. Old-format files continue to work via version-gated deserialization
 
-### When to Create a Component
+### When to Add a GUI Component
 
-- Reusable UI patterns across multiple pages
-- Complex logic that should be isolated
-- Shared functionality (cards, modals, forms)
+- Reusable UI patterns (gpui views/elements)
+- Complex rendering that should be isolated into its own view struct
 
 **Process:**
-1. Create `.vue` file in `gui/src/components/`
-2. Use `defineProps<T>()` for TypeScript props
-3. Use scoped styles to avoid conflicts
-4. Import explicitly: `import MyComponent from '~/components/MyComponent.vue'`
+1. Create a new struct implementing `Render` in `gui/src/`
+2. Use gpui's element system (`div()`, `child()`, etc.)
+3. Register with the gpui context as needed
 
-### When to Add a Composable
+### When to Add a Game Module
 
-- Shared reactive state or logic across components/pages
-- Wrapping Tauri APIs or external libraries
-- Data access patterns (wrapping Tauri commands)
+- New gameplay mechanics that require LLM tool access
+- New state that needs snapshot/fork support
 
 **Process:**
-1. Create `use*.ts` file in `gui/src/composables/`
-2. Export a composable function using Vue's `ref`/`computed`/`onMounted` etc.
-3. If it should be auto-imported, add its type declaration to `gui/src/env.d.ts`
-
-### When to Add a Page
-
-- New route/view in the application
-
-**Process:**
-1. Create `.vue` file in `gui/src/pages/`
-2. Add route to `gui/src/router/index.ts`
-3. Use dynamic imports for code splitting: `component: () => import('~/pages/my-page.vue')`
+1. Define the module with its tools and `init()` default state
+2. Register in the game engine's module registry
+3. Ensure state is serializable for snapshot persistence
 
 ---
 
@@ -670,64 +376,37 @@ All build and development commands are in the root `justfile`.
 
 | Recipe | Purpose |
 |--------|---------|
-| `just dev-frontend` | Start Vite dev server (`gui/`) |
-| `just dev-engine` | Start `cargo tauri dev` (`engine/src/`, requires frontend running) |
-| `just build-frontend` | Vite production build |
-| `just build-engine` | cargo tauri build |
-| `just build` | Both frontend + engine |
-| `just typecheck` | `vue-tsc --noEmit` in `gui/` |
-| `just check` | typecheck + `cargo check` |
-| `just clippy` | cargo clippy in `engine/` |
-| `just fmt` | cargo fmt in `engine/` |
-| `just fmt-check` | cargo fmt --check in `engine/` |
+| `just dev` | Run the app (`cargo run --bin novelcraft`) |
+| `just build` | Build entire workspace (`cargo build`) |
+| `just check` | Cargo check (entire workspace) |
+| `just check-engine` | Cargo check (`novelcraft-engine` only) |
+| `just check-gui` | Cargo check (`novelcraft-gui` only) |
+| `just clippy` | Cargo clippy (entire workspace) |
+| `just fmt` | Cargo fmt (entire workspace) |
+| `just fmt-check` | Cargo fmt --check (entire workspace) |
 
 ## Key Dependencies
 
-### Frontend (gui/package.json)
-
-| Package | Purpose |
-|---------|---------|
-| `vue` | UI framework |
-| `vue-router` | Client-side routing |
-| `@tauri-apps/api` | Tauri IPC (`invoke`, `listen`) |
-| `@tauri-apps/plugin-store` | Persistent key/value store (flags, preferences) |
-| `@tauri-apps/plugin-dialog` | Native file dialogs |
-| `@tauri-apps/plugin-fs` | File system access |
-| `@stegakir/aikit` | AI/LLM utilities (`ConversationalArchetype`, `Conversation`, `MemoryMessageStore`) |
-| `@ai-sdk/provider` | Vercel AI SDK types (LanguageModelV3 interface) |
-| `open-props` | CSS design tokens |
-| `marked` | Markdown rendering |
-| `zod` | Runtime validation |
-| `immer` | Immutable state transitions in `GameplayModuleRegistry.executeTool()` (`createDraft`/`finishDraft`) |
-| `vite` | Build tool (dev dependency) |
-| `@vitejs/plugin-vue` | Vite Vue plugin (dev dependency) |
-| `vue-tsc` | Vue TypeScript checking (dev dependency) |
-
-### Backend (engine/src/Cargo.toml)
+### Engine (engine/Cargo.toml, crate: novelcraft-engine)
 
 | Crate | Purpose |
 |-------|---------|
-| `tauri` | Desktop app framework |
-| `tauri-specta` | Type-safe TypeScript bindings generation |
-| `specta` | Type introspection for Rust types |
-| `tauri-plugin-store` | Persistent key/value store plugin |
-| `tauri-plugin-dialog` | Native dialog plugin |
-| `tauri-plugin-fs` | File system plugin |
-| `reqwest` | HTTP client (streaming SSE) |
+| `reqwest` (stream, json) | HTTP client for LLM proxy (streaming SSE) |
 | `bytes` | Byte buffer utilities (SSE stream parsing) |
 | `serde` / `serde_json` | Serialization |
-| `tokio` | Async runtime |
+| `tokio` (full) | Async runtime |
 | `futures` | Async stream utilities |
-| `dirs` | Platform directories |
+| `dirs` | Platform directory resolution (`data_dir`, `config_dir`) |
+| `uuid` (v4) | UUID generation |
+| `chrono` | Timestamp handling |
+| `thiserror` | Error derive macro |
+| `log` / `env_logger` | Logging |
+| `kiruklaw-agent-loop` | Agent loop utilities (git dependency) |
 
----
+### GUI (gui/Cargo.toml, crate: novelcraft-gui, binary: novelcraft)
 
-## Detailed Documentation Links
-
-| Document | Description |
-|----------|-------------|
-| [Project Structure](./docs/project-structure.md) | Complete file organization and directory layout |
-| [Code Conventions](./docs/code-conventions.md) | Code styling, imports, patterns, and best practices |
-| [Data Storage](./docs/database-schema.md) | JSON file formats and storage layout |
-| [API Routes](./docs/api-routes.md) | Tauri command documentation and usage patterns |
-| [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, composables, and styling conventions |
+| Crate | Purpose |
+|-------|---------|
+| `novelcraft-engine` (path) | Business logic library |
+| `gpui` (git, Zed main) | UI framework — views, elements, styling |
+| `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |

@@ -2,34 +2,32 @@ set dotenv-load
 
 # ── Dev ──────────────────────────────────────────────────────
 
-dev *ARGS:
-    cd engine && cargo tauri dev {{ARGS}}
+dev:
+  cargo run --bin novelcraft
 
 # ── Build ────────────────────────────────────────────────────
 
-build-gui:
-    cd gui && bun run vite build
-
-build-engine *ARGS:
-    cd engine && cargo tauri build {{ARGS}}
-
-build: build-gui build-engine
+build:
+  cargo build
 
 # ── Check ────────────────────────────────────────────────────
 
-typecheck:
-    cd gui && bun run vue-tsc --noEmit
-
-check: typecheck
-    cd engine && cargo check
+check:
+  cargo check
 
 # ── Engine (cargo) ──────────────────────────────────────────
 
+check-engine:
+  cargo check -p novelcraft-engine
+
+check-gui:
+  cargo check -p novelcraft-gui
+
 clippy:
-    cd engine && cargo clippy
+  cargo clippy
 
 fmt:
-    cd engine && cargo fmt
+  cargo fmt
 
 fmt-check:
-    cd engine && cargo fmt --check
+  cargo fmt --check

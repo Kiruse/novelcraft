@@ -1,12 +1,13 @@
+use std::path::PathBuf;
+
 use log::warn;
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::game::state::AppState;
 use crate::infer::openai::*;
 use crate::infer::internal::*;
+use crate::commands::paths;
 use crate::util::ensure_dir;
 use crate::util::request_prompt;
 use crate::util::reqwester;
@@ -14,14 +15,14 @@ use crate::util::{process_stream, StreamEvent};
 
 const DEFAULT_HOST: &str = "http://localhost:1234/v1";
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all="snake_case")]
 pub enum ModelUsage {
   Storyteller,
   Suggestions,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Models {
   pub storyteller: ModelConfig,
   pub suggestions: ModelConfig,
@@ -48,8 +49,8 @@ impl Models {
     vec![self.storyteller.clone(), self.suggestions.clone()]
   }
 
-  pub async fn load(app: &AppHandle) -> Result<Models, AppError> {
-    let path = models_config_path(app);
+  pub async fn load() -> Result<Models, AppError> {
+    let path = Self::config_path()?;
     if path.exists() {
       let result = crate::util::deserialize::<Models>(&path).await;
       match result {
@@ -67,10 +68,14 @@ impl Models {
     }
   }
 
-  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
-    let path = models_config_path(app);
+  pub async fn save(&self) -> Result<(), AppError> {
+    let path = Self::config_path()?;
     ensure_dir(&path).await?;
     crate::util::serialize(&path, self).await
+  }
+
+  fn config_path() -> Result<PathBuf, AppError> {
+    paths::config_dir().map(|p: PathBuf| p.join("models.json"))
   }
 }
 
@@ -91,7 +96,7 @@ impl Default for Models {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
   pub base_url: String,
   pub model_id: String,
@@ -99,34 +104,30 @@ pub struct ModelConfig {
   pub api_key: Option<String>,
 }
 
-fn emit_event(
-  app: &AppHandle,
-  base: &str,
-  request_id: &Option<String>,
-  payload: impl Serialize + Clone,
-) {
-  let event_name = match request_id {
-    Some(id) => format!("{}:{}", base, id),
-    None => base.to_string(),
-  };
-  let _ = app.emit(&event_name, payload);
+#[derive(Debug, Clone, Serialize)]
+pub struct UnreachableHost {
+  pub url: String,
+  pub error: String,
 }
 
-fn models_config_path(app: &AppHandle) -> std::path::PathBuf {
-  app
-    .path()
-    .app_data_dir()
-    .unwrap_or_else(|_| std::path::PathBuf::from("."))
-    .join("models.json")
+#[derive(Debug, Deserialize)]
+pub struct PingHostRequest {
+  pub url: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub api_key: Option<String>,
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), AppError> {
+pub async fn prompt(
+  state: &AppState,
+  request: LlmPromptRequest,
+  on_text: impl Fn(String),
+  on_reasoning: impl Fn(String),
+  on_tool_call: impl Fn(LlmToolCallDelta),
+  on_done: impl Fn(LlmDonePayload),
+  on_error: impl Fn(String),
+) -> Result<(), AppError> {
   let client = reqwester().await;
-  let state = AppState::get(&app);
   let config = state.models.lock().await.get_config(request.model);
-  let reqid = &request.request_id;
 
   let mut msgs: Vec<OpenAiChatMessage> = request.messages
     .iter()
@@ -146,51 +147,32 @@ pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), App
   if !response.status().is_success() {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    emit_event(&app, "llm:error", &request.request_id, &body);
+    on_error(body);
     return Err(AppError::llm(format!("LLM request failed: HTTP {}", status)));
   }
 
   let done = process_stream(response.bytes_stream(), &mut |event| match event {
-    StreamEvent::Text(text) => emit_event(&app, "llm:text", reqid, text.as_str()),
-    StreamEvent::Reasoning(text) => emit_event(&app, "llm:reasoning", reqid, text.as_str()),
+    StreamEvent::Text(text) => on_text(text),
+    StreamEvent::Reasoning(text) => on_reasoning(text),
     StreamEvent::ToolCall {
       index,
       id,
       name,
       arguments_delta,
-    } => emit_event(
-      &app,
-      "llm:tool_call",
-      reqid,
-      LlmToolCallDelta {
-        index,
-        id,
-        name,
-        arguments_delta,
-      },
-    ),
+    } => on_tool_call(LlmToolCallDelta {
+      index,
+      id,
+      name,
+      arguments_delta,
+    }),
   }).await?;
 
-  emit_event(
-    &app,
-    "llm:done",
-    reqid,
-    LlmDonePayload::from(done),
-  );
+  on_done(LlmDonePayload::from(done));
 
   Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
-pub struct UnreachableHost {
-  pub url: String,
-  pub error: String,
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn ping_hosts(app: AppHandle) -> Result<Vec<UnreachableHost>, AppError> {
-  let state = AppState::get(&app);
+pub async fn ping_hosts(state: &AppState) -> Result<Vec<UnreachableHost>, AppError> {
   let models = state.models.lock().await.all_configs();
   let hosts = models
     .iter()
@@ -228,15 +210,6 @@ pub async fn ping_hosts(app: AppHandle) -> Result<Vec<UnreachableHost>, AppError
   Ok(unreachable)
 }
 
-#[derive(Debug, Deserialize, Type)]
-pub struct PingHostRequest {
-  pub url: String,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub api_key: Option<String>,
-}
-
-#[tauri::command]
-#[specta::specta]
 pub async fn ping_host(request: PingHostRequest) -> Result<Option<String>, AppError> {
   let client = reqwester().await;
   let url = request.url.trim_end_matches('/');
@@ -252,27 +225,4 @@ pub async fn ping_host(request: PingHostRequest) -> Result<Option<String>, AppEr
     Ok(resp) => Ok(Some(format!("HTTP {}", resp.status()))),
     Err(e) => Ok(Some(e.to_string())),
   }
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn list_models(state: State<'_, AppState>) -> Result<Models, AppError> {
-  let guard = state.models.lock().await;
-  Ok(guard.clone())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn save_models(
-  app: AppHandle,
-  mut models: Models,
-) -> Result<(), AppError> {
-  models.patch();
-  models.save(&app).await?;
-
-  let state = AppState::get(&app);
-  let mut guard = state.models.lock().await;
-  *guard = models;
-
-  Ok(())
 }
