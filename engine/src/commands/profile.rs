@@ -3,10 +3,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager};
-use tokio::sync::{Mutex, OnceCell};
+use tauri::{AppHandle, Manager, State};
 
 use crate::error::AppError;
+use crate::game::state::AppState;
 use crate::util;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -25,53 +25,52 @@ pub struct ProfileListResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProfilesFile {
+pub struct Profiles {
   version: u32,
   profiles: Vec<Profile>,
   active_id: Option<String>,
 }
 
-static PROFILES: OnceCell<Mutex<ProfilesFile>> = OnceCell::const_new();
+impl Profiles {
+  pub async fn load(app: &AppHandle) -> Result<Profiles, AppError> {
+    let path = Self::default_path(app)?;
+    if path.exists() {
+      let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+      Ok(serde_json::from_str(&content).unwrap_or_default())
+    } else {
+      Ok(Profiles::default())
+    }
+  }
 
-fn profiles_path(app: &AppHandle) -> Result<PathBuf, AppError> {
-  Ok(
-    app
-      .path()
-      .app_data_dir()
-      .map_err(|e| AppError::internal(e.to_string()))?
-      .join("profiles.json"),
-  )
+  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
+    util::serialize(&Self::default_path(app)?, self).await
+  }
+
+  fn default_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    Ok(
+      app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .join("profiles.json"),
+    )
+  }
 }
 
-async fn save_to_disk(app: &AppHandle, file: &ProfilesFile) -> Result<(), AppError> {
-  let path = profiles_path(app)?;
-  util::serialize(&path, file).await
-}
-
-pub async fn init_profiles(app: &AppHandle) {
-  let path = profiles_path(app).unwrap();
-  let file = if path.exists() {
-    let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    serde_json::from_str(&content).unwrap_or(ProfilesFile {
+impl Default for Profiles {
+  fn default() -> Self {
+    Self {
       version: 1,
-      profiles: Vec::new(),
-      active_id: None,
-    })
-  } else {
-    ProfilesFile {
-      version: 1,
-      profiles: Vec::new(),
+      profiles: vec![],
       active_id: None,
     }
-  };
-  PROFILES.set(Mutex::new(file)).unwrap();
+  }
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn profile_list() -> Result<ProfileListResult, AppError> {
-  let store = PROFILES.get().ok_or(AppError::internal("Profiles not initialized"))?;
-  let guard = store.lock().await;
+pub async fn profile_list(state: State<'_, AppState>) -> Result<ProfileListResult, AppError> {
+  let guard = state.profiles.lock().await;
   Ok(ProfileListResult {
     profiles: guard.profiles.clone(),
     active_id: guard.active_id.clone(),
@@ -87,8 +86,8 @@ pub async fn profile_create(
   fields: HashMap<String, String>,
   created_at: String,
 ) -> Result<(), AppError> {
-  let store = PROFILES.get().ok_or(AppError::internal("Profiles not initialized"))?;
-  let mut guard = store.lock().await;
+  let state = AppState::get(&app);
+  let mut guard = state.profiles.lock().await;
   guard.profiles.push(Profile {
     id,
     name,
@@ -96,7 +95,7 @@ pub async fn profile_create(
     created_at: created_at.clone(),
     updated_at: created_at,
   });
-  save_to_disk(&app, &guard).await
+  guard.save(&app).await
 }
 
 #[tauri::command]
@@ -108,8 +107,8 @@ pub async fn profile_update(
   fields: HashMap<String, String>,
   updated_at: String,
 ) -> Result<(), AppError> {
-  let store = PROFILES.get().ok_or(AppError::internal("Profiles not initialized"))?;
-  let mut guard = store.lock().await;
+  let state = AppState::get(&app);
+  let mut guard = state.profiles.lock().await;
   let profile = guard
     .profiles
     .iter_mut()
@@ -118,26 +117,26 @@ pub async fn profile_update(
   profile.name = name;
   profile.fields = fields;
   profile.updated_at = updated_at;
-  save_to_disk(&app, &guard).await
+  guard.save(&app).await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn profile_delete(app: AppHandle, id: String) -> Result<(), AppError> {
-  let store = PROFILES.get().ok_or(AppError::internal("Profiles not initialized"))?;
-  let mut guard = store.lock().await;
+  let state = AppState::get(&app);
+  let mut guard = state.profiles.lock().await;
   guard.profiles.retain(|p| p.id != id);
   if guard.active_id.as_deref() == Some(id.as_str()) {
     guard.active_id = None;
   }
-  save_to_disk(&app, &guard).await
+  guard.save(&app).await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn profile_set_active(app: AppHandle, id: String) -> Result<(), AppError> {
-  let store = PROFILES.get().ok_or(AppError::internal("Profiles not initialized"))?;
-  let mut guard = store.lock().await;
+  let state = AppState::get(&app);
+  let mut guard = state.profiles.lock().await;
   guard.active_id = Some(id);
-  save_to_disk(&app, &guard).await
+  guard.save(&app).await
 }

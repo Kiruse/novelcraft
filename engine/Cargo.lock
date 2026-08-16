@@ -1837,6 +1837,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiruklaw-agent-loop"
+version = "0.1.0"
+source = "git+https://github.com/Kiruse/kiruklaw#f17afc0a83ac545ea72e54bb7b53e64ecb44568d"
+dependencies = [
+ "futures-util",
+ "kiruklaw-macros",
+ "log",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "kiruklaw-macros"
+version = "0.1.0"
+source = "git+https://github.com/Kiruse/kiruklaw#f17afc0a83ac545ea72e54bb7b53e64ecb44568d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2057,6 +2082,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "futures",
+ "kiruklaw-agent-loop",
  "log",
  "reqwest 0.12.28",
  "serde",

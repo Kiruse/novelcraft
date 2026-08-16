@@ -20,10 +20,19 @@ novelcraft/
 │       │   ├── commands/
 │       │   │   ├── mod.rs            # Module barrel
 │       │   │   ├── llm.rs            # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
+│       │   │   ├── game.rs            # Game agent loop (game_prompt, game_fork, game_sessions, game_page)
 │       │   │   ├── profile.rs        # Profile persistence (OnceCell<Mutex<ProfilesFile>>)
 │       │   │   ├── session.rs  # Session/page/snapshot persistence (JSON files)
 │       │   │   ├── story.rs    # Story persistence (JSON files)
-│       │   │   └── lore.rs     # Lore persistence (JSON files)
+│       │   │   ├── lore.rs     # Lore persistence (JSON files)
+│       │   │   └── fs.rs       # File operations (export/import, file dialogs)
+│       │   ├── game/               # Game engine module
+│       │   │   ├── mod.rs            # Module barrel
+│       │   │   ├── engine.rs         # GameEngine (session loading, page CRUD, fork, history)
+│       │   │   ├── session.rs        # Game session model (SessionV1, file-based persistence)
+│       │   │   ├── pages.rs          # Page types (PageV1, PageBatch, ResponseV1)
+│       │   │   ├── state.rs          # AppState (config + profiles, initialized in lib.rs setup)
+│       │   │   └── module.rs         # Game module abstractions
 │       │       └── infer/
 │       │           ├── mod.rs            # Module barrel (pub mod api, pub mod internal)
 │       │           ├── api.rs            # OpenAI API types (request/response structs for SSE)
@@ -122,14 +131,24 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
 
 **`engine/src/src/`**
 - `main.rs` — Binary entry point
-- `lib.rs` — App builder, plugin registration (`store`, `dialog`, `fs`), command handler registration. Setup spawns async initialization of profiles (`init_profiles`) and models (`init_models`).
+- `lib.rs` — App builder, plugin registration (`store`, `dialog`, `fs`), command handler registration. Setup spawns async initialization of `AppState` (via `AppState::init()` — loads `NovelCraftConfig`, `Profiles`, and `Models`).
 - `util.rs` — SSE stream parsing utilities; defines `StreamEvent` enum (`Text`, `Reasoning`, `ToolCall`, `Done`) and `process_stream()` async function that parses byte streams and invokes a callback for each event. Also provides file I/O helpers: `serialize`, `deserialize`, `ensure_dir`.
+- `config.rs` — `NovelCraftConfig` struct (currently holds `max_agent_steps: u8`, default 10). Loaded from `{app_config_dir}/config.json`. Held in `AppState.config: Mutex<NovelCraftConfig>`.
 - `commands/` — Tauri commands organized by domain
-  - `llm.rs` — LLM proxy: builds requests, streams from OpenAI-compatible API via `reqwest`, delegates SSE frame parsing to `util::process_stream()`, emits `llm:text`/`llm:reasoning`/`llm:tool_call`/`llm:error`/`llm:done` events. Model registry uses `OnceCell<Mutex<HashMap<String, ModelConfig>>>` pattern, initialized via `init_models()` in `lib.rs` setup.
-  - `profile.rs` — Profile persistence: CRUD for profiles stored in `profiles.json`. Uses `OnceCell<Mutex<ProfilesFile>>` pattern (same as models in `llm.rs`), initialized via `init_profiles()` called in `lib.rs` setup. Active profile tracked at file level via `active_id: Option<String>` in `ProfilesFile` (not per-profile `active` field). Profile struct has `fields: serde_json::Value`.
+  - `llm.rs` — LLM proxy: builds requests, streams from OpenAI-compatible API via `reqwest`, delegates SSE frame parsing to `util::process_stream()`, emits `llm:text`/`llm:reasoning`/`llm:tool_call`/`llm:error`/`llm:done` events. Model registry (`Models` struct) is held in `AppState.models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()`. `Models` has instance methods `get_config(usage)`, `all_configs()`, `load(app)`, `save(app)`.
+  - `game.rs` — Game agent loop: `game_prompt` spawns an async agent loop that reads session history via `GameEngine`, adds the prompt as a user message (if non-empty), and iterates LLM calls (up to `max_agent_steps` from `AppState.config`) until a final text response or tool call resolution. `game_fork` truncates at a page index then runs the same agent loop. Events are emitted as `gamePrompt[{stream_id}]`. Also exposes `game_sessions` (list sessions) and `game_page` (get a page).
+  - `profile.rs` — Profile persistence: CRUD for profiles stored in `profiles.json`. Uses `OnceCell<Mutex<ProfilesFile>>` pattern, initialized via `init_profiles()` called in `lib.rs` setup. Active profile tracked at file level via `active_id: Option<String>` in `ProfilesFile` (not per-profile `active` field). Profile struct has `fields: serde_json::Value`.
   - `session.rs` — Session/page/snapshot persistence: CRUD for session metadata (`meta.json`), pages (`pages.{batch}.json`), and state snapshots (`state.head.json`, `state.{batch}.json`). All types include a `version` field with `read_versioned_json()` for forward-compatible deserialization.
   - `story.rs` — Story persistence: stories (`stories/{id}.json`). All types include a `version` field with version-gated deserialization.
   - `lore.rs` — Lore persistence: lore (`lore/{id}.json`). All types include a `version` field with version-gated deserialization.
+  - `fs.rs` — File operations: export/import session JSON, native file/folder picker dialogs.
+  - `mod.rs` — Module barrel
+- `game/` — Game engine module (separate from `commands/game.rs`)
+  - `engine.rs` — `GameEngine`: loads game sessions, manages page batches, provides history for prompting, page CRUD, and fork (truncate pages after index).
+  - `session.rs` — `SessionV1`: game session model with file-based persistence (separate from `commands/session.rs`).
+  - `pages.rs` — Page types: `PageV1`, `PageBatch`, `ResponseV1`.
+  - `state.rs` — `AppState`: holds `config: Mutex<NovelCraftConfig>`, `profiles: Mutex<Profiles>`, and `models: Mutex<Models>`. Initialized via `AppState::init()` in `lib.rs` setup (loads config, profiles, and models).
+  - `module.rs` — Game module abstractions.
   - `mod.rs` — Module barrel
 - `infer/` — LLM API type definitions (extracted from `commands/llm.rs`)
   - `api.rs` — OpenAI API-related types: request structs (`ChatCompletionRequest`, `ApiChatMessage`, `ApiTool`, etc.), response structs (`StreamResponse`, `StreamChoice`, `StreamDelta`, etc.), and shared types (`FunctionCall`, `ToolCall`)

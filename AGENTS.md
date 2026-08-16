@@ -33,10 +33,12 @@ novelcraft/
 │       │   ├── commands/
 │       │   │   ├── mod.rs  # Module barrel
 │       │   │   ├── llm.rs  # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
+│       │   │   ├── game.rs  # Game agent loop (game_prompt, game_fork, game_sessions, game_page)
 │       │   │   ├── profile.rs  # Profile persistence (OnceCell<Mutex<ProfilesFile>>)
 │       │   │   ├── session.rs  # Session/page/snapshot persistence (JSON files)
 │       │   │   ├── story.rs    # Story persistence (JSON files)
-│       │   │   └── lore.rs     # Lore persistence (JSON files)
+│       │   │   ├── lore.rs     # Lore persistence (JSON files)
+│       │   │   └── fs.rs       # File operations (export/import, file dialogs)
 │       │   └── infer/
 │       │       ├── mod.rs  # Module barrel (pub mod api, pub mod internal)
 │       │       ├── api.rs  # OpenAI API types (request/response structs for SSE)
@@ -83,7 +85,7 @@ novelcraft/
 | Router | `gui/src/router/` | `index.ts` with `createRouter()` |
 | Gameplay Modules | `gui/src/gameplay/` | Named exports, barrel via `index.ts` |
 | Prompts | `gui/src/prompts.ts` | Single source of truth |
-| Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `profile.rs`, `session.rs`, `story.rs`, `lore.rs`) |
+| Rust Commands | `engine/src/src/commands/` | One file per domain (`llm.rs`, `game.rs`, `profile.rs`, `session.rs`, `story.rs`, `lore.rs`, `fs.rs`) |
 | Rust Utilities | `engine/src/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`), file I/O helpers (`serialize`, `deserialize`, `ensure_dir`) |
 | Generated Bindings | `gui/src/bindings.ts` | tauri-specta auto-generated typescript bindings (debug builds) |
 
@@ -106,11 +108,11 @@ novelcraft/
 
 ### AI / Model Configuration
 
-Models are configured in Rust, persisted to disk as JSON.
+Models are configured in Rust, persisted to disk as JSON, and held in `AppState`.
 
-- **Rust side**: `engine/src/src/commands/llm.rs` — `init_models()` loads from `{app_data_dir}/models.json` or falls back to defaults
-- **Frontend side**: Call `commands.listModels()` to read, `commands.saveModels({ models })` to write (from generated bindings)
-- Each model entry maps a **usage ID** (e.g. `"storyteller"`, `"suggestions"`) → `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
+- **Rust side**: `engine/src/game/state.rs` — `AppState` holds `models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()` (called from `lib.rs` setup). The `Models` struct (defined in `engine/src/commands/llm.rs`) has fields `storyteller: ModelConfig` and `suggestions: ModelConfig`, plus instance methods `get_config(usage)`, `all_configs()`, `load(app)`, `save(app)`.
+- **Frontend side**: Call `commands.listModels()` to read (returns `Models` struct), `commands.saveModels(models)` to write (from generated bindings)
+- Each model entry maps a **usage role** (e.g. `"storyteller"`, `"suggestions"`) → `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
 - Default models point to `http://localhost:1234/v1` (local LLM server)
 
 ### Agent / LLM Integration
@@ -157,11 +159,12 @@ All structured data (stories, sessions, pages, state snapshots, lore entries, pr
   - `{appData}/profiles.json` — all profiles
   - `{appData}/stories/{id}.json` — story definitions
   - `{appData}/lore/{id}.json` — lore entries
+  - `{appData}/models.json` — LLM model configuration
 - **Version-gated deserialization**: Every file format includes a `version` field. `read_versioned_json()` reads the version first, then dispatches to the correct deserializer (currently only v1). Future format changes add new match arms.
 - **No transactions**: Each command call performs a single atomic file operation. The frontend drives sequential operations when multiple steps are needed.
 - **Rust command files**:
   - `engine/src/src/commands/session.rs` — session, page, and snapshot commands (`session_list`, `session_create`, `session_delete`, `session_load`, `session_save_meta`, `session_push_page`, `session_update_page`, `session_truncate_pages`, `session_get_head_snapshot`, `session_save_head_snapshot`, `session_delete_head_snapshot`, `session_find_snapshot_before`, `session_save_checkpoint`, `session_delete_checkpoints_from`)
-  - `engine/src/src/commands/profile.rs` — profile commands (`profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active`). Uses `OnceCell<Mutex<ProfilesFile>>` pattern (same as models in `llm.rs`). Initialized via `init_profiles()` called in `lib.rs` setup.
+  - `engine/src/src/commands/profile.rs` — profile commands (`profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active`). Uses `OnceCell<Mutex<ProfilesFile>>` pattern. Initialized via `init_profiles()` called in `lib.rs` setup.
   - `engine/src/src/commands/story.rs` — story commands (`story_get`, `story_save`)
   - `engine/src/src/commands/lore.rs` — lore commands (`lore_query`)
 - **Frontend composables**: Each composable wraps the relevant Tauri commands:
@@ -425,8 +428,8 @@ const results = await unwrap(commands.loreQuery(id, 'search'));
 | Command | Parameters | Returns | Description |
 |---------|-----------|---------|-------------|
 | `prompt` | `{ request: { model, messages[], persona?, context?, request_id?, tools? } }` | `void` (emits events) | Stream LLM response |
-| `list_models` | none | `Record<string, ModelConfig>` | Get configured models |
-| `save_models` | `{ models: Record<string, ModelConfig> }` | `void` | Save model configuration |
+| `list_models` | none | `Models` | Get configured models |
+| `save_models` | `{ models: Models }` | `void` | Save model configuration |
 | `ping_hosts` | none | `Vec<UnreachableHost>` | Check all LLM host liveness |
 | `ping_host` | `{ request: { url, api_key? } }` | `Option<string>` | Check single host liveness |
 
@@ -438,6 +441,17 @@ const results = await unwrap(commands.loreQuery(id, 'search'));
 | `import_session` | `{ file_path }` | `ExportData` | Read session from file |
 | `pick_file` | `{ filters? }` | `string \| null` | Open native file picker |
 | `pick_folder` | none | `string \| null` | Open native folder picker |
+
+**Game Agent:**
+
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `game_prompt` | `{ session_id, prompt }` | `GamePromptResult` | Start agent loop, streams events as `gamePrompt[{stream_id}]` |
+| `game_fork` | `{ session_id, page_index, prompt }` | `GamePromptResult` | Fork at page, then run agent loop (same events as `game_prompt`) |
+| `game_sessions` | none | `Vec<SessionV1>` | List all game sessions |
+| `game_page` | `{ session_id, page }` | `PageV1` | Get a specific page from a game session |
+
+The `game_prompt` command spawns an agent loop that reads session history, adds the prompt as a user message (if non-empty), and iterates LLM calls (up to `max_agent_steps` from `AppState.config`) until a final text response is received or tool calls are resolved. Events are emitted as `gamePrompt[{stream_id}]` with variants: `Reasoning { step, delta }`, `Text { step, delta }`, `ToolCalls { step, text?, calls }`, `Done { finish_reason, usage? }`, `Error(...)`.
 
 **Sessions:**
 
@@ -492,7 +506,7 @@ import { unwrap } from '~/utils';
 
 // Get/save models
 const models = await unwrap(commands.listModels());
-await unwrap(commands.saveModels({ models: updatedModels }));
+await unwrap(commands.saveModels(updatedModels));
 
 // File dialogs
 const filePath = await unwrap(commands.pickFile({

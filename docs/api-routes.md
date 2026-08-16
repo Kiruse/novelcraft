@@ -32,7 +32,7 @@ import { unwrap } from '~/utils';
 const models = await unwrap(commands.listModels());
 
 // Command with parameters
-await unwrap(commands.saveModels({ models: updatedModels }));
+await unwrap(commands.saveModels(updatedModels));
 
 // LLM streaming (use the composable — never call invoke('prompt', ...) directly)
 // import { streamLlmFull } from '~/composables/useLlmStream';
@@ -84,7 +84,7 @@ Streams an LLM response via Tauri events. The Rust backend calls the OpenAI-comp
 
 **Returns:** `void` (emits events; does not resolve until after `llm:done` is emitted)
 
-**Model resolution:** The `model` field in the request is a **usage ID** (e.g. `"storyteller"`, `"suggestions"`). The Rust backend looks up the corresponding `ModelConfig` in the in-memory model registry (loaded from `{app_data_dir}/models.json`). The actual LLM API model identifier (`config.model_id`, e.g. `"zai-org/glm-4.6v-flash"`) is then sent as the `"model"` field in the API request body.
+**Model resolution:** The `model` field in the request is a **usage ID** (e.g. `"storyteller"`, `"suggestions"`). The Rust backend looks up the corresponding `ModelConfig` via `AppState.models.lock().await.get_config(usage)` (the `Models` struct is held in `AppState`). The actual LLM API model identifier (`config.model_id`, e.g. `"zai-org/glm-4.6v-flash"`) is then sent as the `"model"` field in the API request body.
 
 **Events emitted:**
 
@@ -151,17 +151,20 @@ Returns the configured model registry.
 
 **Parameters:** None
 
-**Returns:** `Record<string, ModelConfig>`
+**Returns:** `Models`
 
 ```typescript
+interface Models {
+  storyteller: ModelConfig;
+  suggestions: ModelConfig;
+}
+
 interface ModelConfig {
   model_id: string;       // Actual LLM API model identifier (e.g., 'zai-org/glm-4.6v-flash')
   base_url: string;       // API base URL (e.g., 'http://localhost:1234/v1')
   api_key?: string;       // Optional API key
 }
 ```
-
-The `Record<string, ModelConfig>` returned by `list_models` uses **usage IDs** as keys (e.g. `"storyteller"`, `"suggestions"`). Each value contains the actual LLM API model identifier in `model_id`.
 
 #### `save_models`
 
@@ -173,7 +176,7 @@ Persists model configuration to disk (`{app_data_dir}/models.json`).
 
 ```typescript
 {
-  models: Record<string, ModelConfig>
+  models: Models  // Models struct (same shape as list_models return)
 }
 ```
 
@@ -198,7 +201,7 @@ interface UnreachableHost {
 
 **Implementation notes:**
 
-- The `MutexGuard` on the model registry is dropped before any async HTTP operations to satisfy Rust's `Send` bounds.
+- Model configs are extracted via `AppState.models.lock().await.all_configs()`, then the `MutexGuard` is dropped before async HTTP operations.
 - Hosts are deduplicated — if multiple model configs share the same `base_url`, only one probe is sent.
 - A host that responds with any 2xx status is considered reachable and omitted from the result.
 
@@ -222,6 +225,99 @@ Checks liveness of a single LLM host URL. Sends a GET request to `{url}/models` 
 **Returns:** `Option<string>` — `null` if the host is reachable (2xx response), or an error string describing the failure (timeout, connection refused, non-2xx status, etc.).
 
 **Frontend usage:** Called from the settings page with a 600ms debounce when the `base_url` field is edited, to provide immediate feedback on whether the entered URL is reachable.
+
+### Game Agent
+
+Game agent commands provide a backend-driven agent loop for LLM gameplay sessions. The agent reads session history, sends it to the LLM, and iterates until a final text response is produced or tool calls are resolved.
+
+**File:** `engine/src/src/commands/game.rs`
+
+The game agent uses `GameEngine` (from `engine/src/game/engine.rs`) to load session history and `AppState.config.max_agent_steps` to limit iterations.
+
+#### `game_prompt`
+
+Starts an agent loop for a game session. Spawns an async task that reads the session history, adds the prompt as a user message (if non-empty), and iterates LLM calls (up to `max_agent_steps` from `AppState.config`) until a final text response is received or tool calls are resolved.
+
+**Parameters:**
+
+```typescript
+{
+  session_id: string;   // Game session ID
+  prompt: string;       // User prompt (trimmed; if empty, no user message is added)
+}
+```
+
+**Returns:** `GamePromptResult`
+
+```typescript
+interface GamePromptResult {
+  stream_id: string;    // UUID for scoping events
+}
+```
+
+**Events emitted:**
+
+Events use the `gamePrompt[{stream_id}]` pattern for scoping.
+
+| Event Variant | Fields | Description |
+|---------------|--------|-------------|
+| `Reasoning` | `{ step: u8, delta: string }` | Reasoning/thinking chunk |
+| `Text` | `{ step: u8, delta: string }` | Text content chunk |
+| `ToolCalls` | `{ step: u8, text?: string, calls: ToolCall[] }` | Tool calls received (text is optional trailing text) |
+| `Done` | `{ finish_reason: string, usage?: LlmUsage }` | Agent loop completed |
+| `Error` | `GamePromptError` | Error (request failure or internal error) |
+
+```typescript
+interface GamePromptError {
+  domain: 'request' | 'internal';
+  // domain = 'request':
+  status?: number;
+  body?: string;
+  // domain = 'internal':
+  message?: string;
+}
+```
+
+#### `game_fork`
+
+Forks a game session at a given page index, then runs the same agent loop as `game_prompt`. Truncates all pages at and after `page_index`, then spawns the agent loop.
+
+**Parameters:**
+
+```typescript
+{
+  session_id: string;   // Game session ID
+  page_index: number;   // Page index to fork at (0-based)
+  prompt: string;       // User prompt (same semantics as game_prompt)
+}
+```
+
+**Returns:** `GamePromptResult`
+
+Uses the same event pattern as `game_prompt`.
+
+#### `game_sessions`
+
+Lists all game sessions by scanning the sessions directory.
+
+**Parameters:** None
+
+**Returns:** `Vec<SessionV1>`
+
+#### `game_page`
+
+Gets a specific page from a game session by index.
+
+**Parameters:**
+
+```typescript
+{
+  session_id: string;   // Game session ID
+  page: number;         // Page index (0-based)
+}
+```
+
+**Returns:** `PageV1`
 
 ### File Operations
 
@@ -539,7 +635,7 @@ Deletes all checkpoint snapshot files with `page_index >= pageIndex`. Used durin
 
 ### Profile Management
 
-Profile commands manage player profiles stored in `{appData}/profiles.json`. Profiles are held in memory via `OnceCell<Mutex<ProfilesFile>>` (same pattern as models in `llm.rs`), initialized by `init_profiles()` called in `lib.rs` setup.
+Profile commands manage player profiles stored in `{appData}/profiles.json`. Profiles are held in memory via `OnceCell<Mutex<ProfilesFile>>` in `engine/src/src/commands/profile.rs`, initialized by `init_profiles()` called in `lib.rs` setup.
 
 **File:** `engine/src/src/commands/profile.rs`
 

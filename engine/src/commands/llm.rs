@@ -1,11 +1,10 @@
 use log::warn;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::OnceCell;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
+use crate::game::state::AppState;
 use crate::infer::openai::*;
 use crate::infer::internal::*;
 use crate::util::ensure_dir;
@@ -14,7 +13,6 @@ use crate::util::reqwester;
 use crate::util::{process_stream, StreamEvent};
 
 const DEFAULT_HOST: &str = "http://localhost:1234/v1";
-static MODELS: OnceCell<Mutex<Models>> = OnceCell::const_new();
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all="snake_case")]
@@ -30,8 +28,6 @@ pub struct Models {
 }
 
 impl Models {
-  /// Patch this instance's `ModelConfig`s with empty `base_url`s to
-  /// use the default host.
   pub fn patch(&mut self) {
     if self.storyteller.base_url.trim().is_empty() {
       self.storyteller.base_url = DEFAULT_HOST.to_string();
@@ -41,28 +37,40 @@ impl Models {
     }
   }
 
-  pub async fn get(usage: ModelUsage) -> Result<ModelConfig, AppError> {
-    let models = MODELS
-      .get()
-      .ok_or(AppError::internal("Models not initialized"))?
-      .lock()
-      .map_err(|e| AppError::internal(e.to_string()))?;
-    Ok(match usage {
-      ModelUsage::Storyteller => models.storyteller.clone(),
-      ModelUsage::Suggestions => models.suggestions.clone(),
-    })
+  pub fn get_config(&self, usage: ModelUsage) -> ModelConfig {
+    match usage {
+      ModelUsage::Storyteller => self.storyteller.clone(),
+      ModelUsage::Suggestions => self.suggestions.clone(),
+    }
   }
 
-  async fn all() -> Result<Vec<ModelConfig>, AppError> {
-    let models = MODELS
-      .get()
-      .ok_or(AppError::internal("Models not initialized"))?
-      .lock()
-      .map_err(|e| AppError::internal(e.to_string()))?;
-    Ok(vec![
-      models.storyteller.clone(),
-      models.suggestions.clone(),
-    ])
+  pub fn all_configs(&self) -> Vec<ModelConfig> {
+    vec![self.storyteller.clone(), self.suggestions.clone()]
+  }
+
+  pub async fn load(app: &AppHandle) -> Result<Models, AppError> {
+    let path = models_config_path(app);
+    if path.exists() {
+      let result = crate::util::deserialize::<Models>(&path).await;
+      match result {
+        Ok(mut models) => {
+          models.patch();
+          Ok(models)
+        }
+        Err(err) => {
+          warn!("Failed to deserialize models at {}: {} - initializing with defaults", path.to_string_lossy(), err);
+          Ok(Models::default())
+        }
+      }
+    } else {
+      Ok(Models::default())
+    }
+  }
+
+  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
+    let path = models_config_path(app);
+    ensure_dir(&path).await?;
+    crate::util::serialize(&path, self).await
   }
 }
 
@@ -112,30 +120,12 @@ fn models_config_path(app: &AppHandle) -> std::path::PathBuf {
     .join("models.json")
 }
 
-pub async fn init_models(app: &AppHandle) {
-  let path = models_config_path(app);
-
-  let models: Models = if path.exists() {
-    let result = crate::util::deserialize::<Models>(&path).await;
-    match result {
-      Ok(models) => models,
-      Err(err) => {
-        warn!("Failed to deserialize models at {}: {} - initializing with defaults", path.to_string_lossy(), err);
-        Models::default()
-      }
-    }
-  } else {
-    Models::default()
-  };
-
-  MODELS.set(Mutex::new(models)).unwrap();
-}
-
 #[tauri::command]
 #[specta::specta]
 pub async fn prompt(app: AppHandle, request: LlmPromptRequest) -> Result<(), AppError> {
   let client = reqwester().await;
-  let config = Models::get(request.model).await?;
+  let state = AppState::get(&app);
+  let config = state.models.lock().await.get_config(request.model);
   let reqid = &request.request_id;
 
   let mut msgs: Vec<OpenAiChatMessage> = request.messages
@@ -199,8 +189,9 @@ pub struct UnreachableHost {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn ping_hosts() -> Result<Vec<UnreachableHost>, AppError> {
-  let models = Models::all().await?;
+pub async fn ping_hosts(app: AppHandle) -> Result<Vec<UnreachableHost>, AppError> {
+  let state = AppState::get(&app);
+  let models = state.models.lock().await.all_configs();
   let hosts = models
     .iter()
     .map(|m| (&m.base_url, &m.api_key))
@@ -265,13 +256,9 @@ pub async fn ping_host(request: PingHostRequest) -> Result<Option<String>, AppEr
 
 #[tauri::command]
 #[specta::specta]
-pub async fn list_models() -> Result<Models, AppError> {
-  let models = MODELS
-    .get()
-    .ok_or(AppError::internal("Models not initialized"))?
-    .lock()
-    .map_err(|e| AppError::internal(e.to_string()))?;
-  Ok(models.clone())
+pub async fn list_models(state: State<'_, AppState>) -> Result<Models, AppError> {
+  let guard = state.models.lock().await;
+  Ok(guard.clone())
 }
 
 #[tauri::command]
@@ -281,17 +268,11 @@ pub async fn save_models(
   mut models: Models,
 ) -> Result<(), AppError> {
   models.patch();
+  models.save(&app).await?;
 
-  let path = models_config_path(&app);
-  ensure_dir(&path).await?;
-  crate::util::serialize(&path, &models).await?;
-
-  let mut guard = MODELS
-    .get()
-    .ok_or(AppError::internal("Models not initialized"))?
-    .lock()
-    .map_err(|e| AppError::internal(e.to_string()))?;
-  *guard = models.clone();
+  let state = AppState::get(&app);
+  let mut guard = state.models.lock().await;
+  *guard = models;
 
   Ok(())
 }

@@ -7,6 +7,8 @@ mod util;
 
 use commands as cmds;
 
+use crate::game::state::AppState;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   env_logger::init();
@@ -54,6 +56,7 @@ pub fn run() {
     .expect("Failed to export typescript bindings");
 
   tauri::Builder::default()
+    .manage(AppState::default())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_store::Builder::default().build())
@@ -61,10 +64,7 @@ pub fn run() {
     .setup(move |app| {
       let app_handle = app.handle().clone();
       tauri::async_runtime::spawn(async move {
-        let config = config::load_config(&app_handle).await.unwrap_or_default();
-        cmds::game::init_engine(&app_handle, &config).await;
-        cmds::profile::init_profiles(&app_handle).await;
-        cmds::llm::init_models(&app_handle).await;
+        AppState::init(&app_handle).await.expect("Failed to initialize app state");
       });
       Ok(())
     })

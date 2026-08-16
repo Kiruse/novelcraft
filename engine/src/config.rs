@@ -12,22 +12,24 @@ pub struct NovelCraftConfig {
   pub max_agent_steps: u8,
 }
 
+impl NovelCraftConfig {
+  pub async fn load(app: &AppHandle) -> Result<NovelCraftConfig, AppError> {
+    deserialize(&Self::default_path(app)?).await
+  }
+
+  pub async fn save(&self, app: &AppHandle) -> Result<(), AppError> {
+    serialize(&Self::default_path(app)?, self).await
+  }
+
+  fn default_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    Ok(app.path().app_config_dir()?.join("config.json"))
+  }
+}
+
 impl Default for NovelCraftConfig {
   fn default() -> Self {
     Self {
       max_agent_steps: 10,
     }
   }
-}
-
-fn config_path(app: &AppHandle) -> Result<PathBuf, AppError> {
-  Ok(app.path().app_config_dir()?.join("config.json"))
-}
-
-pub async fn load_config(app: &AppHandle) -> Result<NovelCraftConfig, AppError> {
-  deserialize(&config_path(app)?).await
-}
-
-pub async fn save_config(app: &AppHandle, config: &NovelCraftConfig) -> Result<(), AppError> {
-  serialize(&config_path(app)?, config).await
 }

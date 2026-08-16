@@ -4,39 +4,18 @@ use log::{warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-use crate::commands::llm::{ModelConfig, ModelUsage, Models};
-use crate::config::NovelCraftConfig;
+use crate::commands::llm::{ModelConfig, ModelUsage};
 use crate::error::AppError;
 use crate::game::engine::GameEngine;
 use crate::game::pages::{PageBatch, PageV1};
 use crate::game::session::SessionV1;
+use crate::game::state::AppState;
 use crate::infer::openai::{OpenAiChatMessage, OpenAiTool};
 use crate::infer::internal::{LlmUsage, ToolCall};
 use crate::util::{StreamDone, StreamEvent, process_stream, request_prompt, reqwester};
-
-static MAX_STEPS: Mutex<u8> = Mutex::const_new(10);
-
-const PROMPT_WRITE_MORE: &str = "Please continue the narration.";
-
-const PROMPT_INSTRUCT: &str = "The player has given instructions for how to rewrite the above page of this interactive \
-story. Follow their instructions — you may make substantial or minimal changes as requested. \
-Your response will replace the previous page.";
-
-const PROMPT_STEER: &str = "The player wants to adjust the direction of this interactive story while keeping the same \
-general events and narrative voice. Rewrite the above passage incorporating the player's guidance. \
-Your response will replace the previous page.";
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all="snake_case")]
-pub enum GamePromptMode {
-  Write,
-  Instruct,
-  Steer,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct GamePromptResult {
@@ -101,15 +80,6 @@ enum StepResult {
   Final(String, StreamDone),
 }
 
-async fn get_max_steps() -> u8 {
-  *MAX_STEPS.lock().await
-}
-
-pub async fn init_engine(_app: &AppHandle, cfg: &NovelCraftConfig) {
-  let mut guard = MAX_STEPS.lock().await;
-  *guard = cfg.max_agent_steps;
-}
-
 #[tauri::command]
 #[specta::specta]
 pub async fn game_sessions(app: AppHandle) -> Result<Vec<SessionV1>, AppError> {
@@ -125,13 +95,13 @@ pub async fn game_page(app: AppHandle, session_id: String, page: u32) -> Result<
 
 #[tauri::command]
 #[specta::specta]
-pub async fn game_prompt(app: AppHandle, session_id: String, mode: GamePromptMode, prompt: String) -> Result<GamePromptResult, AppError> {
+pub async fn game_prompt(app: AppHandle, session_id: String, prompt: String) -> Result<GamePromptResult, AppError> {
   let stream_id = Uuid::new_v4().to_string();
   let prompt = prompt.trim().to_string();
   let res = GamePromptResult { stream_id: stream_id.clone() };
 
   tokio::spawn(async move {
-    if let Err(e) = agent_loop(&app, &session_id, &stream_id, mode, prompt).await {
+    if let Err(e) = agent_loop(&app, &session_id, &stream_id, prompt).await {
       warn!("Error in agent loop: {}", e);
       let ev = GamePromptEvent::Error(GamePromptError::Internal(e));
       app.emit(&format!("gamePrompt[{}]", stream_id), ev).ok();
@@ -162,41 +132,24 @@ pub async fn game_fork(app: AppHandle, session_id: String, page_index: u32, prom
 
 async fn fork_internal(app: &AppHandle, session_id: &String, stream_id: &String, page_index: usize, prompt: String) -> Result<(), AppError> {
   GameEngine::from_app_and_session_id(app, session_id).await?.fork(page_index).await?;
-  agent_loop(app, session_id, stream_id, GamePromptMode::Write, prompt).await?;
+  agent_loop(app, session_id, stream_id, prompt).await?;
   Ok(())
 }
 
-async fn agent_loop(app: &AppHandle, session_id: &String, stream_id: &String, mode: GamePromptMode, prompt: String) -> Result<AgentLoopResult, AppError> {
+async fn agent_loop(app: &AppHandle, session_id: &String, stream_id: &String, prompt: String) -> Result<AgentLoopResult, AppError> {
   let engine = GameEngine::from_app_and_session_id(app, session_id).await?;
   let history = engine.history(PageBatch::MAX_PAGES_PER_BATCH)?;
   let mut msgs: Vec<OpenAiChatMessage> = PageV1::to_openai_messages(&history);
   let mut step_idx = 0u8;
-  let max_steps = get_max_steps().await;
-  let client = reqwester().await;
-  let config = Models::get(ModelUsage::Storyteller).await?;
 
-  match mode {
-    GamePromptMode::Write => {
-      if prompt.is_empty() {
-        msgs.push(OpenAiChatMessage::system(PROMPT_WRITE_MORE.to_string()));
-      } else {
-        msgs.push(OpenAiChatMessage::user(prompt));
-      }
-    }
-    GamePromptMode::Instruct => {
-      if prompt.is_empty() {
-        return Err(AppError::no_input());
-      }
-      msgs.push(OpenAiChatMessage::system(PROMPT_INSTRUCT.to_string()));
-      msgs.push(OpenAiChatMessage::user(prompt));
-    }
-    GamePromptMode::Steer => {
-      if prompt.is_empty() {
-        return Err(AppError::no_input())
-      }
-      msgs.push(OpenAiChatMessage::system(PROMPT_STEER.to_string()));
-      msgs.push(OpenAiChatMessage::user(prompt));
-    }
+  let app_state = AppState::get(app);
+  let max_steps = app_state.config.lock().await.max_agent_steps;
+  let config = app_state.models.lock().await.get_config(ModelUsage::Storyteller);
+
+  let client = reqwester().await;
+
+  if !prompt.is_empty() {
+    msgs.push(OpenAiChatMessage::user(prompt));
   }
 
   let mut done = false;

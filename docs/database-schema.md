@@ -169,6 +169,30 @@ Each file contains a single `LoreEntry`:
 }
 ```
 
+### Model Configuration
+
+```
+{appData}/models.json
+```
+
+A single file containing the LLM model configuration. Held in memory in `AppState.models: Mutex<Models>` (defined in `engine/src/game/state.rs`), initialized via `Models::load()` in `AppState::init()`. The `Models` struct is defined in `engine/src/commands/llm.rs`.
+
+```typescript
+interface Models {
+  storyteller: ModelConfig;
+  suggestions: ModelConfig;
+}
+
+interface ModelConfig {
+  model_id: string;       // Actual LLM API model identifier (e.g., 'zai-org/glm-4.6v-flash')
+  base_url: string;       // API base URL (e.g., 'http://localhost:1234/v1')
+  api_key?: string;       // Optional API key
+}
+```
+
+- Default models point to `http://localhost:1234/v1` (local LLM server) with model `zai-org/glm-4.6v-flash`
+- `Models::patch()` fills empty `base_url` fields with the default host
+
 ---
 
 ## Snapshot Lifecycle
