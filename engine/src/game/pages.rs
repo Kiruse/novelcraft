@@ -1,39 +1,52 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use kiruklaw_agent_loop::{Conversation, ConversationMessage, ToolCall};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Map;
 
 use crate::error::AppError;
 use crate::game::session::SessionV1;
-use crate::infer::openai::OpenAiChatMessage;
-use crate::infer::internal::ToolCall;
 use crate::util::{deserialize, serialize};
 
 pub type Snapshot = Map<String, serde_json::Value>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct PageBatchRecord {
+struct PageBatchRecordV1 {
+  #[serde(deserialize_with = "PageBatchRecordV1::deserialize_version")]
+  pub version: u8,
   pub pages: Vec<PageV1>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub snapshot: Option<Snapshot>,
 }
 
-impl From<&PageBatch> for PageBatchRecord {
-  fn from(value: &PageBatch) -> Self {
-    Self {
-      pages: value.pages.clone(),
-      snapshot: value.snapshot.clone(),
-    }
-  }
-}
+impl PageBatchRecordV1 {
+  pub const VERSION: u8 = 1u8;
 
-impl PageBatchRecord {
   fn to_page_batch(self, session_id: String, offset: usize) -> PageBatch {
     PageBatch {
       session_id,
       offset,
       pages: self.pages,
       snapshot: self.snapshot,
+    }
+  }
+
+  /// Specialized serializer which simply reads a u8 & validates it to match our expected version
+  fn deserialize_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let version = u8::deserialize(deserializer)?;
+    if version != Self::VERSION {
+      return Err(serde::de::Error::custom(format!("Invalid version {}, expected {}", version, Self::VERSION)));
+    }
+    Ok(version)
+  }
+}
+
+impl From<&PageBatch> for PageBatchRecordV1 {
+  fn from(value: &PageBatch) -> Self {
+    Self {
+      version: Self::VERSION,
+      pages: value.pages.clone(),
+      snapshot: value.snapshot.clone(),
     }
   }
 }
@@ -59,13 +72,13 @@ impl PageBatch {
 
   pub async fn load(session_id: String, batch: usize) -> Result<PageBatch, AppError> {
     let path = Self::path(&session_id, batch)?;
-    let rec: PageBatchRecord = deserialize(&path).await?;
+    let rec: PageBatchRecordV1 = deserialize(&path).await?;
     Ok(rec.to_page_batch(session_id, batch))
   }
 
   pub async fn save(&self) -> Result<(), AppError> {
     let path = Self::path(&self.session_id, self.offset)?;
-    serialize(&path, &PageBatchRecord::from(self)).await?;
+    serialize(&path, &PageBatchRecordV1::from(self)).await?;
     Ok(())
   }
 
@@ -90,55 +103,39 @@ impl PageBatch {
   pub fn eq_idx(lhs: &PageBatch, rhs: &PageBatch) -> bool {
     lhs.session_id == rhs.session_id && lhs.offset == rhs.offset
   }
+
+  pub fn to_conversation(&self) -> Conversation {
+    let mut conv = Conversation::default();
+    conv.messages.reserve(100);
+    for page in &self.pages {
+      if let Some(system) = &page.system {
+        conv.push(ConversationMessage::system(system.clone()));
+      }
+      if let Some(prompt) = &page.prompt {
+        conv.push(ConversationMessage::user(prompt.clone()));
+      }
+      if let Some(response) = &page.response {
+        conv.push(ConversationMessage::assistant(response.clone(), page.tool_calls.clone()));
+        conv.messages.reserve(page.tool_responses.len());
+        for (id, response) in &page.tool_responses {
+          conv.push(ConversationMessage::tool(id.clone(), response.clone()));
+        }
+      }
+    }
+    conv
+  }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PageV1 {
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub system: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub prompt: Option<String>,
-  pub responses: Vec<ResponseV1>,
-}
-
-impl PageV1 {
-  pub fn to_openai_messages(pages: &Vec<&PageV1>) -> Vec<OpenAiChatMessage> {
-    let mut res: Vec<OpenAiChatMessage> = Vec::new();
-    for page in pages {
-      if let Some(system) = &page.system {
-        res.push(OpenAiChatMessage::system(system.clone()));
-      }
-      if let Some(prompt) = &page.prompt {
-        res.push(OpenAiChatMessage::user(prompt.clone()));
-      }
-      for response in page.responses.iter() {
-        if !response.tool_calls.is_empty() {
-          res.push(OpenAiChatMessage::toolcall(
-            response.content.clone(),
-            response.tool_calls
-              .iter()
-              .map(|tc| tc.clone().into())
-              .collect::<Vec<_>>()
-          ));
-          if let Some(results) = &response.tool_results {
-            res.extend(results
-              .iter()
-              .map(|r| OpenAiChatMessage::toolresult(r.id.clone(), r.result.clone())))
-          }
-        }
-      }
-    }
-    res
-  }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResponseV1 {
-  pub content: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub response: Option<String>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
   pub tool_calls: Vec<ToolCall>,
-  pub tool_results: Option<Vec<ToolResult>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-  pub id: String,
-  pub result: Result<String, String>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub tool_responses: Vec<(String, String)>,
 }

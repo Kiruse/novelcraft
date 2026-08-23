@@ -1,8 +1,15 @@
-use serde::{Deserialize, Serialize};
+use kiruklaw_agent_loop::AgentLoopError;
 
-#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+use crate::util::prompting::PromptifyError;
+
+#[derive(Debug, thiserror::Error)]
 pub enum AppError {
+  #[error("{0}")]
+  AgentLoop(#[from] AgentLoopError),
+
+  #[error("Promptify error: {0}")]
+  Promptify(#[from] PromptifyError),
+
   #[error("IO error: {0}")]
   Io(String),
 
@@ -23,6 +30,9 @@ pub enum AppError {
 
   #[error("input error: {0}")]
   Input(String),
+
+  #[error("illegal operation error: {0}")]
+  Illegal(String),
 
   #[error("invalid state: {0}")]
   State(String),
@@ -58,6 +68,10 @@ impl AppError {
 
   pub fn no_input() -> Self {
     Self::input("no input provided")
+  }
+
+  pub fn illegal(msg: impl Into<String>) -> Self {
+    Self::Illegal(msg.into())
   }
 
   pub fn state(msg: impl Into<String>) -> Self {

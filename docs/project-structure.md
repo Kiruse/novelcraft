@@ -16,7 +16,9 @@ novelcraft/
 │       ├── src/
 │       │   ├── main.rs               # Entry point
 │       │   ├── lib.rs                # App builder, plugin registration, command handler
-│       │   ├── util.rs               # SSE stream parsing (StreamEvent enum, process_stream())
+│       │   ├── util/
+│       │   │   ├── mod.rs            # File I/O helpers (serialize, deserialize, ensure_dir), timestamp serde, discard_channel
+│       │   │   └── prompting.rs      # Prompt formatting (PromptFormatter, Promptify trait, PromptifyError)
 │       │   ├── commands/
 │       │   │   ├── mod.rs            # Module barrel
 │       │   │   ├── llm.rs            # LLM proxy (HTTP streaming via reqwest, delegates SSE to util)
@@ -132,7 +134,9 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
 **`engine/src/src/`**
 - `main.rs` — Binary entry point
 - `lib.rs` — App builder, plugin registration (`store`, `dialog`, `fs`), command handler registration. Setup spawns async initialization of `AppState` (via `AppState::init()` — loads `NovelCraftConfig`, `Profiles`, and `Models`).
-- `util.rs` — SSE stream parsing utilities; defines `StreamEvent` enum (`Text`, `Reasoning`, `ToolCall`, `Done`) and `process_stream()` async function that parses byte streams and invokes a callback for each event. Also provides file I/O helpers: `serialize`, `deserialize`, `ensure_dir`.
+- `util/` — Engine utility modules
+  - `mod.rs` — File I/O helpers: `serialize`, `deserialize`, `ensure_dir`. Timestamp serde helpers (`serialize_timestamp`, `deserialize_timestamp`). `discard_channel()` for discarding mpsc receiver items.
+  - `prompting.rs` — Prompt formatting utilities for building LLM prompts with managed indentation. `PromptFormatter` buffers output and tracks `at_line_start` state; `write()` auto-indents after newlines and trims leading whitespace on continuations; `indented()` increments indent by 2 spaces for the duration of a callback and propagates errors; `as_str()` and `finish()` provide access to the buffer. `Promptify` trait defines `to_prompt(&self, f: &mut PromptFormatter) -> PromptifyResult` for types that can format themselves into a prompt. `PromptifyError` enum has variants: `Generic(String)`, `IndentOverflow { max }`, `IndentUnderflow`.
 - `config.rs` — `NovelCraftConfig` struct (currently holds `max_agent_steps: u8`, default 10). Loaded from `{app_config_dir}/config.json`. Held in `AppState.config: Mutex<NovelCraftConfig>`.
 - `commands/` — Tauri commands organized by domain
   - `llm.rs` — LLM proxy: builds requests, streams from OpenAI-compatible API via `reqwest`, delegates SSE frame parsing to `util::process_stream()`, emits `llm:text`/`llm:reasoning`/`llm:tool_call`/`llm:error`/`llm:done` events. Model registry (`Models` struct) is held in `AppState.models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()`. `Models` has instance methods `get_config(usage)`, `all_configs()`, `load(app)`, `save(app)`.

@@ -1,6 +1,6 @@
-pub mod commands;
 pub mod config;
 pub mod error;
 pub mod game;
-mod infer;
-mod util;
+pub mod markdown;
+mod paths;
+pub mod util;

@@ -120,7 +120,7 @@ interface LlmDonePayload {
 
 **Implementation types (Rust):** The `prompt` command uses typed serde structs instead of `serde_json::Value` for all request/response handling. Types are split across three modules:
 
-**`engine/src/util.rs`** — SSE stream parsing (extracted from `llm.rs`):
+**`engine/src/util/mod.rs`** — SSE stream parsing (extracted from `llm.rs`):
 - `StreamEvent` — enum with variants: `Text(String)`, `Reasoning(String)`, `ToolCall { index, id, name, arguments_delta }`, `Done { finish_reason, usage }`
 - `process_stream()` — async function that takes a byte stream and a callback `Fn(StreamEvent)`, parses SSE frames, and invokes the callback for each event. Tracks `finish_reason` and `usage` state internally and emits `Done` when `[DONE]` is received or the stream ends. Uses `futures::StreamExt` for byte stream iteration.
 
@@ -135,7 +135,7 @@ interface LlmDonePayload {
 
 Fields still using `serde_json::Value`: `LlmTool::parameters` (JSON Schema passthrough to API) and `LlmPromptRequest::context` (dead code, kept for frontend compatibility). Both have `#[specta(type = Any)]`.
 
-**`engine/src/commands/llm.rs`** — command implementation. The `prompt` function builds the HTTP request, then calls `process_stream(response.bytes_stream(), &|event| match event { ... })` with a closure that maps `StreamEvent` variants to Tauri `emit_event` calls. SSE buffer/frame parsing logic was extracted to `util.rs`, making `llm.rs` focused on request building and error handling.
+**`engine/src/commands/llm.rs`** — command implementation. The `prompt` function builds the HTTP request, then calls `process_stream(response.bytes_stream(), &|event| match event { ... })` with a closure that maps `StreamEvent` variants to Tauri `emit_event` calls. SSE buffer/frame parsing logic was extracted to `util/mod.rs`, making `llm.rs` focused on request building and error handling.
 
 **Backward compatibility:** All new fields (`persona` made optional, `request_id`, `tools`, `tool_call_id`, `tool_calls` on messages) use `#[serde(default)]` and are optional. Existing callers passing the old shape work unchanged. Events without `request_id` retain the same names as before.
 

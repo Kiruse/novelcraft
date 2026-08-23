@@ -1,19 +1,22 @@
 [package]
 name = "novelcraft-engine"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+itertools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
 bytes = "1.11.1"
 chrono = "0.4"
 dirs = "6"
-env_logger = "0.11"
-log = "0.4"
 futures = "0.3"
 kiruklaw-agent-loop = { git = "https://github.com/Kiruse/kiruklaw", package = "kiruklaw-agent-loop" }
 reqwest = { version = "0.12", features = ["stream", "json"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.23.1", features = ["v4"] }
+uuid = { version = "1", features = ["v4"] }

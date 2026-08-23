@@ -44,6 +44,9 @@ novelcraft/
 │       │   ├── story.rs        # Story persistence (JSON files)
 │       │   ├── lore.rs         # Lore persistence (JSON files)
 │       │   └── fs.rs           # File operations (export/import, file dialogs)
+│       ├── markdown/           # Markdown parsing utilities
+│       │   ├── mod.rs          # Module barrel (re-exports todo)
+│       │   └── todo.rs         # TodoItem/TodoList parsing & diffing (with unit tests)
 │       ├── game/               # Game engine types (GameEngine, SessionV1, etc.)
 │       └── infer/              # Inference types
 │           ├── mod.rs          # Module barrel (pub mod api, pub mod internal)
@@ -68,6 +71,7 @@ novelcraft/
 |----------|----------|---------|
 | Engine Commands | `engine/src/commands/` | One file per domain (`llm.rs`, `game.rs`, `profile.rs`, `session.rs`, `story.rs`, `lore.rs`, `fs.rs`, `paths.rs`) |
 | Engine Utilities | `engine/src/util.rs` | SSE stream parsing (`StreamEvent`, `process_stream`), file I/O helpers (`serialize`, `deserialize`, `ensure_dir`) |
+| Markdown Utilities | `engine/src/markdown/` | `todo.rs` (`TodoItem`, `TodoList`, `TodoListDiff`, `TodoList::diff` — parsing & diffing with unit tests) |
 | Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
 | Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
 | GUI Entry | `gui/src/main.rs` | Binary entry point, gpui app setup |
