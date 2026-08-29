@@ -3176,8 +3176,9 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "kiruklaw-agent-loop"
 version = "0.1.0"
-source = "git+https://github.com/Kiruse/kiruklaw#5190e1743f1804e86e35ffe3ada6228b49b03081"
+source = "git+https://github.com/Kiruse/kiruklaw#acc0633450d62a1c63f58e4638275132c7578e33"
 dependencies = [
+ "anyhow",
  "futures-util",
  "kiruklaw-macros",
  "log",
@@ -3191,7 +3192,7 @@ dependencies = [
 [[package]]
 name = "kiruklaw-macros"
 version = "0.1.0"
-source = "git+https://github.com/Kiruse/kiruklaw#5190e1743f1804e86e35ffe3ada6228b49b03081"
+source = "git+https://github.com/Kiruse/kiruklaw#acc0633450d62a1c63f58e4638275132c7578e33"
 dependencies = [
  "proc-macro2",
  "quote",

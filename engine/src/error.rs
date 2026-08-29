@@ -46,6 +46,10 @@ impl AppError {
     Self::NotFound(msg.into())
   }
 
+  pub fn module_not_found(module: &str) -> Self {
+    Self::NotFound(format!("Module {module} not found"))
+  }
+
   pub fn validation(msg: impl Into<String>) -> Self {
     Self::Validation(msg.into())
   }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use kiruklaw_agent_loop::Conversation;
@@ -9,9 +10,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::game::module::GameplayModule;
-use crate::game::pages::PageBatch;
+use crate::game::pages::{PageBatchV1, PageV1};
 use crate::game::state::GameState;
-use crate::util::{deserialize, deserialize_timestamp, serialize_timestamp};
+use crate::util::{deserialize, deserialize_timestamp, serialize, serialize_timestamp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionV1 {
@@ -33,11 +34,12 @@ pub struct SessionV1 {
   /// Total number of page batches in this session
   #[serde(skip)]
   pub batch_count: usize,
-  /// Working memory conversation - not exposed for management purposes
+  /// Last 2 batches of pages in the session. In a fresh session,
+  /// the second batch may be default.
   #[serde(skip)]
-  pub(crate) conversation: Conversation,
+  tail_batches: (PageBatchV1, PageBatchV1),
   #[serde(skip)]
-  pub(crate) gamestate: GameState,
+  pub(crate) gamestate: Arc<GameState>,
 }
 
 impl Default for SessionV1 {
@@ -52,14 +54,22 @@ impl Default for SessionV1 {
       modules: Default::default(),
       page_count: 0,
       batch_count: 0,
-      conversation: Conversation::default(),
-      gamestate: GameState::default(),
+      tail_batches: (PageBatchV1::default(), PageBatchV1::default()),
+      gamestate: Arc::new(GameState::default()),
     }
   }
 }
 
 impl SessionV1 {
   pub const VERSION: u8 = 1u8;
+
+  pub fn new(id: String) -> Self {
+    Self {
+      version: Self::VERSION,
+      id,
+      ..Default::default()
+    }
+  }
 
   pub fn root() -> Result<PathBuf, AppError> {
     crate::paths::sessions_dir()
@@ -88,26 +98,50 @@ impl SessionV1 {
     res.batch_count = batch_count;
 
     let (b0, b1) = tokio::join!(
-      PageBatch::load(id.clone(), batch_count - 2),
-      PageBatch::load(id.clone(), batch_count - 1),
+      PageBatchV1::load(id.clone(), batch_count - 2),
+      PageBatchV1::load(id.clone(), batch_count - 1),
     );
 
-    let b0 = b0?;
-    let b1 = b1?;
-
-    let conv = if batch_count >= 1 {
-      let mut conv = b0.to_conversation();
-      conv.extend(b1.to_conversation());
-      conv
-    } else {
-      b1.to_conversation()
+    let batch = match batch_count {
+      0 => {
+        res.tail_batches = (PageBatchV1::default(), PageBatchV1::default());
+        &res.tail_batches.0
+      }
+      1 => {
+        res.tail_batches = (b1?, PageBatchV1::default());
+        &res.tail_batches.0
+      }
+      _ => {
+        res.tail_batches = (b0?, b1?);
+        &res.tail_batches.1
+      }
     };
 
-    res.conversation = conv;
-    res.gamestate = GameState::new(b1.snapshot.unwrap_or_default())?;
-    res.gamestate.replay(&res.modules, &b1.pages).await?;
+    res.gamestate = Arc::new(GameState::new(batch.snapshot.clone())?);
+    res.gamestate.replay(&res.modules, &batch.pages).await?;
 
     Ok(res)
+  }
+
+  /// Save this session to disk, including its last 2 associated page batches
+  /// (which are considered working memory).
+  pub async fn save(&self) -> Result<(), AppError> {
+    let (r_self, r_b1, r_b2) = tokio::join!(
+      self.save_metadata(),
+      self.tail_batches.0.save(),
+      self.tail_batches.1.save(),
+    );
+    r_self?;
+    r_b1?;
+    r_b2?;
+    Ok(())
+  }
+
+  /// Save only this session's metadata, not its [SessionV1::tail_batches].
+  async fn save_metadata(&self) -> Result<(), AppError> {
+    let path = Self::meta_path(&self.id)?;
+    serialize(&path, self).await?;
+    Ok(())
   }
 
   /// Enumerate all saved sessions on the local filesystem
@@ -142,12 +176,30 @@ impl SessionV1 {
     Ok(result)
   }
 
+  #[inline]
+  fn active_batch(&self) -> &PageBatchV1 {
+    if !self.tail_batches.0.is_full() {
+      &self.tail_batches.0
+    } else {
+      &self.tail_batches.1
+    }
+  }
+
+  #[inline]
+  fn active_batch_mut(&mut self) -> &mut PageBatchV1 {
+    if !self.tail_batches.0.is_full() {
+      &mut self.tail_batches.0
+    } else {
+      &mut self.tail_batches.1
+    }
+  }
+
   /// Counts the number of batches in this session. Assumes the local filesystem is not corrupted.
   pub async fn count_batches(session_id: &str) -> Result<usize, AppError> {
     let last_batch_idx = Self::batches(session_id)
       .await?
       .iter()
-      .map(|b| PageBatch::parse_batch_idx(b.to_string_lossy()).unwrap_or_default())
+      .map(|b| PageBatchV1::parse_batch_idx(b.to_string_lossy()).unwrap_or_default())
       .max()
       .unwrap_or_default();
     Ok(last_batch_idx)
@@ -156,8 +208,74 @@ impl SessionV1 {
   /// Count the pages in this session. Assumes each batch until the last is at max capacity.
   pub async fn count_pages(session_id: String) -> Result<usize, AppError> {
     let last_batch_idx = Self::count_batches(&session_id).await?;
-    let last_batch = PageBatch::load(session_id, last_batch_idx).await?;
-    Ok(last_batch_idx * PageBatch::MAX_PAGES_PER_BATCH + last_batch.pages.len())
+    let last_batch = PageBatchV1::load(session_id, last_batch_idx).await?;
+    Ok(last_batch_idx * PageBatchV1::MAX_PAGES_PER_BATCH + last_batch.pages.len())
+  }
+
+  /// Get an iterator over the module IDs of this session
+  pub fn modules(&self) -> impl Iterator<Item = &String> {
+    self.modules.keys()
+  }
+
+  /// Get a module by its ID, if any
+  pub fn module(&self, module: &String) -> Option<&GameplayModule> {
+    self.modules.get(module)
+  }
+
+  /// Push a new page to the end of the session.
+  pub async fn push_page(&mut self, page: PageV1) -> Result<(), AppError> {
+    // active batch will never be full if we only have 1 batch
+    if self.active_batch().is_full() {
+      self.tail_batches.0.save().await?;
+      std::mem::swap(&mut self.tail_batches.0, &mut self.tail_batches.1);
+      self.tail_batches.1 = PageBatchV1::new(
+        self.id.clone(),
+        self.batch_count,
+      );
+      self.batch_count += 1;
+    }
+
+    // when inserting first page, also save gamestate snapshot
+    if self.active_batch().is_empty() {
+      self.active_batch_mut().snapshot = self.gamestate.snapshot().await;
+    }
+
+    self.active_batch_mut().pages.push(page);
+    self.page_count += 1;
+
+    self.save().await
+  }
+
+  /// Update the last page of the session.
+  pub async fn update_page(&mut self, cb: impl FnOnce(PageV1) -> PageV1) -> Result<(), AppError> {
+    let batch = self.active_batch_mut();
+    let page = batch.pages.pop().ok_or(AppError::state("fresh session"))?;
+    batch.pages.push(cb(page));
+    self.save().await
+  }
+
+  /// Replace the last page of the session with the given page.
+  pub async fn replace_page(&mut self, page: PageV1) -> Result<(), AppError> {
+    let batch = self.active_batch_mut();
+    batch.pages.pop();
+    batch.pages.push(page);
+    self.save().await
+  }
+
+  /// Drop the last page of the session.
+  pub async fn pop_page(&mut self) -> Result<Option<PageV1>, AppError> {
+    self.updated_at = Utc::now();
+    self.save_metadata().await?;
+
+    if let Some(p) = self.tail_batches.1.pages.pop() {
+      self.tail_batches.1.save().await?;
+      Ok(Some(p))
+    } else if let Some(p) = self.tail_batches.0.pages.pop() {
+      self.tail_batches.0.save().await?;
+      Ok(Some(p))
+    } else {
+      Ok(None)
+    }
   }
 
   fn deserialize_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
@@ -166,5 +284,11 @@ impl SessionV1 {
       return Err(serde::de::Error::custom(format!("Unexpected version {}, expected {}", version, Self::VERSION)));
     }
     Ok(version)
+  }
+
+  pub(crate) fn conversation(&self) -> Conversation {
+    let mut conv = self.tail_batches.0.to_conversation();
+    conv.extend(self.tail_batches.1.to_conversation());
+    conv
   }
 }

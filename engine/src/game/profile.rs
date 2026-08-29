@@ -1,51 +1,70 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
+use crate::util::{serialize_timestamp, deserialize_timestamp};
+use crate::util::prompting::Promptify;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileV1 {
   pub id: String,
   pub name: String,
   pub fields: HashMap<String, String>,
-  pub created_at: String,
-  pub updated_at: String,
+  #[serde(serialize_with = "serialize_timestamp", deserialize_with = "deserialize_timestamp")]
+  pub created_at: DateTime<Utc>,
+  #[serde(serialize_with = "serialize_timestamp", deserialize_with = "deserialize_timestamp")]
+  pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Profiles {
-  pub version: u32,
-  pub profiles: Vec<ProfileV1>,
-  pub active_id: Option<String>,
-}
-
-impl Profiles {
-  pub async fn load() -> Result<Profiles, AppError> {
-    let path = Self::default_path()?;
-    if path.exists() {
-      let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-      Ok(serde_json::from_str(&content).unwrap_or_default())
-    } else {
-      Ok(Profiles::default())
-    }
-  }
-
-  pub async fn save(&self) -> Result<(), AppError> {
-    crate::util::serialize(&Self::default_path()?, self).await
-  }
-
-  fn default_path() -> Result<PathBuf, AppError> {
-    Ok(crate::paths::data_dir()?.join("profiles.json"))
-  }
-}
-
-impl Default for Profiles {
-  fn default() -> Self {
+impl ProfileV1 {
+  pub fn new(id: String) -> Self {
+    let now = Utc::now();
     Self {
-      version: 1,
-      profiles: vec![],
-      active_id: None,
+      id,
+      name: String::new(),
+      fields: Default::default(),
+      created_at: now.clone(),
+      updated_at: now,
     }
+  }
+
+  pub fn with_name(self, name: String) -> Self {
+    Self { name, updated_at: Utc::now(), ..self }
+  }
+
+  pub fn with_field(self, key: String, value: String) -> Self {
+    Self {
+      fields: Self::insert_field(self.fields, key, value),
+      updated_at: Utc::now(),
+      ..self
+    }
+  }
+
+  pub fn with_fields(self, pairs: Vec<(String, String)>) -> Self {
+    Self {
+      fields: Self::insert_fields(self.fields, pairs),
+      updated_at: Utc::now(),
+      ..self
+    }
+  }
+
+  fn insert_field(mut fields: HashMap<String, String>, key: String, value: String) -> HashMap<String, String> {
+    fields.insert(key, value);
+    fields
+  }
+
+  fn insert_fields(mut fields: HashMap<String, String>, pairs: Vec<(String, String)>) -> HashMap<String, String> {
+    fields.extend(pairs);
+    fields
+  }
+}
+
+impl Promptify for ProfileV1 {
+  fn promptify(&self, f: &mut crate::util::prompting::PromptFormatter) -> crate::util::prompting::PromptifyResult {
+    f.write("Name: ")?;
+    f.writeline(&self.name)?;
+    self.fields.promptify(f)?;
+    Ok(())
   }
 }

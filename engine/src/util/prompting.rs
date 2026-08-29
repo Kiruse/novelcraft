@@ -146,7 +146,7 @@ impl PromptFormatter {
   }
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum PromptifyError {
   #[error("generic promptify error: {0}")]
   Generic(String),
@@ -358,6 +358,16 @@ mod tests {
     }).unwrap();
     f.write("L0b").unwrap();
     assert_eq!(f.as_str(), "L0\n  L1\n    L2\n  L1b\nL0b");
+  }
+
+  #[test]
+  fn indented_double() {
+    let mut f = fmt();
+    f.writeline("foo").unwrap();
+    f.indented(|f| f.writeline("bar")).unwrap();
+    f.indented(|f| f.writeline("baz")).unwrap();
+    f.writeline("quux").unwrap();
+    assert_eq!(f.as_str(), "foo\n  bar\n  baz\nquux\n");
   }
 
   #[test]
