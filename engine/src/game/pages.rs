@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use kiruklaw_agent_loop::{Conversation, ConversationMessage, ToolCall};
@@ -88,6 +89,11 @@ impl PageBatchV1 {
   }
 
   #[inline(always)]
+  pub fn page_offset(page_index: usize) -> usize {
+    page_index % Self::MAX_PAGES_PER_BATCH
+  }
+
+  #[inline(always)]
   pub fn batch_of(page_index: usize) -> usize {
     page_index / Self::MAX_PAGES_PER_BATCH
   }
@@ -110,10 +116,15 @@ impl PageBatchV1 {
       if let Some(prompt) = &page.prompt {
         conv.push(ConversationMessage::user(prompt.clone()));
       }
-      if let Some(response) = &page.response {
-        conv.push(ConversationMessage::assistant(response.clone(), page.tool_calls.clone()));
-        conv.messages.reserve(page.tool_responses.len());
-        for (id, response) in &page.tool_responses {
+
+      conv.messages.reserve(page.responses.len());
+      for response in &page.responses {
+        conv.push(ConversationMessage::assistant(
+          response.content.as_ref().cloned().unwrap_or_default(),
+          response.tool_calls.clone(),
+        ));
+        conv.messages.reserve(response.tool_responses.len());
+        for (id, response) in &response.tool_responses {
           conv.push(ConversationMessage::tool(id.clone(), response.clone()));
         }
       }
@@ -137,8 +148,55 @@ pub struct PageV1 {
   pub system: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub prompt: Option<String>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub responses: Vec<AgentResponseV1>,
+}
+
+impl PageV1 {
+  /// Take the given slice of [ConversationMessage]s and convert them into
+  /// [PageV1::responses].
+  pub fn assimilate(&mut self, msgs: &[ConversationMessage]) -> Result<(), AppError> {
+    let mut iter = msgs.into_iter().peekable();
+    let mut missing: HashSet<String> = HashSet::new();
+    let mut result: Vec<AgentResponseV1> = vec![];
+    while let Some(msg) = iter.next() {
+      let ConversationMessage::Assistant { content, tool_calls } = msg else {
+        return Err(AppError::input("expected assistant message"));
+      };
+      let mut response = AgentResponseV1 {
+        content: if content.trim() == "" {
+          None
+        } else {
+          Some(content.clone())
+        },
+        tool_calls: tool_calls.clone(),
+        tool_responses: vec![],
+      };
+
+      missing.extend(tool_calls.iter().map(|tc| tc.id.clone()));
+
+      while let Some(msg) = iter.peek() && matches!(msg, ConversationMessage::Tool { .. }) {
+        let Some(ConversationMessage::Tool { id, content }) = iter.next() else { unreachable!() };
+        missing.remove(id);
+        response.tool_responses.push((id.clone(), content.clone()));
+      }
+
+      if !missing.is_empty() {
+        return Err(AppError::input(format!("missing tool call responses for {}", itertools::join(missing, ", "))));
+      }
+
+      result.push(response);
+    }
+
+    self.responses = result;
+    Ok(())
+  }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentResponseV1 {
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub response: Option<String>,
+  pub content: Option<String>,
   #[serde(skip_serializing_if = "Vec::is_empty")]
   pub tool_calls: Vec<ToolCall>,
   #[serde(skip_serializing_if = "Vec::is_empty")]

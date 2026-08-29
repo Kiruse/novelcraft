@@ -20,3 +20,4 @@ futures = "0.3"
 kiruklaw-agent-loop = { git = "https://github.com/Kiruse/kiruklaw", package = "kiruklaw-agent-loop" }
 reqwest = { version = "0.12", features = ["stream", "json"] }
 uuid = { version = "1", features = ["v4"] }
+moka = { version = "0.12.16", features = ["future"] }

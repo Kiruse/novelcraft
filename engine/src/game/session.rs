@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use kiruklaw_agent_loop::Conversation;
@@ -20,7 +19,8 @@ pub struct SessionV1 {
   pub version: u8,
   pub id: String,
   pub title: String,
-  pub description: Option<String>,
+  /// Brief story exposition serving as the starting point of the story.
+  pub exposition: String,
   #[serde(serialize_with = "serialize_timestamp", deserialize_with = "deserialize_timestamp")]
   #[serde(rename = "created_at")]
   pub created_at: DateTime<Utc>,
@@ -39,7 +39,7 @@ pub struct SessionV1 {
   #[serde(skip)]
   tail_batches: (PageBatchV1, PageBatchV1),
   #[serde(skip)]
-  pub(crate) gamestate: Arc<GameState>,
+  pub(crate) gamestate: GameState,
 }
 
 impl Default for SessionV1 {
@@ -48,28 +48,20 @@ impl Default for SessionV1 {
       version: Self::VERSION,
       id: Uuid::new_v4().to_string(),
       title: String::new(),
-      description: None,
+      exposition: String::new(),
       created_at: Utc::now(),
       updated_at: Utc::now(),
       modules: Default::default(),
       page_count: 0,
       batch_count: 0,
       tail_batches: (PageBatchV1::default(), PageBatchV1::default()),
-      gamestate: Arc::new(GameState::default()),
+      gamestate: GameState::default(),
     }
   }
 }
 
 impl SessionV1 {
   pub const VERSION: u8 = 1u8;
-
-  pub fn new(id: String) -> Self {
-    Self {
-      version: Self::VERSION,
-      id,
-      ..Default::default()
-    }
-  }
 
   pub fn root() -> Result<PathBuf, AppError> {
     crate::paths::sessions_dir()
@@ -117,7 +109,7 @@ impl SessionV1 {
       }
     };
 
-    res.gamestate = Arc::new(GameState::new(batch.snapshot.clone())?);
+    res.gamestate = GameState::new(batch.snapshot.clone())?;
     res.gamestate.replay(&res.modules, &batch.pages).await?;
 
     Ok(res)
@@ -222,6 +214,20 @@ impl SessionV1 {
     self.modules.get(module)
   }
 
+  /// Get a page from the in-memory tail batches if the page's batch is
+  /// one of the two most recent batches. Returns `None` otherwise.
+  pub fn try_page(&self, page_index: usize) -> Option<&PageV1> {
+    let batch_num = PageBatchV1::batch_of(page_index);
+    let local_index = PageBatchV1::page_offset(page_index);
+    if self.tail_batches.0.batch_num == batch_num {
+      self.tail_batches.0.pages.get(local_index)
+    } else if self.tail_batches.1.batch_num == batch_num {
+      self.tail_batches.1.pages.get(local_index)
+    } else {
+      None
+    }
+  }
+
   /// Push a new page to the end of the session.
   pub async fn push_page(&mut self, page: PageV1) -> Result<(), AppError> {
     // active batch will never be full if we only have 1 batch
@@ -247,10 +253,10 @@ impl SessionV1 {
   }
 
   /// Update the last page of the session.
-  pub async fn update_page(&mut self, cb: impl FnOnce(PageV1) -> PageV1) -> Result<(), AppError> {
+  pub async fn update_page(&mut self, cb: impl FnOnce(PageV1) -> Result<PageV1, AppError>) -> Result<(), AppError> {
     let batch = self.active_batch_mut();
     let page = batch.pages.pop().ok_or(AppError::state("fresh session"))?;
-    batch.pages.push(cb(page));
+    batch.pages.push(cb(page)?);
     self.save().await
   }
 

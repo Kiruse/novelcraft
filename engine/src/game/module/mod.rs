@@ -1,8 +1,8 @@
-use kiruklaw_agent_loop::{AgentToolset, ModelConfig};
+use kiruklaw_agent_loop::{AgentToolset, ModelConfig, Toolset};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::game::profile::Profiles;
+use crate::game::profile::ProfileV1;
 use crate::game::state::{GameState, GameStateView};
 use crate::util::prompting::{PromptFormatter, PromptifyResult};
 
@@ -24,7 +24,7 @@ pub enum GameplayModule {
 }
 
 impl GameplayModule {
-  fn as_toolset(&self) -> &dyn AgentToolset<GameStateView<'_>> {
+  pub fn as_toolset(&self) -> &dyn AgentToolset<GameStateView> {
     match self {
       Self::Story(module)  => module,
       Self::Npcs(module)   => module,
@@ -47,27 +47,31 @@ impl GameplayModule {
     }
   }
 
-  pub async fn handle<'a>(&'a self, ctx: &'a mut GameStateView<'a>, tool_name: &str, args: String) -> String {
+  pub async fn handle<'a>(&'a self, ctx: GameStateView, tool_name: &str, args: String) -> String {
     self.as_toolset().handle(ctx, tool_name, args).await
   }
 
   /// Retrieve agentic context of this module as key => value pairs.
-  pub fn context(&self, state: &GameState, f: &mut PromptFormatter) -> PromptifyResult {
+  pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
     match self {
-      _ => Ok(())
+      Self::Story(module)  => module.context(state, f).await,
+      Self::Npcs(module)   => module.context(state, f).await,
+      Self::Player(module) => module.context(state, f).await,
     }
   }
-}
 
-pub trait GameplayModuleCommons {
-  /// Retrieve agentic context of this module as key => value pairs.
-  #[allow(unused)]
-  fn context(&self, state: &GameState, f: &mut PromptFormatter) -> PromptifyResult { Ok(()) }
+  pub(crate) fn toolset<'a>(self) -> Toolset<GameStateView> {
+    Toolset::Immutable(match self {
+      Self::Npcs(module)   => Box::new(module),
+      Self::Player(module) => Box::new(module),
+      Self::Story(module)  => Box::new(module),
+    })
+  }
 }
 
 #[derive(Debug)]
 pub struct GameplayModuleInitContext<'a> {
-  pub state: &'a mut GameStateView<'a>,
+  pub state: GameStateView,
   pub model_cfg: &'a ModelConfig,
-  pub profiles: &'a Profiles,
+  pub profile: Option<&'a ProfileV1>,
 }

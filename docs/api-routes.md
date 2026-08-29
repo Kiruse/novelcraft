@@ -306,7 +306,7 @@ Lists all game sessions by scanning the sessions directory.
 
 #### `game_page`
 
-Gets a specific page from a game session by index.
+Gets a specific page from a game session by index. Uses an LRU cache (`moka::future::Cache`, capacity 32) keyed by `(session_id, batch_num)` to avoid redundant disk reads. On cache miss, the batch file is loaded from disk via `PageBatchV1::load()` and the specific page is extracted by local index (`page_index % MAX_PAGES_PER_BATCH`).
 
 **Parameters:**
 

@@ -2,7 +2,7 @@ use kiruklaw_agent_loop::{AgentToolset, toolset};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::game::module::{GameplayModuleCommons, GameStateView};
+use crate::game::module::GameStateView;
 use crate::game::state::GameState;
 use crate::markdown::{TodoList, TodoListDiff};
 use crate::util::prompting::{PromptFormatter, PromptifyResult};
@@ -14,12 +14,11 @@ impl StoryModule {
   pub const ID: &str = "story";
 
   fn id() -> String { Self::ID.to_string() }
-}
 
-impl GameplayModuleCommons for StoryModule {
-  fn context(&self, state: &GameState, f: &mut PromptFormatter) -> PromptifyResult {
+  pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
     let Some(module) = state.get(&Self::id()) else { return Ok(()) };
     let timeline = module.get::<String>(&Keypath::Timeline.to_keypath())
+      .await
       .transpose()
       .unwrap_or_default();
     if let Some(timeline) = timeline {
@@ -31,14 +30,15 @@ impl GameplayModuleCommons for StoryModule {
 }
 
 #[toolset]
-impl<'a> AgentToolset<GameStateView<'a>> for StoryModule {
+impl AgentToolset<GameStateView> for StoryModule {
   /// Manage the active timeline in the form of a TODO list. Checked-off items have been visited,
   /// unchecked items are outstanding. You may add new items (checked or unchecked), check off items,
   /// or remove unchecked items.
   /// @contents The new contents of the timeline.
-  async fn manage_timeline(&self, ctx: &mut GameStateView<'a>, contents: String) -> Result<String, anyhow::Error> {
+  async fn manage_timeline(&self, ctx: GameStateView, contents: String) -> Result<String, anyhow::Error> {
     let keypath = Keypath::Timeline.to_keypath();
     let existing = ctx.get::<String>(&Self::id(), &keypath)
+      .await
       .transpose()?
       .unwrap_or_default();
     let existing = TodoList::parse(&existing)?;
@@ -56,8 +56,14 @@ impl<'a> AgentToolset<GameStateView<'a>> for StoryModule {
       }
     }
 
-    ctx.set(&keypath, &new.to_string())?;
+    ctx.set(&keypath, &new.to_string()).await?;
     Ok("Timeline updated.".to_string())
+  }
+}
+
+impl From<StoryModule> for super::GameplayModule {
+  fn from(value: StoryModule) -> Self {
+    Self::Story(value)
   }
 }
 

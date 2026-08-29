@@ -30,7 +30,7 @@ novelcraft/
 │       │   │   └── fs.rs       # File operations (export/import, file dialogs)
 │       │   ├── game/               # Game engine module
 │       │   │   ├── mod.rs            # Module barrel
-│       │   │   ├── engine.rs         # GameEngine (session loading, page CRUD, fork, history)
+│       │   │   ├── engine.rs         # GameEngine (session loading, page CRUD, fork, history, LRU page cache via moka)
 │       │   │   ├── session.rs        # Game session model (SessionV1, file-based persistence)
 │       │   │   ├── pages.rs          # Page types (PageV1, PageBatch, ResponseV1)
 │       │   │   ├── state.rs          # AppState (config + profiles, initialized in lib.rs setup)
@@ -148,7 +148,7 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
   - `fs.rs` — File operations: export/import session JSON, native file/folder picker dialogs.
   - `mod.rs` — Module barrel
 - `game/` — Game engine module (separate from `commands/game.rs`)
-  - `engine.rs` — `GameEngine`: loads game sessions, manages page batches, provides history for prompting, page CRUD, and fork (truncate pages after index).
+  - `engine.rs` — `GameEngine`: loads game sessions, manages page batches, provides history for prompting, page CRUD, and fork. Constructed via `GameEngine::new()`. Uses an LRU cache (`moka::future::Cache`, capacity 8) keyed by `(session_id, batch_num)` to avoid redundant disk reads when accessing pages. The `page()` method computes the batch number from the page index, checks the cache, loads from disk on miss via `PageBatchV1::load()`, and returns the specific page from the batch. `fork(page_index)` truncates page batch files after the batch containing the given index, reloads the session via `SessionV1::load` to obtain correct `tail_batches`, `page_count`, `batch_count`, and `gamestate`, and rebuilds the agent loop.
   - `session.rs` — `SessionV1`: game session model with file-based persistence (separate from `commands/session.rs`).
   - `pages.rs` — Page types: `PageV1`, `PageBatch`, `ResponseV1`.
   - `state.rs` — `AppState`: holds `config: Mutex<NovelCraftConfig>`, `profiles: Mutex<Profiles>`, and `models: Mutex<Models>`. Initialized via `AppState::init()` in `lib.rs` setup (loads config, profiles, and models).

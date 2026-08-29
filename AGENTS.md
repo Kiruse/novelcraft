@@ -160,7 +160,7 @@ State snapshots enable undo/fork by capturing module state at each page:
 - **Session creation** — head snapshot (`state.head.json`) with empty state `{}`
 - **After each page's tool calls** — head snapshot updated in place via `session::session_save_head_snapshot()`
 - **Every 100 pages** — copy current head as checkpoint (`state.{batch}.json`) via `session::session_save_checkpoint()` before updating
-- **Fork** — delete head snapshot and checkpoints with `page_index >= fork_index`, recompute head from youngest snapshot before `fork_index` via `session::session_find_snapshot_before()`, replay tool calls, then push a new page
+- **Fork** — `GameEngine::fork(page_index)` truncates page batch files after the batch containing `page_index`, then reloads the session via `SessionV1::load` to obtain correct `tail_batches`, `page_count`, `batch_count`, and `gamestate`, and rebuilds the agent loop
 - **State is immutable** — the canonical state is the snapshot data
 
 ### Game Agent Loop
