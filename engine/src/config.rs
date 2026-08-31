@@ -40,6 +40,21 @@ pub struct NovelCraftConfig {
 }
 
 impl NovelCraftConfig {
+  #[inline]
+  pub fn with_active_profile(self, profile_id: String) -> Self {
+    Self {
+      active_profile: Some(profile_id),
+      ..self
+    }
+  }
+  #[inline]
+  pub fn without_active_profile(self) -> Self {
+    Self {
+      active_profile: None,
+      ..self
+    }
+  }
+
   pub async fn load() -> Result<NovelCraftConfig, AppError> {
     deserialize(&Self::default_path()?).await
   }

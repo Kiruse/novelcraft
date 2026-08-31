@@ -50,6 +50,26 @@ impl GameEngine {
     }
   }
   #[inline]
+  pub fn with_profile_id(self, profile_id: String) -> Self {
+    let config = self.config.with_active_profile(profile_id);
+    let agent_loop = Self::build_agent_loop(&config, self.session.as_ref());
+    Self {
+      config,
+      agent_loop,
+      ..self
+    }
+  }
+  #[inline]
+  pub fn without_profile_id(self) -> Self {
+    let config = self.config.without_active_profile();
+    let agent_loop = Self::build_agent_loop(&config, self.session.as_ref());
+    Self {
+      config,
+      agent_loop,
+      ..self
+    }
+  }
+  #[inline]
   pub fn with_session(self, session: SessionV1) -> Self {
     let agent_loop = Self::build_agent_loop(&self.config, Some(&session));
     Self {

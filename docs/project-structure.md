@@ -43,15 +43,18 @@ novelcraft/
 │       ├── build.rs                  # Tauri build script
 │       ├── tauri.conf.json           # Tauri configuration
 │       └── icons/                    # App icons
-├── gui/                              # Vue 3 frontend (Vite + Vue Router)
-│   ├── src/
-│   │   ├── main.ts                   # App entry, mounts Vue + Router
-│   │   ├── App.vue                   # Root component — switches between Onboarding and Main
-│   │   ├── Main.vue                  # Main app shell (sidebar, router view, shortcuts, dialogs)
-│   │   ├── Onboarding.vue            # Step-based first-run onboarding flow
-│   │   ├── bindings.ts               # tauri-specta generated command bindings (auto-generated in debug builds)
-│   │   ├── env.d.ts                  # Global type declarations for auto-imports (TS only)
-│   │   ├── vite-env.d.ts             # Vite client type declarations
+├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft) — gpui UI
+│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, log)
+│   └── src/
+│       ├── main.rs             # Entry point — gpui app initialization
+│       ├── util.rs             # Loggable trait, LogLevel enum (Result<T,E> blanket impl)
+│       ├── main.ts                   # [vestigial] App entry, mounts Vue + Router
+│       ├── App.vue                   # [vestigial] Root component — switches between Onboarding and Main
+│       ├── Main.vue                  # [vestigial] Main app shell (sidebar, router view, shortcuts, dialogs)
+│       ├── Onboarding.vue            # [vestigial] Step-based first-run onboarding flow
+│       ├── bindings.ts               # [vestigial] tauri-specta generated command bindings (auto-generated in debug builds)
+│       ├── env.d.ts                  # [vestigial] Global type declarations for auto-imports (TS only)
+│       ├── vite-env.d.ts             # [vestigial] Vite client type declarations
 │   │   ├── pages/                    # Vue Router pages
 │   │   │   ├── index.vue             # Home page (hero, recent vignettes, empty state)
 │   │   │   ├── builder.vue           # Story builder page
@@ -167,12 +170,18 @@ Contains the Tauri v2 Rust backend. The actual Cargo project lives in `engine/sr
 - `frontendDist` points to `../../gui/dist`
 - `devUrl` points to `http://localhost:5173`
 
-### `gui/` — Vue 3 Frontend
+### `gui/` — Rust GUI (gpui) + Vestigial Vue Frontend
 
-Contains the Vue 3 + Vite frontend application. No server — this runs in a Tauri webview.
+Rust binary crate (`novelcraft-gui`, binary name `novelcraft`) using gpui for native rendering. Depends on `novelcraft-engine` as a library.
 
-**`gui/src/`**
-- `main.ts` — App entry, mounts Vue + Router
+**`gui/src/` (Rust — active)**
+- `main.rs` — Binary entry point, gpui app initialization
+- `util.rs` — `Loggable` trait with `LogLevel` enum (`Trace`/`Debug`/`Info`/`Warn`/`Error`), `From<LogLevel> for log::Level`, and a blanket `impl<T, E: Display> Loggable for Result<T, E>` that logs `"Ok"` or `"Err: {e}"`. Convenience methods `trace()`/`debug()`/`info()`/`warn()`/`error()` delegate to the required `log(&self, level)` method.
+
+**Note:** `gui/src/` also contains vestigial Vue 3 frontend files from the previous Tauri architecture. These are no longer used and should not be modified.
+
+**`gui/src/` (TypeScript/Vue — vestigial)**
+- `main.ts` — [vestigial] App entry, mounts Vue + Router
 - `App.vue` — Root component; uses top-level await on `useOnboarding()` to switch between `Onboarding.vue` and `Main.vue`
 - `Main.vue` — Main app shell: sidebar, router view, keyboard shortcuts, global dialogs
 - `Onboarding.vue` — Step-based first-run onboarding (welcome, model configuration)

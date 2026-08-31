@@ -53,10 +53,12 @@ novelcraft/
 │           ├── api.rs          # OpenAI API types (request/response structs for SSE)
 │           └── internal.rs     # Command-level types (ModelConfig, LlmMessage, LlmTool, LlmPromptRequest, etc.)
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
-│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform)
+│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, log)
 │   └── src/
-│       └── main.rs             # Entry point — gpui app initialization
+│       ├── main.rs             # Entry point — gpui app initialization
+│       └── util.rs             # Loggable trait, LogLevel enum, Result<T,E> blanket impl
 └── docs/                       # Comprehensive documentation
+    ├── gui-architecture.md # gpui GUI components, screens, styling conventions
 ```
 
 **Note:** The `gui/` directory also contains vestigial Vue 3 frontend files (`package.json`, `src/App.vue`, etc.) from the previous Tauri architecture. These are no longer used and should not be modified.
@@ -75,6 +77,7 @@ novelcraft/
 | Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
 | Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
 | GUI Entry | `gui/src/main.rs` | Binary entry point, gpui app setup |
+| GUI Utilities | `gui/src/util.rs` | `Loggable` trait, `LogLevel` enum, blanket `impl Loggable for Result<T, E>` |
 | Path Resolution | `engine/src/commands/paths.rs` | `data_dir()`, `config_dir()` — single source of truth for filesystem paths |
 
 ### Import Patterns
@@ -414,3 +417,4 @@ All build and development commands are in the root `justfile`.
 | `novelcraft-engine` (path) | Business logic library |
 | `gpui` (git, Zed main) | UI framework — views, elements, styling |
 | `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |
+| `log` | Logging facade (used by `util.rs` `Loggable` trait) |

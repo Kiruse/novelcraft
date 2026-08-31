@@ -325,12 +325,33 @@ await unwrap(commands.sessionDeleteHeadSnapshot(id));
 await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
 ```
 
-## Rust Backend Formatting
+## Rust Formatting
 
-The Rust backend (`engine/src/`) uses [`rustfmt`](https://rust-lang.github.io/rustfmt/) with a project-level config at `engine/src/rustfmt.toml`:
+The Rust workspace uses [`rustfmt`](https://rust-lang.github.io/rustfmt/) with a project-level config:
 
 - **Indentation**: 2 spaces (`tab_spaces = 2`)
 - Format with `just fmt`, verify with `just fmt-check`
+
+## Logging
+
+The `log` crate is a workspace dependency used by both the engine and GUI crates.
+
+### GUI Logging Utilities (`gui/src/util.rs`)
+
+`gui/src/util.rs` defines a `Loggable` trait and a `LogLevel` enum for ergonomic logging in the GUI layer.
+
+**`LogLevel` enum** — mirrors `log::Level` with variants: `Trace`, `Debug`, `Info`, `Warn`, `Error`. Converts to `log::Level` via `From<LogLevel> for log::Level`.
+
+**`Loggable` trait** — required method `log(&self, level: LogLevel)`, with default convenience methods `trace()`, `debug()`, `info()`, `warn()`, `error()` that delegate to `log()` with the corresponding level.
+
+**Blanket `impl<T, E: Display> Loggable for Result<T, E>`** — logs `"Ok"` or `"Err: {e}"` at the specified level. Useful for ad-hoc result inspection:
+
+```rust
+use crate::util::Loggable;
+
+some_operation().info();     // logs "Ok" at Info level
+fallible_op().error();      // logs "Err: timeout" at Error level
+```
 
 ## Related Documentation
 
