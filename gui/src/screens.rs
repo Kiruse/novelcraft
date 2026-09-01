@@ -1,29 +1,20 @@
-use gpui::{Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, text};
+use gpui::{Context, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, text};
 
-use crate::comp::settings_gear;
+use crate::{StoryId, comp::settings_gear};
 
 #[derive(Debug, Clone, Default)]
 pub enum Screen {
-  Gameplay,
   #[default]
   Home,
   Settings,
-  Story,
+  CreateStory,
+  StoryOverview(StoryId),
+  StoryGameplay(StoryId),
 }
 
-pub(crate) struct GameplayScreen {}
-
-impl GameplayScreen {
-  pub fn create(_cx: &mut Context<'_, Self>) -> Self {
-    Self {}
-  }
-}
-
-impl Render for GameplayScreen {
-  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-    div()
-  }
-}
+//-----------------------------
+// Home Screen
+//-----------------------------
 
 pub(crate) struct HomeScreen {}
 
@@ -57,6 +48,10 @@ impl Render for HomeScreen {
       )
   }
 }
+
+//-----------------------------
+// Settings Screen
+//-----------------------------
 
 pub(crate) struct SettingsScreen {}
 
@@ -94,15 +89,59 @@ impl Render for SettingsScreen {
   }
 }
 
-pub(crate) struct StoryScreen {}
+//-----------------------------
+// Create Story Screen
+//-----------------------------
 
-impl StoryScreen {
+pub(crate) struct CreateStoryScreen {}
+
+impl CreateStoryScreen {
   pub fn create(_cx: &mut Context<'_, Self>) -> Self {
     Self {}
   }
 }
 
-impl Render for StoryScreen {
+impl Render for CreateStoryScreen {
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    div()
+  }
+}
+
+//-----------------------------
+// Story Overview Screen
+//-----------------------------
+
+pub(crate) struct StoryOverviewScreen {
+  pub id: StoryId,
+}
+
+impl StoryOverviewScreen {
+  pub fn create(_cx: &mut Context<'_, Self>) -> Self {
+    Self { id: StoryId::default() }
+  }
+}
+
+impl Render for StoryOverviewScreen {
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    div()
+  }
+}
+
+//-----------------------------
+// Story Gameplay Screen
+//-----------------------------
+
+pub(crate) struct StoryGameplayScreen {
+  pub id: StoryId,
+}
+
+impl StoryGameplayScreen {
+  pub fn create(_cx: &mut Context<'_, Self>) -> Self {
+    Self { id: StoryId::default() }
+  }
+}
+
+impl Render for StoryGameplayScreen {
   fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
     div()
   }

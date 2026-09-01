@@ -3722,6 +3722,9 @@ dependencies = [
  "gpui_platform",
  "log",
  "novelcraft-engine",
+ "schemars",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
