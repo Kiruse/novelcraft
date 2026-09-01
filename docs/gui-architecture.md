@@ -238,5 +238,5 @@ gui/src/
 
 - [Project Structure](./project-structure.md) — Overall file organization
 - [Code Conventions](./code-conventions.md) — Coding standards
-- [API Routes](./api-routes.md) — Engine command reference
+- [Engine API](./api-routes.md) — Engine command function reference
 - [Data Storage](./database-schema.md) — JSON file formats and storage layout

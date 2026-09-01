@@ -1,69 +1,70 @@
 # Data Storage
 
-This document describes the filesystem-based persistence layer used for all gameplay state in Novelcraft.
+This document describes the filesystem-based persistence layer used for all gameplay state in NovelCraft.
 
 ## Overview
 
-NovelCraft is a fully offline desktop app. All data lives as **JSON files on disk**, managed by the Rust backend through Tauri commands. There is no database, no SQLite, no server.
+NovelCraft is a fully offline, single-user desktop app. All data lives as **JSON files on disk**, managed by the Rust engine library. There is no database, no SQLite, no server.
 
-- **Persistence layer** — JSON files in the Tauri app data directory, read/written by Rust backend commands
-- **Frontend access** — All data access goes through tauri-specta generated bindings (`commands.xxx()` from `gui/src/bindings.ts`), wrapped with `unwrap()` from `gui/src/utils/index.ts`. The only raw `invoke()` remaining is `invoke('prompt', ...)` in `tauriLanguageModel.ts` for LLM streaming.
+- **Persistence layer** — JSON files in the platform data directory (resolved via `dirs::data_dir()`), read/written by engine command functions
+- **Path resolution** — centralized in `engine/src/commands/paths.rs` via `data_dir()` and `config_dir()`
 - **Version-gated deserialization** — Every file format includes a `version` field for forward-compatible schema evolution
+- **No transactions** — Each engine function call performs a single atomic file operation. Consumers drive sequential operations when multiple steps are needed.
 
-### Technology Stack
+### Technology
 
 | Layer | Technology | Access Pattern |
 |-------|-----------|----------------|
-| Storage | JSON files in `{appData}/` | Rust backend via Tauri commands |
-| Frontend | `commands.xxx()` from `~/bindings` + `unwrap()` from `~/utils` | Composables in `gui/src/composables/` |
+| Storage | JSON files in `{dataDir}/` | Rust engine functions (`engine/src/commands/`) |
+| Config | JSON files in `{configDir}/` | Rust engine functions |
 
 ---
 
 ## File Layout
 
-All data is stored under the Tauri app data directory (`{appData}/`). The layout uses loose JSON files organized by entity type.
+All data is stored under the platform data directory resolved by `engine/src/commands/paths.rs::data_dir()`.
 
 ### Stories
 
 ```
-{appData}/stories/{id}.json
+{dataDir}/stories/{id}.json
 ```
 
 Each file contains a single `StoryEntry`:
 
-```typescript
+```json
 {
-  version: 1;
-  id: string;           // UUID
-  title: string;
-  description?: string;
-  config: Record<string, unknown>;  // { [moduleType]: moduleConfig }
-  created_at: string;   // ISO timestamp
-  updated_at: string;   // ISO timestamp
+  "version": 1,
+  "id": "uuid",
+  "title": "Story Title",
+  "description": "Optional description",
+  "config": {},
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
 }
 ```
 
 ### Sessions (Vignettes)
 
 ```
-{appData}/sessions/{sessionUUID}/meta.json
-{appData}/sessions/{sessionUUID}/pages.{batch:03}.json
-{appData}/sessions/{sessionUUID}/state.head.json
-{appData}/sessions/{sessionUUID}/state.{batch:03}.json
+{dataDir}/sessions/{sessionUUID}/meta.json
+{dataDir}/sessions/{sessionUUID}/pages.{batch:03}.json
+{dataDir}/sessions/{sessionUUID}/state.head.json
+{dataDir}/sessions/{sessionUUID}/state.{batch:03}.json
 ```
 
 #### meta.json — Session Metadata
 
-```typescript
+```json
 {
-  version: 1;
-  id: string;               // UUID session identifier
-  story_id?: string | null; // Associated story ID (absent for impromptu/freeform sessions)
-  title: string;
-  description?: string;     // Opening text for the session
-  disposition?: string;     // Opening text for the session
-  created_at: string;       // ISO timestamp
-  updated_at: string;       // ISO timestamp
+  "version": 1,
+  "id": "session-uuid",
+  "story_id": null,
+  "title": "Session Title",
+  "description": "Opening text",
+  "disposition": "Opening disposition",
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -71,22 +72,20 @@ Each file contains a single `StoryEntry`:
 
 Pages are stored in batches of 100. The batch index for page N is `floor(N / 100)`. Files are zero-padded to 3 digits: `pages.000.json`, `pages.001.json`, etc.
 
-```typescript
-// PagesBatch
+```json
 {
-  version: 1;
-  batch: number;        // Batch index (0, 1, 2, ...)
-  pages: PageEntry[];
-}
-
-// PageEntry
-{
-  id: string;           // UUID page identifier
-  system?: string;      // System prompt for this page
-  prompt?: string;      // User's input/prompt
-  response?: string;    // AI-generated response
-  tool_calls?: string;  // JSON array of ToolCallRecord objects: { tool: string, params: Record<string, unknown> }
-  created_at: string;   // ISO timestamp
+  "version": 1,
+  "batch": 0,
+  "pages": [
+    {
+      "id": "page-uuid",
+      "system": "System prompt for this page",
+      "prompt": "User input",
+      "response": "AI response",
+      "tool_calls": "[{"tool":"npc::addNPC","params":{"name":"Alice"}}]",
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -94,11 +93,11 @@ Pages are stored in batches of 100. The batch index for page N is `floor(N / 100
 
 The current gameplay state, updated on every page completion:
 
-```typescript
+```json
 {
-  version: 1;
-  page_index: number;   // Page index this snapshot corresponds to
-  data: Record<string, unknown>;  // { [moduleType]: moduleState }
+  "version": 1,
+  "page_index": 5,
+  "data": { "npc": { "version": 1, "npcs": [] }, "plan": { "version": 1 } }
 }
 ```
 
@@ -106,38 +105,27 @@ The current gameplay state, updated on every page completion:
 
 Checkpoint snapshots created every 100 pages. The batch index matches the page batch: `state.000.json`, `state.001.json`, etc.
 
-```typescript
-// Snapshot (generated binding type)
-{
-  version: 1;
-  page_index: number;
-  data: Record<string, unknown>;  // { [moduleType]: moduleState }
-}
-```
-
 ### Profiles
 
 ```
-{appData}/profiles.json
+{dataDir}/profiles.json
 ```
 
-A single file containing all profiles and the active profile ID. Held in memory via `OnceCell<Mutex<ProfilesFile>>` in `engine/src/src/commands/profile.rs`, initialized by `init_profiles()` called in `lib.rs` setup.
+A single file containing all profiles and the active profile ID. Held in memory via `OnceCell<Mutex<ProfilesFile>>` in `engine/src/commands/profile.rs`, initialized by `init_profiles()`.
 
-```typescript
-// ProfilesFile
+```json
 {
-  version: 1;
-  profiles: Profile[];
-  active_id: string | null;  // ID of the active profile, or null if none set
-}
-
-// Profile
-{
-  id: string;           // UUID profile identifier
-  name: string;         // Display name
-  fields: any;          // Key-value fields (serde_json::Value, exported as TS any)
-  created_at: string;   // ISO timestamp
-  updated_at: string;   // ISO timestamp
+  "version": 1,
+  "profiles": [
+    {
+      "id": "profile-uuid",
+      "name": "Default",
+      "fields": { "name": "", "appearance": "", "interests": "", "favorite color": "" },
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "active_id": "profile-uuid"
 }
 ```
 
@@ -145,52 +133,53 @@ A single file containing all profiles and the active profile ID. Held in memory 
 - Max 5 profiles per user
 - Active profile tracked at the file level via `active_id` (not per-profile)
 - `profile_delete` clears `active_id` if the deleted profile was active
-- Default fields prepopulated: `name`, `appearance`, `interests`, `favorite color`
-- Managed via `gui/src/composables/useProfiles.ts`
+- Default fields: `name`, `appearance`, `interests`, `favorite color`
 
 ### Lore Entries
 
 ```
-{appData}/lore/{id}.json
+{dataDir}/lore/{id}.json
 ```
 
 Each file contains a single `LoreEntry`:
 
-```typescript
+```json
 {
-  version: 1;
-  id: string;           // UUID entry identifier
-  story_id: string;     // Parent story ID
-  title: string;
-  content: string;
-  tags?: string[];      // Array of strings for categorization
-  created_at: string;   // ISO timestamp
-  updated_at: string;   // ISO timestamp
+  "version": 1,
+  "id": "lore-uuid",
+  "story_id": "story-uuid",
+  "title": "Lore Title",
+  "content": "Lore content",
+  "tags": ["tag1", "tag2"],
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
 }
 ```
 
 ### Model Configuration
 
 ```
-{appData}/models.json
+{dataDir}/models.json
 ```
 
-A single file containing the LLM model configuration. Held in memory in `AppState.models: Mutex<Models>` (defined in `engine/src/game/state.rs`), initialized via `Models::load()` in `AppState::init()`. The `Models` struct is defined in `engine/src/commands/llm.rs`.
+A single file containing the LLM model configuration. Held in memory in `AppState.models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()`. The `Models` struct is defined in `engine/src/commands/llm.rs`.
 
-```typescript
-interface Models {
-  storyteller: ModelConfig;
-  suggestions: ModelConfig;
-}
-
-interface ModelConfig {
-  model_id: string;       // Actual LLM API model identifier (e.g., 'zai-org/glm-4.6v-flash')
-  base_url: string;       // API base URL (e.g., 'http://localhost:1234/v1')
-  api_key?: string;       // Optional API key
+```json
+{
+  "storyteller": {
+    "model_id": "zai-org/glm-4.6v-flash",
+    "base_url": "http://localhost:1234/v1",
+    "api_key": null
+  },
+  "suggestions": {
+    "model_id": "zai-org/glm-4.6v-flash",
+    "base_url": "http://localhost:1234/v1",
+    "api_key": null
+  }
 }
 ```
 
-- Default models point to `http://localhost:1234/v1` (local LLM server) with model `zai-org/glm-4.6v-flash`
+- Default models point to `http://localhost:1234/v1` (local LLM server)
 - `Models::patch()` fills empty `base_url` fields with the default host
 
 ---
@@ -202,15 +191,15 @@ State snapshots enable undo/fork by capturing module state at each page:
 - **Session creation** → head snapshot with empty state `{}`
 - **After each page's tool calls** → head snapshot (`state.head.json`) updated in place
 - **Every 100 pages** → copy current head as checkpoint (`state.{batch}.json`) before updating
-- **Fork** → `GameEngine::fork(page_index)` truncates page batch files after the batch containing `page_index`, then reloads the session via `SessionV1::load` to obtain correct `tail_batches`, `page_count`, `batch_count`, and `gamestate`, and rebuilds the agent loop
-- **State is immutable** — immer drafts are used for convenience during tool execution and replay (inside `executeTool()`), but the canonical state is the snapshot data
-- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback (forward-compatible with module upgrades). `executeTool()` applies this fallback when module state is undefined.
+- **Fork** → `GameEngine::fork(page_index)` truncates page batch files after the batch containing `page_index`, then reloads the session to rebuild state
+- **State is immutable** — the canonical state is the snapshot data
+- **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback
 
 ---
 
 ## Version-Gated Deserialization
 
-Every JSON file includes a `version` field. The Rust backend uses `read_versioned_json()` to:
+Every JSON file includes a `version` field. The engine uses `read_versioned_json()` to:
 
 1. Deserialize the JSON into a generic `Value`
 2. Extract the `version` field
@@ -221,74 +210,54 @@ This allows future format changes to add new match arms without breaking existin
 
 ---
 
-## Data Access from Frontend
+## Data Access from Engine
 
-All data access goes through tauri-specta generated bindings — never direct file I/O from the frontend. The `unwrap()` helper converts the `typedError` discriminated union back to throw-on-error behavior.
+All data access goes through engine command functions — never direct file I/O from the GUI layer.
 
-```typescript
-import { commands } from '~/bindings';
-import { unwrap } from '~/utils';
+```rust
+use novelcraft_engine::AppState;
+use novelcraft_engine::commands::{session, profile, story, lore};
 
 // Sessions
-const sessions = await unwrap(commands.sessionList());
-const result = await unwrap(commands.sessionLoad(id));
-await unwrap(commands.sessionCreate(id, storyId ?? null, 'New Session'));
-await unwrap(commands.sessionDelete(id));
-await unwrap(commands.sessionSaveMeta(id, meta));
-await unwrap(commands.sessionPushPage(id, pageEntry));
-await unwrap(commands.sessionUpdatePage(id, 0, pageEntry));
-await unwrap(commands.sessionTruncatePages(id, 5));
+let sessions = session::session_list(&app).await?;
+let result = session::session_load(&app, id).await?;
+session::session_create(&app, id, story_id, title, description).await?;
+session::session_delete(&app, id).await?;
+session::session_save_meta(&app, id, meta).await?;
+session::session_push_page(&app, id, page_entry).await?;
+session::session_update_page(&app, id, 0, page_entry).await?;
+session::session_truncate_pages(&app, id, 5).await?;
 
 // Snapshots
-const head = await unwrap(commands.sessionGetHeadSnapshot(id));
-await unwrap(commands.sessionSaveHeadSnapshot(id, snapshotEntry));
-await unwrap(commands.sessionDeleteHeadSnapshot(id));
-const snap = await unwrap(commands.sessionFindSnapshotBefore(id, 5));
-await unwrap(commands.sessionSaveCheckpoint(id, 0, snapshotEntry));
-await unwrap(commands.sessionDeleteCheckpointsFrom(id, 5));
+let head = session::session_get_head_snapshot(&app, id).await?;
+session::session_save_head_snapshot(&app, id, snapshot).await?;
+session::session_delete_head_snapshot(&app, id).await?;
+let snap = session::session_find_snapshot_before(&app, id, 5).await?;
+session::session_save_checkpoint(&app, id, 0, snap).await?;
+session::session_delete_checkpoints_from(&app, id, 5).await?;
 
 // Profiles
-const { profiles, active_id } = await unwrap(commands.profileList());
-await unwrap(commands.profileCreate(profileEntry));
-await unwrap(commands.profileUpdate(profileId, updatedEntry));
-await unwrap(commands.profileDelete(profileId));
-await unwrap(commands.profileSetActive(profileId));
+let result = profile::profile_list(&app).await?;
+profile::profile_create(&app, new_profile).await?;
+profile::profile_update(&app, profile_id, updated_profile).await?;
+profile::profile_delete(&app, profile_id).await?;
+profile::profile_set_active(&app, profile_id).await?;
 
 // Stories
-const story = await unwrap(commands.storyGet(id));
-await unwrap(commands.storySave(storyEntry));
+let story = story::story_get(&app, id).await?;
+story::story_save(&app, story_entry).await?;
 
 // Lore
-const results = await unwrap(commands.loreQuery(id, 'search term'));
+let results = lore::lore_query(&app, id, "search term").await?;
 ```
 
-**No transactions**: Each file operation is independent. The frontend drives sequential operations. There is no `db.transaction()` — each bindings call performs a single atomic file read or write.
-
 ---
 
-## Composables Mapping
+## Advantages
 
-| Composable | Tauri Commands Used |
-|-----------|-------------------|
-| `useVignettes` | `session_list`, `session_create`, `session_delete` |
-| `useVignette` | `session_load`, `session_save_meta`, `session_push_page`, `session_update_page`, `session_truncate_pages`, `session_get_head_snapshot`, `session_save_head_snapshot`, `session_delete_head_snapshot`, `session_find_snapshot_before`, `session_save_checkpoint`, `session_delete_checkpoints_from` |
-| `useProfiles` | `profile_list`, `profile_create`, `profile_update`, `profile_delete`, `profile_set_active` |
-| `useStoryBuilder` | `story_get`, `story_save` |
-| `loreModule` | `lore_query` |
-
----
-
-## Profile Fields in Prompts
-
-The active profile's fields are injected into story/gameplay LLM calls (vignette opening, write, steer, instruct) as a `[Player profile]` block in the context message via `buildProfileContext()` in `gui/src/composables/useGame.ts`. Profile fields are NOT injected into suggestion prompts or story metadata prompts.
-
----
-
-## Advantages Over SQLite
-
-- **No connection pool issues**: Eliminates the `db.transaction()` bug where sqlite-proxy + sqlx pool connection routing broke transaction semantics
+- **No connection pool issues**: No database connection management
 - **Easy inspection**: JSON files can be read with any text editor or tool
-- **Simple backup**: Copy the entire `{appData}/` directory
+- **Simple backup**: Copy the entire `{dataDir}/` directory
 - **Future "mod" support**: Loose file structure enables loading external data files
 - **No migration system needed**: Version-gated deserialization handles schema evolution inline
 
@@ -298,5 +267,5 @@ The active profile's fields are injected into story/gameplay LLM calls (vignette
 
 - [Code Conventions](./code-conventions.md) - Import patterns and async functions
 - [Project Structure](./project-structure.md) - File organization for persistence commands
-- [API Routes](./api-routes.md) - Full Tauri command documentation with parameters and return types
-- [Frontend Architecture](./frontend-architecture.md) - How the frontend uses Tauri commands for data access
+- [Engine API](./api-routes.md) - Engine command function reference
+- [GUI Architecture](./gui-architecture.md) - gpui GUI components and screens

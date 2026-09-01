@@ -1,89 +1,36 @@
 # NovelCraft
 
-A Nuxt 4 application for collaborative fiction writing.
+An offline-first, single-user desktop application for LLM-driven interactive fiction with deterministic gameplay modules and human-authored event system. The AI's purpose is not to create the story, but to tell it.
 
-## Tech Stack
+NovelCraft will eventually support a proprietary sharing platform that allows human authors to share their worlds (story templates) with other players and drives discovery via content curation. However, this platform will be entirely optional. The app remains fully usable offline, including importing & exporting story templates directly.
 
-- **Runtime**: Bun
-- **Framework**: Nuxt 4 with Vue 3
-- **Database**: Neon PostgreSQL
-- **ORM**: Drizzle ORM with node-postgres driver
-- **Authentication**: Better-Auth with Drizzle adapter
-- **Validation**: drizzle-zod + Zod for runtime schema validation
+NovelCraft is a Rust/Cargo workspace split into two crates:
 
-## Setup
+- **[novelcraft-engine](engine/)** — pure Rust library crate containing all business logic: LLM proxy (OpenAI-compatible streaming via `reqwest`), filesystem persistence (JSON files for sessions, stories, lore, profiles), the game agent loop, and file import/export. No UI framework dependency.
+- **[novelcraft-gui](gui/)** — Rust binary crate providing the native UI, built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the same app framework that powers the [Zed editor](https://zed.dev/).
 
-Install dependencies:
+There is no server, no database, and no authentication — all data lives as loose JSON files on disk.
 
-```bash
-bun install
-```
+## Prerequisites
 
-For local development, ensure you have [podman](https://podman.io/) installed — it's used to start local backend services such as Mailtrap.
+- [Rust](https://www.rust-lang.org/tools/install) 1.97.1 (pinned via `rust-toolchain.toml`)
+- [just](https://github.com/casey/just) (build orchestration)
 
-## Development
+## Building & Running
 
-Start the development server on `http://localhost:3000` and Mailtrap on `http://localhost:8025`:
+All commands are managed by the root `justfile`. Run `just` with no arguments to list available recipes.
 
 ```bash
-bun dev
+just dev       # Run the app (cargo run --bin novelcraft)
+just build     # Build entire workspace
+just check     # Cargo check (entire workspace)
+just clippy    # Cargo clippy
+just fmt       # Cargo fmt
 ```
-
-## Production
-
-```bash
-bun run build    # Build for production
-bun run preview  # Preview production build
-```
-
-See the [Nuxt deployment docs](https://nuxt.com/docs/getting-started/deployment) for more information.
-
-## Database
-
-NovelCraft uses Drizzle ORM with Neon PostgreSQL.
-
-```bash
-bun run db:generate  # Generate migrations from schema changes
-bun run db:migrate   # Apply pending migrations
-bun run db:push      # Push schema directly (dev alternative)
-bun run db:studio    # Launch Drizzle Studio for inspection
-```
-
-See [Database Schema](./docs/database-schema.md) for table definitions, relations, and query patterns.
-
-## LLM Passthrough Endpoint
-
-`POST /api/llm/prompt` — a generic, authenticated SSE endpoint that forwards a conversation to any configured model via `archetype.prompt`.
-
-**Why it exists.** Several features (story suggestions, vignette premises, etc.) previously had their own dedicated endpoints with nearly identical streaming logic. This single endpoint replaces them with a thin, reusable pass-through. It also enables **outsourcing** these calls to a third-party NovelCraft server for users who prefer to bring their own models — the request shape is stable and intentionally model-agnostic.
-
-**Authentication.** Requires a valid session (Better-Auth). Unauthenticated requests receive `401`.
-
-**Request body:**
-
-```jsonc
-{
-  // Model identifier resolvable by the server (see server/ai/models.ts)
-  "model": "zai-org/glm-4.6v-flash",
-
-  // Conversation history (at least one message required)
-  "messages": [
-    { "author": "user", "content": "Generate 3 story ideas about space exploration." }
-  ],
-
-  // System prompt / persona applied to the model
-  "persona": "You are a creative story idea generator…"
-}
-```
-
-**Response:** Server-Sent Events stream with `text`, `reasoning`, `done`, and `error` events.
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [Project Structure](./docs/project-structure.md) | File organization and directory layout |
-| [Code Conventions](./docs/code-conventions.md) | Styling, imports, patterns, and best practices |
-| [Database Schema](./docs/database-schema.md) | Table definitions, relations, and validation |
-| [API Routes](./docs/api-routes.md) | Endpoint documentation and route patterns |
-| [Frontend Architecture](./docs/frontend-architecture.md) | Pages, components, and styling conventions |
+See the [`docs/`](docs/) directory for comprehensive documentation on architecture, data persistence, the game agent loop, and GUI conventions.
+
+# License
+All files in this repository are licensed under GNU GPL 3.0. See [LICENSE](./LICENSE).

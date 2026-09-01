@@ -1,5 +1,9 @@
 # Frontend Architecture
 
+> **Deprecated:** This document describes the vestigial Vue 3 / Tauri frontend that is no longer used. The project now uses a native Rust GPUI GUI (`novelcraft-gui`). See [GUI Architecture](./gui-architecture.md) for the current UI documentation.
+
+---
+
 This document describes the frontend architecture, including pages, components, composables, and styling conventions.
 
 ## Overview
@@ -91,7 +95,7 @@ Step-based first-run onboarding flow rendered by `App.vue` when onboarding is no
 **Steps:**
 
 | Step | Content |
-|------|---------|
+|------|----------|
 | 0 | Welcome page — app description and alpha disclaimer (yellow left-border callout) |
 | 1 | Model configuration — renders `<ModelsConfigurator />` |
 
@@ -392,7 +396,7 @@ Bridges the Tauri LLM proxy to the Vercel AI SDK (`@ai-sdk/provider`) by impleme
 **Message conversion:**
 
 | V3 role | Tauri `author` | Notes |
-|---------|---------------|-------|
+|---------|---------------|--------|
 | `system` | `system` | Direct content mapping |
 | `user` | `user` | Text parts joined |
 | `assistant` | `ai` | Text parts + `tool_calls` array |
@@ -467,7 +471,7 @@ Main gameplay component — the single interactive surface for vignette play ses
 **Props:**
 
 | Prop | Type | Default | Description |
-|------|------|---------|-------------|
+|------|------|---------|----------------|
 | `vignette` | `DeepReadonly<Vignette>` | required | Vignette instance (reactive `meta` and `pages`) |
 | `titlePlaceholder` | `string` | `'Untitled'` | Placeholder for the title input |
 | `streaming` | `boolean` | `false` | Whether an LLM response is currently streaming |
