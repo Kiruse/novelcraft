@@ -7,9 +7,10 @@ use serde::{Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::sync::RwLock;
 
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::module::{GameplayModule};
 use crate::game::pages::{PageV1, Snapshot};
+use crate::game::profile::ProfileV1;
 
 /// GameState is effectively a handle to the shared game state.
 /// Every module has its own [RwLock]ed state, and it is the
@@ -23,14 +24,21 @@ use crate::game::pages::{PageV1, Snapshot};
 #[derive(Debug, Clone, Default)]
 pub struct GameState {
   storage: Arc<HashMap<String, ModuleState>>,
+  pub profile: Option<Arc<ProfileV1>>,
 }
 
 impl GameState {
-  pub fn new(snapshot: Snapshot) -> Result<Self, AppError> {
+  pub fn new(snapshot: Snapshot, profile: Option<Arc<ProfileV1>>) -> Result<Self, EngineError> {
     Ok(Self {
       storage: Self::build_storage(snapshot)?,
+      profile,
       ..Default::default()
     })
+  }
+
+  #[inline(always)]
+  pub fn set_profile(&mut self, profile: Option<Arc<ProfileV1>>) {
+    self.profile = profile;
   }
 
   /// Get a readonly [ModuleState] of the ID'ed module.
@@ -39,9 +47,9 @@ impl GameState {
   }
 
   /// Mark named module dirty. Errors if no such module exists.
-  pub fn mark_dirty(&self, module: &String) -> Result<(), AppError> {
+  pub fn mark_dirty(&self, module: &String) -> Result<(), EngineError> {
     let Some(module) = self.storage.get(module) else {
-      return Err(AppError::module_not_found(module));
+      return Err(EngineError::module_not_found(module));
     };
     module.dirty.store(true, Ordering::Release);
     Ok(())
@@ -49,16 +57,16 @@ impl GameState {
 
   /// Mark named module clean & return whether it *was* dirty. Errors if no
   /// such module exists.
-  pub(crate) fn mark_clean(&self, module: &String) -> Result<bool, AppError> {
+  pub(crate) fn mark_clean(&self, module: &String) -> Result<bool, EngineError> {
     let Some(module) = self.get(module) else {
-      return Err(AppError::module_not_found(module));
+      return Err(EngineError::module_not_found(module));
     };
     Ok(module.dirty.swap(false, Ordering::AcqRel))
   }
 
   /// Replay the tool calls that happened during the given pages and
   /// mutate the GameState.
-  pub async fn replay(&self, modules: &HashMap<String, GameplayModule>, pages: &[PageV1]) -> Result<(), AppError> {
+  pub async fn replay(&self, modules: &HashMap<String, GameplayModule>, pages: &[PageV1]) -> Result<(), EngineError> {
     let tool_calls = pages
       .iter()
       .map(|page| &page.responses)
@@ -67,18 +75,18 @@ impl GameState {
       .flatten();
     for tc in tool_calls {
       if tc.name.find("::").is_none() {
-        return Err(AppError::input(format!("invalid tool name {}", tc.name)));
+        return Err(EngineError::input(format!("invalid tool name {}", tc.name)));
       }
 
       let mut parts = tc.name.splitn(2, "::");
-      let module_name = parts.next().ok_or(AppError::input("expected module name"))?;
-      let tool_name = parts.next().ok_or(AppError::input("expected tool name"))?;
+      let module_name = parts.next().ok_or(EngineError::input("expected module name"))?;
+      let tool_name = parts.next().ok_or(EngineError::input("expected tool name"))?;
 
       let module = &modules[module_name];
       let ctx = self.view(module_name.to_string());
       let response = module.handle(ctx, tool_name, tc.arguments.clone()).await;
       if response.starts_with("Error:") {
-        return Err(AppError::state("GameState replay encountered an unexpected error"));
+        return Err(EngineError::state("GameState replay encountered an unexpected error"));
       }
     }
     Ok(())
@@ -98,7 +106,7 @@ impl GameState {
     GameStateView { gamestate: self.clone(), module }
   }
 
-  fn build_storage(map: Snapshot) -> Result<Arc<HashMap<String, ModuleState>>, AppError> {
+  fn build_storage(map: Snapshot) -> Result<Arc<HashMap<String, ModuleState>>, EngineError> {
     let mut res: HashMap<String, ModuleState> = Default::default();
     for (key, value) in map {
       let value: JsonMap<String, JsonValue> = serde_json::from_value(value)?;
@@ -143,12 +151,12 @@ impl ModuleState {
 
   /// Set a value at the given keypath. Only the module itself is allowed to set the value,
   /// exposed through the [GameStateView] struct.
-  async fn set<T: Serialize>(&self, keypath: &[String], value: &T) -> Result<(), AppError> {
+  async fn set<T: Serialize>(&self, keypath: &[String], value: &T) -> Result<(), EngineError> {
     if keypath.is_empty() {
-      return Err(AppError::input("empty keypath"));
+      return Err(EngineError::input("empty keypath"));
     }
 
-    let e_not_found = AppError::not_found(format!("Keypath \"{}\"", keypath.join(".")));
+    let e_not_found = EngineError::not_found(format!("Keypath \"{}\"", keypath.join(".")));
     let mut guard = self.storage.write().await;
 
     let Some(mut curr) = guard.get_mut(&keypath[0]) else {
@@ -157,7 +165,7 @@ impl ModuleState {
 
     for (i, keypart) in keypath[1..keypath.len() - 1].iter().enumerate() {
       if !curr.is_object() {
-        return Err(AppError::state(format!("not a JSON object at {}", keypath[0..i].join("."))));
+        return Err(EngineError::state(format!("not a JSON object at {}", keypath[0..i].join("."))));
       }
       curr = curr.as_object_mut()
         .unwrap()
@@ -193,10 +201,15 @@ impl GameStateView {
   }
 
   /// Serialize & set a value for the current gameplay module at the given keypath.
-  pub async fn set<T: Serialize>(&self, keypath: &[String], value: &T) -> Result<(), AppError> {
+  pub async fn set<T: Serialize>(&self, keypath: &[String], value: &T) -> Result<(), EngineError> {
     let Some(module) = self.gamestate.get(&self.module) else {
-      return Err(AppError::not_found(format!("Module {} not found", self.module)));
+      return Err(EngineError::not_found(format!("Module {} not found", self.module)));
     };
     module.set(keypath, value).await
+  }
+
+  #[inline(always)]
+  pub fn profile(&self) -> Option<Arc<ProfileV1>> {
+    self.gamestate.profile.clone()
   }
 }

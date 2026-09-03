@@ -1,7 +1,7 @@
 use kiruklaw_agent_loop::{AgentToolset, toolset};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::module::GameStateView;
 use crate::game::state::GameState;
 use crate::markdown::{TodoList, TodoListDiff};
@@ -47,10 +47,10 @@ impl AgentToolset<GameStateView> for StoryModule {
     for item in &existing.diff(&new) {
       match item {
         TodoListDiff::Uncheck(item) if item.checked => {
-          Err(AppError::illegal("cannot uncheck an already checked item"))?;
+          Err(EngineError::illegal("cannot uncheck an already checked item"))?;
         }
         TodoListDiff::Remove(item) if item.checked => {
-          Err(AppError::illegal("cannot remove an already checked item"))?;
+          Err(EngineError::illegal("cannot remove an already checked item"))?;
         }
         _ => {}
       }

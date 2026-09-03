@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use kiruklaw_agent_loop::Conversation;
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::module::GameplayModule;
 use crate::game::pages::{PageBatchV1, PageV1};
+use crate::game::profile::ProfileV1;
 use crate::game::state::GameState;
 use crate::util::{deserialize, deserialize_timestamp, serialize, serialize_timestamp};
 
@@ -29,6 +31,9 @@ pub struct SessionV1 {
   pub updated_at: DateTime<Utc>,
   /// Configured gameplay modules that this session uses.
   pub modules: HashMap<String, GameplayModule>,
+  /// Optional profile ID that was last used for this session.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub profile: Option<String>,
   #[serde(skip_deserializing)]
   pub page_count: usize,
   /// Total number of page batches in this session
@@ -52,6 +57,7 @@ impl Default for SessionV1 {
       created_at: Utc::now(),
       updated_at: Utc::now(),
       modules: Default::default(),
+      profile: None,
       page_count: 0,
       batch_count: 0,
       tail_batches: (PageBatchV1::default(), PageBatchV1::default()),
@@ -63,24 +69,34 @@ impl Default for SessionV1 {
 impl SessionV1 {
   pub const VERSION: u8 = 1u8;
 
-  pub fn root() -> Result<PathBuf, AppError> {
+  #[inline(always)]
+  pub fn set_profile(&mut self, profile: Option<Arc<ProfileV1>>) {
+    self.profile = profile.as_ref().map(|p| p.id.clone());
+    self.gamestate.set_profile(profile);
+  }
+
+  #[inline(always)]
+  pub fn root() -> Result<PathBuf, EngineError> {
     crate::paths::sessions_dir()
   }
 
-  pub fn dir(id: &str) -> Result<PathBuf, AppError> {
+  #[inline(always)]
+  pub fn dir(id: &str) -> Result<PathBuf, EngineError> {
     Ok(Self::root()?.join(id))
   }
 
-  pub fn meta_path(id: &str) -> Result<PathBuf, AppError> {
+  #[inline(always)]
+  pub fn meta_path(id: &str) -> Result<PathBuf, EngineError> {
     Ok(Self::join_meta_path(&Self::dir(id)?))
   }
 
+  #[inline(always)]
   fn join_meta_path(dir: &Path) -> PathBuf {
     dir.join("meta.json")
   }
 
   /// Restore the given session by `id` from the local filesystem.
-  pub async fn load(id: impl Into<String>) -> Result<SessionV1, AppError> {
+  pub async fn load(id: impl Into<String>, profiles: &[ProfileV1]) -> Result<SessionV1, EngineError> {
     let id = id.into();
     let path = Self::meta_path(&id)?;
     let mut res: SessionV1 = deserialize(&path).await?;
@@ -108,8 +124,14 @@ impl SessionV1 {
         &res.tail_batches.1
       }
     };
+    let profile_id = res.profile.clone().unwrap_or_default();
 
-    res.gamestate = GameState::new(batch.snapshot.clone())?;
+    res.gamestate = GameState::new(
+      batch.snapshot.clone(),
+      profiles.iter()
+        .find(|p| p.id == *profile_id)
+        .map(|p| Arc::new(p.clone())),
+    )?;
     res.gamestate.replay(&res.modules, &batch.pages).await?;
 
     Ok(res)
@@ -117,7 +139,7 @@ impl SessionV1 {
 
   /// Save this session to disk, including its last 2 associated page batches
   /// (which are considered working memory).
-  pub async fn save(&self) -> Result<(), AppError> {
+  pub async fn save(&self) -> Result<(), EngineError> {
     let (r_self, r_b1, r_b2) = tokio::join!(
       self.save_metadata(),
       self.tail_batches.0.save(),
@@ -130,14 +152,14 @@ impl SessionV1 {
   }
 
   /// Save only this session's metadata, not its [SessionV1::tail_batches].
-  async fn save_metadata(&self) -> Result<(), AppError> {
+  async fn save_metadata(&self) -> Result<(), EngineError> {
     let path = Self::meta_path(&self.id)?;
     serialize(&path, self).await?;
     Ok(())
   }
 
   /// Enumerate all saved sessions on the local filesystem
-  pub async fn list() -> Result<Vec<SessionV1>, AppError> {
+  pub async fn list(profiles: &[ProfileV1]) -> Result<Vec<SessionV1>, EngineError> {
     let dir = Self::root()?;
     let mut entry_iter = tokio::fs::read_dir(&dir).await?;
     let mut res: Vec<SessionV1> = Vec::new();
@@ -147,14 +169,14 @@ impl SessionV1 {
       }
 
       let sid = entry.file_name().to_string_lossy().to_string();
-      res.push(SessionV1::load(&sid).await?);
+      res.push(SessionV1::load(&sid, profiles).await?);
     }
 
     Ok(res)
   }
 
   /// Enumerate batches of this session on the local filesystem
-  pub async fn batches(session_id: &str) -> Result<Vec<OsString>, AppError> {
+  pub async fn batches(session_id: &str) -> Result<Vec<OsString>, EngineError> {
     let dir = Self::dir(session_id)?;
     let mut dir_iter = tokio::fs::read_dir(&dir).await?;
     let mut result = Vec::new();
@@ -187,7 +209,7 @@ impl SessionV1 {
   }
 
   /// Counts the number of batches in this session. Assumes the local filesystem is not corrupted.
-  pub async fn count_batches(session_id: &str) -> Result<usize, AppError> {
+  pub async fn count_batches(session_id: &str) -> Result<usize, EngineError> {
     let last_batch_idx = Self::batches(session_id)
       .await?
       .iter()
@@ -198,7 +220,7 @@ impl SessionV1 {
   }
 
   /// Count the pages in this session. Assumes each batch until the last is at max capacity.
-  pub async fn count_pages(session_id: String) -> Result<usize, AppError> {
+  pub async fn count_pages(session_id: String) -> Result<usize, EngineError> {
     let last_batch_idx = Self::count_batches(&session_id).await?;
     let last_batch = PageBatchV1::load(session_id, last_batch_idx).await?;
     Ok(last_batch_idx * PageBatchV1::MAX_PAGES_PER_BATCH + last_batch.pages.len())
@@ -229,7 +251,7 @@ impl SessionV1 {
   }
 
   /// Push a new page to the end of the session.
-  pub async fn push_page(&mut self, page: PageV1) -> Result<(), AppError> {
+  pub async fn push_page(&mut self, page: PageV1) -> Result<(), EngineError> {
     // active batch will never be full if we only have 1 batch
     if self.active_batch().is_full() {
       self.tail_batches.0.save().await?;
@@ -253,15 +275,15 @@ impl SessionV1 {
   }
 
   /// Update the last page of the session.
-  pub async fn update_page(&mut self, cb: impl FnOnce(PageV1) -> Result<PageV1, AppError>) -> Result<(), AppError> {
+  pub async fn update_page(&mut self, cb: impl FnOnce(PageV1) -> Result<PageV1, EngineError>) -> Result<(), EngineError> {
     let batch = self.active_batch_mut();
-    let page = batch.pages.pop().ok_or(AppError::state("fresh session"))?;
+    let page = batch.pages.pop().ok_or(EngineError::state("fresh session"))?;
     batch.pages.push(cb(page)?);
     self.save().await
   }
 
   /// Replace the last page of the session with the given page.
-  pub async fn replace_page(&mut self, page: PageV1) -> Result<(), AppError> {
+  pub async fn replace_page(&mut self, page: PageV1) -> Result<(), EngineError> {
     let batch = self.active_batch_mut();
     batch.pages.pop();
     batch.pages.push(page);
@@ -269,7 +291,7 @@ impl SessionV1 {
   }
 
   /// Drop the last page of the session.
-  pub async fn pop_page(&mut self) -> Result<Option<PageV1>, AppError> {
+  pub async fn pop_page(&mut self) -> Result<Option<PageV1>, EngineError> {
     self.updated_at = Utc::now();
     self.save_metadata().await?;
 

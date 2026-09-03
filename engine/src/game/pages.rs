@@ -5,7 +5,7 @@ use kiruklaw_agent_loop::{Conversation, ConversationMessage, ToolCall};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Map;
 
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::session::SessionV1;
 use crate::util::{deserialize, serialize};
 
@@ -41,7 +41,7 @@ impl PageBatchV1 {
   }
 
   #[inline(always)]
-  pub fn path(session_id: &str, batch: usize) -> Result<PathBuf, AppError> {
+  pub fn path(session_id: &str, batch: usize) -> Result<PathBuf, EngineError> {
     Ok(Self::join_path(&SessionV1::dir(session_id)?, batch))
   }
 
@@ -50,7 +50,7 @@ impl PageBatchV1 {
     dir.join(format!("pages.{:03}.json", batch))
   }
 
-  pub async fn load(session_id: String, batch: usize) -> Result<PageBatchV1, AppError> {
+  pub async fn load(session_id: String, batch: usize) -> Result<PageBatchV1, EngineError> {
     let path = Self::path(&session_id, batch)?;
     let mut res: PageBatchV1 = deserialize(&path).await?;
     res.session_id = session_id;
@@ -58,7 +58,7 @@ impl PageBatchV1 {
     Ok(res)
   }
 
-  pub async fn save(&self) -> Result<(), AppError> {
+  pub async fn save(&self) -> Result<(), EngineError> {
     let path = Self::path(&self.session_id, self.batch_num)?;
     serialize(&path, self).await?;
     Ok(())
@@ -155,13 +155,13 @@ pub struct PageV1 {
 impl PageV1 {
   /// Take the given slice of [ConversationMessage]s and convert them into
   /// [PageV1::responses].
-  pub fn assimilate(&mut self, msgs: &[ConversationMessage]) -> Result<(), AppError> {
+  pub fn assimilate(&mut self, msgs: &[ConversationMessage]) -> Result<(), EngineError> {
     let mut iter = msgs.into_iter().peekable();
     let mut missing: HashSet<String> = HashSet::new();
     let mut result: Vec<AgentResponseV1> = vec![];
     while let Some(msg) = iter.next() {
       let ConversationMessage::Assistant { content, tool_calls } = msg else {
-        return Err(AppError::input("expected assistant message"));
+        return Err(EngineError::input("expected assistant message"));
       };
       let mut response = AgentResponseV1 {
         content: if content.trim() == "" {
@@ -182,7 +182,7 @@ impl PageV1 {
       }
 
       if !missing.is_empty() {
-        return Err(AppError::input(format!("missing tool call responses for {}", itertools::join(missing, ", "))));
+        return Err(EngineError::input(format!("missing tool call responses for {}", itertools::join(missing, ", "))));
       }
 
       result.push(response);

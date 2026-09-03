@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use kiruklaw_agent_loop::{AgentToolset, toolset};
+use log::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::game::module::GameStateView;
@@ -17,8 +18,38 @@ impl NpcsModule {
 
   // fn id() -> String { Self::ID.to_string() }
 
-  pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
-    todo!()
+  pub async fn context(&self, _state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
+    if self.npcs.is_empty() { return Ok(()) };
+
+    f.writeline("# NPCs")?;
+    for npc in self.npcs.values() {
+      if npc.name.trim().is_empty() {
+        warn!("NPC missing name");
+        continue;
+      }
+
+      f.write("## ")?;
+      f.writeline(&npc.name)?;
+
+      if !npc.personality.trim().is_empty() {
+        f.write("### Personality")?;
+        f.writeline(&npc.personality)?;
+      }
+
+      // TODO: Physique & Apparel should be able to change during gameplay
+      // And thus should be read from state rather than config
+      if !npc.physique.trim().is_empty() {
+        f.write("### Physique")?;
+        f.writeline(&npc.physique)?;
+      }
+
+      if !npc.apparel.trim().is_empty() {
+        f.write("### Apparel")?;
+        f.writeline(&npc.apparel)?;
+      }
+    }
+
+    Ok(())
   }
 }
 

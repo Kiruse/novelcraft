@@ -7,14 +7,14 @@ use moka::future::Cache;
 use tokio::sync::mpsc::Sender;
 
 use crate::config::NovelCraftConfig;
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::pages::{PageBatchV1, PageV1};
 use crate::game::profile::ProfileV1;
 use crate::game::session::SessionV1;
 use crate::game::state::{GameState, GameStateView};
 use crate::util::prompting::{PromptFormatter, Promptify};
 
-pub struct GameEngine {
+pub struct NovelCraftEngine {
   /// NovelCraft game engine config
   config: NovelCraftConfig,
   /// Active user session
@@ -27,10 +27,10 @@ pub struct GameEngine {
   page_cache: Cache<(String, usize), Arc<PageBatchV1>>,
 }
 
-impl GameEngine {
-  pub fn new() -> Self {
+impl NovelCraftEngine {
+  pub fn new(config: NovelCraftConfig) -> Self {
     Self {
-      config: NovelCraftConfig::default(),
+      config,
       session: None,
       module_context_cache: HashMap::new(),
       agent_loop: None,
@@ -40,73 +40,25 @@ impl GameEngine {
     }
   }
 
-  #[inline]
-  pub fn with_config(self, config: NovelCraftConfig) -> Self {
-    let agent_loop = Self::build_agent_loop(&config, self.session.as_ref());
-    Self {
-      config,
-      agent_loop,
-      ..self
-    }
-  }
-  #[inline]
-  pub fn with_profile_id(self, profile_id: String) -> Self {
-    let config = self.config.with_active_profile(profile_id);
-    let agent_loop = Self::build_agent_loop(&config, self.session.as_ref());
-    Self {
-      config,
-      agent_loop,
-      ..self
-    }
-  }
-  #[inline]
-  pub fn without_profile_id(self) -> Self {
-    let config = self.config.without_active_profile();
-    let agent_loop = Self::build_agent_loop(&config, self.session.as_ref());
-    Self {
-      config,
-      agent_loop,
-      ..self
-    }
-  }
-  #[inline]
-  pub fn with_session(self, session: SessionV1) -> Self {
-    let agent_loop = Self::build_agent_loop(&self.config, Some(&session));
-    Self {
-      session: Some(session),
-      agent_loop,
-      ..self
-    }
-  }
-  /// Removes the session from the engine instance
-  #[inline]
-  pub fn without_session(self) -> Self {
-    Self {
-      session: None,
-      agent_loop: None,
-      ..self
-    }
-  }
-
   #[inline(always)]
-  fn session(&self) -> Result<&SessionV1, AppError> {
-    self.session.as_ref().ok_or(AppError::state("no active session"))
+  fn session(&self) -> Result<&SessionV1, EngineError> {
+    self.session.as_ref().ok_or(EngineError::state("no active session"))
   }
   #[inline(always)]
-  fn session_mut(&mut self) -> Result<&mut SessionV1, AppError> {
-    self.session.as_mut().ok_or(AppError::state("no active session"))
+  fn session_mut(&mut self) -> Result<&mut SessionV1, EngineError> {
+    self.session.as_mut().ok_or(EngineError::state("no active session"))
   }
   #[inline(always)]
-  fn session_id(&self) -> Result<&String, AppError> {
+  fn session_id(&self) -> Result<&String, EngineError> {
     Ok(&self.session()?.id)
   }
 
   #[inline(always)]
-  fn gamestate(&self) -> Result<GameState, AppError> {
+  fn gamestate(&self) -> Result<GameState, EngineError> {
     self.session().map(|s| s.gamestate.clone())
   }
 
-  pub async fn list_sessions() -> Result<Vec<OsString>, AppError> {
+  pub async fn list_sessions() -> Result<Vec<OsString>, EngineError> {
     let path = SessionV1::root()?;
     let mut dir_iter = tokio::fs::read_dir(&path).await?;
     let mut result = Vec::new();
@@ -116,7 +68,7 @@ impl GameEngine {
     Ok(result)
   }
 
-  fn conversation(&self, modids: &[String]) -> Result<Conversation, AppError> {
+  fn conversation(&self, modids: &[String]) -> Result<Conversation, EngineError> {
     let mut conv = Conversation::default();
     conv.push(self.system_prompt_msg(modids)?);
     conv.extend(self.session()?.conversation());
@@ -141,6 +93,26 @@ impl GameEngine {
     batch.and_then(|b| b.pages.get(local_index).cloned())
   }
 
+  pub fn set_active_profile(&mut self, profile_id: Option<String>) {
+    self.config.active_profile = profile_id.clone();
+
+    if let Some(session) = self.session.as_mut() {
+      let profile = self.config.profiles
+        .iter()
+        .find(|p| Some(&p.id) == profile_id.as_ref())
+        .cloned()
+        .map(Arc::new);
+      session.gamestate.set_profile(profile);
+    }
+
+    self.agent_loop = Self::build_agent_loop(&self.config, self.session.as_ref());
+  }
+
+  pub fn set_session(&mut self, session: Option<SessionV1>) {
+    self.session = session;
+    self.agent_loop = Self::build_agent_loop(&self.config, self.session.as_ref());
+  }
+
   /// Get the active profile. Resolves the [NovelCraftConfig::active_profile]
   /// field from the [NovelCraftConfig::profiles] vector.
   pub fn profile(&self) -> Option<&ProfileV1> {
@@ -154,7 +126,7 @@ impl GameEngine {
     &mut self,
     content: String,
     sender: Sender<AgentMessageChunk>,
-  ) -> Result<(), AppError> {
+  ) -> Result<(), EngineError> {
     let modids = self.module_ids();
 
     self.refresh_module_context_cache(&modids).await?;
@@ -190,7 +162,7 @@ impl GameEngine {
     &mut self,
     instruct: String,
     sender: Sender<AgentMessageChunk>,
-  ) -> Result<(), AppError> {
+  ) -> Result<(), EngineError> {
     let modids = self.module_ids();
 
     self.refresh_module_context_cache(&modids).await?;
@@ -227,11 +199,11 @@ impl GameEngine {
   }
 
   /// Fork this session from the given page index, deleting all subsequent pages.
-  pub async fn fork(&mut self, page_index: usize) -> Result<(), AppError> {
+  pub async fn fork(&mut self, page_index: usize) -> Result<(), EngineError> {
     let sid = self.session_id()?.clone();
     let batch_index = PageBatchV1::batch_of(page_index);
     Self::truncate_batches(&sid, batch_index).await?;
-    let session = SessionV1::load(&sid).await?;
+    let session = SessionV1::load(&sid, &self.config.profiles).await?;
     self.session = Some(session);
     self.agent_loop = Self::build_agent_loop(&self.config, self.session.as_ref());
     Ok(())
@@ -239,7 +211,7 @@ impl GameEngine {
 
   /// Delete all batches after the given `batch_index`, with this `batch_index` becoming
   /// the last retained batch.
-  async fn truncate_batches(sid: &String, batch_index: usize) -> Result<(), AppError> {
+  async fn truncate_batches(sid: &String, batch_index: usize) -> Result<(), EngineError> {
     let batches = SessionV1::batches(sid).await?;
     let batches = batches
       .iter()
@@ -255,7 +227,7 @@ impl GameEngine {
     Ok(())
   }
 
-  async fn refresh_module_context_cache(&mut self, modids: &[String]) -> Result<(), AppError> {
+  async fn refresh_module_context_cache(&mut self, modids: &[String]) -> Result<(), EngineError> {
     let gamestate = self.gamestate()?;
     for modid in modids {
       let dirty = gamestate.mark_clean(&modid)? ||
@@ -269,7 +241,7 @@ impl GameEngine {
     Ok(())
   }
 
-  fn system_prompt_msg(&self, modids: &[String]) -> Result<ConversationMessage, AppError> {
+  fn system_prompt_msg(&self, modids: &[String]) -> Result<ConversationMessage, EngineError> {
     let mut f = PromptFormatter::new();
 
     f.writeline(&self.config.system_prompt)?;

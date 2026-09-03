@@ -3,7 +3,7 @@ use kiruklaw_agent_loop::AgentLoopError;
 use crate::util::prompting::PromptifyError;
 
 #[derive(Debug, thiserror::Error)]
-pub enum AppError {
+pub enum EngineError {
   #[error("{0}")]
   AgentLoop(#[from] AgentLoopError),
 
@@ -41,7 +41,7 @@ pub enum AppError {
   Internal(String),
 }
 
-impl AppError {
+impl EngineError {
   pub fn not_found(msg: impl Into<String>) -> Self {
     Self::NotFound(msg.into())
   }
@@ -87,13 +87,13 @@ impl AppError {
   }
 }
 
-impl From<std::io::Error> for AppError {
+impl From<std::io::Error> for EngineError {
   fn from(e: std::io::Error) -> Self {
     Self::Io(e.to_string())
   }
 }
 
-impl From<serde_json::Error> for AppError {
+impl From<serde_json::Error> for EngineError {
   fn from(e: serde_json::Error) -> Self {
     Self::Parse(e.to_string())
   }

@@ -1,7 +1,7 @@
 use kiruklaw_agent_loop::{AgentToolset, ModelConfig, Toolset};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::profile::ProfileV1;
 use crate::game::state::{GameState, GameStateView};
 use crate::util::prompting::{PromptFormatter, PromptifyResult};
@@ -40,7 +40,7 @@ impl GameplayModule {
     }
   }
 
-  pub async fn init(&self, ctx: &mut GameplayModuleInitContext<'_>) -> Result<(), AppError> {
+  pub async fn init(&self, ctx: &mut GameplayModuleInitContext<'_>) -> Result<(), EngineError> {
     match self {
       Self::Player(module) => module.init(ctx).await,
       _ => Ok(()),

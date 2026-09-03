@@ -1,13 +1,15 @@
 use gpui::*;
 use gpui_platform::application;
-use novelcraft_engine::{AgentMessageChunk, game::engine::GameEngine};
+use log::{info, warn};
+use novelcraft_engine::config::NovelCraftConfig;
+use novelcraft_engine::{AgentMessageChunk, game::engine::NovelCraftEngine};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::comp::root;
 use crate::screens::*;
-use crate::theme::Theme;
+use crate::theme::{Theme, serialize_theme_name, deserialize_theme_name};
 use crate::util::Loggable;
 
 mod comp;
@@ -35,6 +37,7 @@ impl AppRoot {
   }
 
   fn on_show_settings(&mut self, _: &actions::ShowSettings, _wnd: &mut Window, _cx: &mut Context<'_, Self>) {
+    info!("Showing settings");
     self.screen = Screen::Settings;
   }
 
@@ -93,22 +96,30 @@ impl CommandBus {
 
 impl Global for CommandBus {}
 
-fn main() {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Config {
+  #[serde(serialize_with = "serialize_theme_name", deserialize_with = "deserialize_theme_name")]
+  theme: Theme,
+}
+
+fn main() -> anyhow::Result<()> {
   let (tx_chunks, rx_chunks) = mpsc::channel::<AgentMessageChunk>(100);
   let (tx_cmds, rx_cmds) = mpsc::channel::<Command>(100);
+
+  env_logger::init();
 
   let h_engine = std::thread::spawn(move || {
     let rt = tokio::runtime::Runtime::new()
       .expect("Failed to initialize tokio async runtime");
 
     rt.block_on(async move {
-      let mut engine = GameEngine::new();
+      let mut engine = NovelCraftEngine::new(NovelCraftConfig::default());
       let mut rx_cmds = rx_cmds;
 
       while let Some(cmd) = rx_cmds.recv().await {
         match cmd {
           Command::SwitchProfile(profile_id) => {
-            engine = engine.with_profile_id(profile_id);
+            engine.set_active_profile(Some(profile_id));
           }
           Command::Prompt(prompt) => {
             engine.prompt(prompt, tx_chunks.clone()).await.warn();
@@ -118,27 +129,47 @@ fn main() {
     });
   });
 
-  application().run(|app: &mut App| {
-    app.open_window(WindowOptions::default(), |_wnd, app| app.new(|cx| {
-      // TODO: read theme from user preferences
-      cx.set_global(Theme::default());
-      cx.set_global(CommandBus(tx_cmds));
+  let config = load_config()?;
 
-      AppRoot {
-        screen: Screen::Home,
-        rx_chunks,
-        screen_home:           cx.new(|cx| HomeScreen::create(cx)),
-        screen_settings:       cx.new(|cx| SettingsScreen::create(cx)),
-        screen_create_story:   cx.new(|cx| CreateStoryScreen::create(cx)),
-        screen_story_overview: cx.new(|cx| StoryOverviewScreen::create(cx)),
-        screen_story_gameplay: cx.new(|cx| StoryGameplayScreen::create(cx)),
-      }
-    }))
+  application().run(|cx: &mut App| {
+    cx.set_global(config.theme);
+    cx.set_global(CommandBus(tx_cmds));
+
+    cx.open_window(WindowOptions::default(), |_wnd, cx| {
+      cx.new(|cx| {
+        AppRoot {
+          screen: Screen::Home,
+          rx_chunks,
+          screen_home:           cx.new(|cx| HomeScreen::create(cx)),
+          screen_settings:       cx.new(|cx| SettingsScreen::create(cx)),
+          screen_create_story:   cx.new(|cx| CreateStoryScreen::create(cx)),
+          screen_story_overview: cx.new(|cx| StoryOverviewScreen::create(cx)),
+          screen_story_gameplay: cx.new(|cx| StoryGameplayScreen::create(cx)),
+        }
+      })
+    })
     .unwrap();
-    app.activate(true);
+    cx.activate(true);
   });
 
   let _ = h_engine.join();
+  Ok(())
+}
+
+fn load_config() -> anyhow::Result<Config> {
+  let path = dirs::config_dir().expect("Failed to read OS-specific config directory");
+  let path = path.join("NovelCraft").join("gui.config.json");
+  if !path.parent().unwrap().exists() {
+    std::fs::create_dir_all(&path)?;
+  }
+
+  match std::fs::read_to_string(path) {
+    Ok(config) => Ok(serde_json::from_str(&config)?),
+    Err(e) => {
+      warn!("Failed to read config file: {e}");
+      Ok(Config::default())
+    }
+  }
 }
 
 #[derive(Debug, Clone)]

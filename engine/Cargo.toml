@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+dirs.workspace = true
 log.workspace = true
 env_logger.workspace = true
 itertools.workspace = true
@@ -15,7 +16,6 @@ tokio.workspace = true
 
 bytes = "1.11.1"
 chrono = "0.4"
-dirs = "6"
 futures = "0.3"
 kiruklaw-agent-loop = { git = "https://github.com/Kiruse/kiruklaw", package = "kiruklaw-agent-loop" }
 reqwest = { version = "0.12", features = ["stream", "json"] }

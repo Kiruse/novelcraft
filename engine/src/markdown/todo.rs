@@ -4,7 +4,7 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
+use crate::error::EngineError;
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TodoItem {
@@ -14,9 +14,9 @@ pub struct TodoItem {
 
 impl TodoItem {
   /// Parse a single markdown TODO list item.
-  pub fn parse(src: &str) -> Result<Self, AppError> {
+  pub fn parse(src: &str) -> Result<Self, EngineError> {
     if src.contains("\n") {
-      return Err(AppError::input("expected single-line string"));
+      return Err(EngineError::input("expected single-line string"));
     }
 
     let checked = if src.starts_with("[ ]") {
@@ -24,7 +24,7 @@ impl TodoItem {
     } else if src.starts_with("[x]") {
       true
     } else {
-      return Err(AppError::validation("invalid todo item"));
+      return Err(EngineError::validation("invalid todo item"));
     };
 
     Ok(TodoItem {
@@ -52,7 +52,7 @@ impl Display for TodoItem {
 pub struct TodoList(pub Vec<TodoItem>);
 
 impl TodoList {
-  pub fn parse(src: &str) -> Result<Self, AppError> {
+  pub fn parse(src: &str) -> Result<Self, EngineError> {
     Ok(Self(src.lines().map(TodoItem::parse).collect::<Result<_, _>>()?))
   }
 
@@ -200,7 +200,7 @@ impl<'a> TodoListDiffer<'a> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::error::AppError;
+  use crate::error::EngineError;
 
   fn item(checked: bool, content: &str) -> TodoItem {
     TodoItem { checked, content: content.to_string() }
@@ -233,13 +233,13 @@ mod tests {
   #[test]
   fn todo_item_parse_rejects_multiline() {
     let err = TodoItem::parse("[ ] line1\n[ ] line2").unwrap_err();
-    assert!(matches!(err, AppError::Input(_)));
+    assert!(matches!(err, EngineError::Input(_)));
   }
 
   #[test]
   fn todo_item_parse_rejects_invalid_prefix() {
     let err = TodoItem::parse("[-] not a todo").unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(err, EngineError::Validation(_)));
   }
 
   // --- TodoList::parse ---
@@ -269,7 +269,7 @@ mod tests {
   #[test]
   fn todo_list_parse_invalid_item_propagates_error() {
     let err = TodoList::parse("[ ] ok\n[-] bad").unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(err, EngineError::Validation(_)));
   }
 
   // --- TodoList::diff ---

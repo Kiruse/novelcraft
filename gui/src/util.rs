@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 pub use log::Level as LogLevel;
 
+#[allow(unused)]
 pub trait Loggable {
   fn log(&self, level: LogLevel);
 

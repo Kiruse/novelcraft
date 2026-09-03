@@ -4,7 +4,7 @@ use kiruklaw_agent_loop::ModelConfig;
 use log::warn;
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
+use crate::error::EngineError;
 use crate::game::profile::ProfileV1;
 use crate::paths;
 use crate::util::{deserialize, ensure_dir, serialize};
@@ -40,30 +40,15 @@ pub struct NovelCraftConfig {
 }
 
 impl NovelCraftConfig {
-  #[inline]
-  pub fn with_active_profile(self, profile_id: String) -> Self {
-    Self {
-      active_profile: Some(profile_id),
-      ..self
-    }
-  }
-  #[inline]
-  pub fn without_active_profile(self) -> Self {
-    Self {
-      active_profile: None,
-      ..self
-    }
-  }
-
-  pub async fn load() -> Result<NovelCraftConfig, AppError> {
+  pub async fn load() -> Result<NovelCraftConfig, EngineError> {
     deserialize(&Self::default_path()?).await
   }
 
-  pub async fn save(&self) -> Result<(), AppError> {
+  pub async fn save(&self) -> Result<(), EngineError> {
     serialize(&Self::default_path()?, self).await
   }
 
-  fn default_path() -> Result<PathBuf, AppError> {
+  fn default_path() -> Result<PathBuf, EngineError> {
     Ok(paths::config_dir()?.join("config.json"))
   }
 }
@@ -105,7 +90,7 @@ impl Models {
     vec![&self.dungeon_master, &self.suggestions]
   }
 
-  pub async fn load() -> Result<Models, AppError> {
+  pub async fn load() -> Result<Models, EngineError> {
     let path = Self::config_path()?;
     if path.exists() {
       crate::util::deserialize::<Models>(&path).await
@@ -118,13 +103,13 @@ impl Models {
     }
   }
 
-  pub async fn save(&self) -> Result<(), AppError> {
+  pub async fn save(&self) -> Result<(), EngineError> {
     let path = Self::config_path()?;
     ensure_dir(&path).await?;
     crate::util::serialize(&path, self).await
   }
 
-  fn config_path() -> Result<PathBuf, AppError> {
+  fn config_path() -> Result<PathBuf, EngineError> {
     paths::config_dir().map(|p| p.join("models.json"))
   }
 }
