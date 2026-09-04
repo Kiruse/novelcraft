@@ -85,6 +85,10 @@ novelcraft/
 - **Within engine**: Standard Rust `mod`/`use` paths. No special aliases.
 - **GUI depends on engine**: `use novelcraft_engine::commands::...` (or re-exports from `novelcraft_engine::*`).
 
+### gpui Action Dispatch
+
+Inside event handlers (`on_click`, etc.), always dispatch actions via `window.dispatch_action(Box<dyn Action>, cx)` — never `cx.dispatch_action` (fails with "window not found" during event handling, since the window is mid-update). `App::dispatch_action` is for app-level/global dispatch outside window updates (timers, menus). See [GUI Architecture](./docs/gui-architecture.md) for details.
+
 ### AI / Model Configuration
 
 Models are configured in Rust, persisted to disk as JSON, and held in `AppState`.

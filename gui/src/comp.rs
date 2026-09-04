@@ -1,5 +1,6 @@
 use gpui::{
-  Div, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div, text,
+  Action, Div, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+  div, text,
 };
 
 use crate::{actions::ShowSettings, theme::Theme};
@@ -22,6 +23,6 @@ pub(crate) fn settings_gear() -> impl IntoElement {
     .right_4()
     .cursor_pointer()
     .hover(|style| style.opacity(0.7))
-    .on_click(move |_, _, cx| cx.dispatch_action(&ShowSettings))
+    .on_click(|_, window, cx| window.dispatch_action(ShowSettings.boxed_clone(), cx))
     .child(text!("\u{2699}"))
 }

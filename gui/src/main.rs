@@ -1,6 +1,6 @@
 use gpui::*;
 use gpui_platform::application;
-use log::{info, warn};
+use log::*;
 use novelcraft_engine::config::NovelCraftConfig;
 use novelcraft_engine::{AgentMessageChunk, game::engine::NovelCraftEngine};
 use schemars::JsonSchema;
@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::comp::root;
 use crate::screens::*;
-use crate::theme::{Theme, serialize_theme_name, deserialize_theme_name};
+use crate::theme::{Theme, deserialize_theme_name, serialize_theme_name};
 use crate::util::Loggable;
 
 mod comp;
@@ -29,43 +29,21 @@ struct AppRoot {
 }
 
 impl AppRoot {
-  fn on_back(&mut self, _: &actions::Back, _wnd: &mut Window, _cx: &mut Context<'_, Self>) {
+  fn on_back(&mut self) {
     self.screen = match std::mem::take(&mut self.screen) {
       Screen::StoryGameplay(id) => Screen::StoryOverview(id),
       _ => Screen::Home,
     };
-  }
-
-  fn on_show_settings(&mut self, _: &actions::ShowSettings, _wnd: &mut Window, _cx: &mut Context<'_, Self>) {
-    info!("Showing settings");
-    self.screen = Screen::Settings;
-  }
-
-  fn on_create_story(&mut self, _: &actions::CreateStory, _wnd: &mut Window, _cx: &mut Context<'_, Self>) {
-    self.screen = Screen::CreateStory;
-  }
-
-  fn on_show_story(&mut self, ev: &actions::ShowStory, _wnd: &mut Window, _cx: &mut Context<'_, Self>) {
-    self.screen = Screen::StoryOverview(ev.0.clone())
-  }
-
-  fn on_play_story(&mut self, ev: &actions::PlayStory, _wnd: &mut Window, _cx: &mut Context<'_, Self>) {
-    self.screen = Screen::StoryGameplay(ev.0.clone())
   }
 }
 
 impl Render for AppRoot {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme: &Theme = cx.global();
-    let mut res = root(&theme)
-      .on_action(cx.listener(Self::on_back))
-      .on_action(cx.listener(Self::on_show_settings))
-      .on_action(cx.listener(Self::on_create_story))
-      .on_action(cx.listener(Self::on_show_story))
-      .on_action(cx.listener(Self::on_play_story));
+    let mut res = root(&theme);
     match &self.screen {
-      Screen::Home        => res = res.child(self.screen_home.clone()),
-      Screen::Settings    => res = res.child(self.screen_settings.clone()),
+      Screen::Home => res = res.child(self.screen_home.clone()),
+      Screen::Settings => res = res.child(self.screen_settings.clone()),
       Screen::CreateStory => res = res.child(self.screen_create_story.clone()),
       Screen::StoryOverview(id) => {
         cx.update_entity(&self.screen_story_overview, |screen, _cx| {
@@ -84,6 +62,18 @@ impl Render for AppRoot {
   }
 }
 
+fn on_screen_action<A: Action>(
+  cx: &mut App,
+  root: &Entity<AppRoot>,
+  to: impl Fn(&A) -> Screen + 'static,
+) {
+  let root = root.clone();
+  cx.on_action(move |action: &A, cx| {
+    let screen = to(action);
+    root.update(cx, |root, _cx| root.screen = screen);
+  });
+}
+
 #[derive(Debug)]
 pub(crate) struct CommandBus(mpsc::Sender<Command>);
 
@@ -98,7 +88,10 @@ impl Global for CommandBus {}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Config {
-  #[serde(serialize_with = "serialize_theme_name", deserialize_with = "deserialize_theme_name")]
+  #[serde(
+    serialize_with = "serialize_theme_name",
+    deserialize_with = "deserialize_theme_name"
+  )]
   theme: Theme,
 }
 
@@ -109,8 +102,7 @@ fn main() -> anyhow::Result<()> {
   env_logger::init();
 
   let h_engine = std::thread::spawn(move || {
-    let rt = tokio::runtime::Runtime::new()
-      .expect("Failed to initialize tokio async runtime");
+    let rt = tokio::runtime::Runtime::new().expect("Failed to initialize tokio async runtime");
 
     rt.block_on(async move {
       let mut engine = NovelCraftEngine::new(NovelCraftConfig::default());
@@ -135,18 +127,32 @@ fn main() -> anyhow::Result<()> {
     cx.set_global(config.theme);
     cx.set_global(CommandBus(tx_cmds));
 
-    cx.open_window(WindowOptions::default(), |_wnd, cx| {
-      cx.new(|cx| {
-        AppRoot {
-          screen: Screen::Home,
-          rx_chunks,
-          screen_home:           cx.new(|cx| HomeScreen::create(cx)),
-          screen_settings:       cx.new(|cx| SettingsScreen::create(cx)),
-          screen_create_story:   cx.new(|cx| CreateStoryScreen::create(cx)),
-          screen_story_overview: cx.new(|cx| StoryOverviewScreen::create(cx)),
-          screen_story_gameplay: cx.new(|cx| StoryGameplayScreen::create(cx)),
-        }
-      })
+    let root = cx.new(|cx| AppRoot {
+      screen: Screen::Home,
+      rx_chunks,
+      screen_home: cx.new(|cx| HomeScreen::create(cx)),
+      screen_settings: cx.new(|cx| SettingsScreen::create(cx)),
+      screen_create_story: cx.new(|cx| CreateStoryScreen::create(cx)),
+      screen_story_overview: cx.new(|cx| StoryOverviewScreen::create(cx)),
+      screen_story_gameplay: cx.new(|cx| StoryGameplayScreen::create(cx)),
+    });
+
+    cx.on_action({
+      let root = root.clone();
+      move |_: &actions::Back, cx| root.update(cx, |root, _cx| root.on_back())
+    });
+    on_screen_action(cx, &root, |_: &actions::ShowSettings| Screen::Settings);
+    on_screen_action(cx, &root, |_: &actions::CreateStory| Screen::CreateStory);
+    on_screen_action(cx, &root, |ev: &actions::ShowStory| {
+      Screen::StoryOverview(ev.0.clone())
+    });
+    on_screen_action(cx, &root, |ev: &actions::PlayStory| {
+      Screen::StoryGameplay(ev.0.clone())
+    });
+
+    cx.open_window(WindowOptions::default(), {
+      let root = root.clone();
+      move |_, _| root.clone()
     })
     .unwrap();
     cx.activate(true);
@@ -190,14 +196,7 @@ mod actions {
 
   use crate::StoryId;
 
-  actions!(
-    nav,
-    [
-      Back,
-      ShowSettings,
-      CreateStory,
-    ]
-  );
+  actions!(nav, [Back, ShowSettings, CreateStory,]);
 
   #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema, Action)]
   #[action(namespace = nav)]

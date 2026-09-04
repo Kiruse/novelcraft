@@ -194,6 +194,44 @@ All styling uses gpui's `Styled` trait, which provides Tailwind-like methods on 
 .on_hover(|&is_hovering: &bool, window, cx| { ... })
 ```
 
+### Dispatching Actions
+
+Inside event handlers (`on_click`, `on_mouse_down`, etc.), always dispatch actions via `Window::dispatch_action`, never `App::dispatch_action`. During event handling the window is mid-update (its slot in `cx.windows` is temporarily taken), so the app-level synchronous re-entrant dispatch fails and logs "window not found". `Window::dispatch_action` defers the dispatch via `cx.defer` — this is the pattern Zed's own UI components use.
+
+```rust
+// Correct: window-scoped dispatch (defers via cx.defer)
+.on_click(|_, window, cx| window.dispatch_action(ShowSettings.boxed_clone(), cx))
+
+// Wrong: app-level dispatch inside an event handler ("window not found")
+.on_click(|_, _, cx| cx.dispatch_action(&ShowSettings))
+```
+
+`App::dispatch_action` is reserved for app-level/global dispatch outside window updates (e.g. from timers or menus).
+
+Navigation actions (`Back`, `ShowSettings`, `CreateStory`, `ShowStory`, `PlayStory`) are handled by app-level global listeners registered once in `main()`. These listeners receive actions in the bubble phase after no element handler consumes them, and run both for actions dispatched through a window (`Window::dispatch_action`) and for global dispatches (`App::dispatch_action`). `AppRoot` is created via `cx.new` before `open_window` and passed into the window as its root view. The generic helper `on_screen_action(cx, root, to)` registers a listener via `App::on_action` that sets `root.screen` to the `Screen` returned by the mapping closure — the four trivial navigation actions each get a one-line registration. `Back` is the exception: its target depends on the current screen, so it gets an explicit `cx.on_action` forwarding to the `&mut self` method `AppRoot::on_back`:
+
+```rust
+let root = cx.new(|cx| AppRoot { /* ... */ });
+
+// Back's target depends on the current screen — explicit handler:
+cx.on_action({
+  let root = root.clone();
+  move |_: &actions::Back, cx| root.update(cx, |root, _cx| root.on_back())
+});
+
+// Trivial navigation — one line per action:
+on_screen_action(cx, &root, |_: &actions::ShowSettings| Screen::Settings);
+on_screen_action(cx, &root, |_: &actions::CreateStory| Screen::CreateStory);
+on_screen_action(cx, &root, |ev: &actions::ShowStory| {
+  Screen::StoryOverview(ev.0.clone())
+});
+on_screen_action(cx, &root, |ev: &actions::PlayStory| {
+  Screen::StoryGameplay(ev.0.clone())
+});
+
+cx.open_window(WindowOptions::default(), move |_, _| root.clone()).unwrap();
+```
+
 ### Callbacks with View State
 
 Use `cx.listener()` to capture view state in callbacks:

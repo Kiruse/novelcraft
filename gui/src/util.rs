@@ -45,7 +45,7 @@ pub trait Loggable {
 impl<E: Display> Loggable for Result<(), E> {
   fn log(&self, level: LogLevel) {
     match self {
-      Ok(_) => {},
+      Ok(_) => {}
       Err(e) => log::log!(level.into(), "Err: {e}"),
     }
   }
