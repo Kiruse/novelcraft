@@ -14,6 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 log.workspace = true
+unicode-segmentation.workspace = true
 
 novelcraft-engine = { path = "../engine" }
 gpui = { git = "https://github.com/zed-industries/zed", branch = "main" }

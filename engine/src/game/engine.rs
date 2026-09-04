@@ -40,6 +40,39 @@ impl NovelCraftEngine {
     }
   }
 
+  pub fn set_config(&mut self, config: NovelCraftConfig) {
+    config.contribute(self.agent_loop.as_mut());
+    self.config = config;
+  }
+
+  pub fn set_active_profile(&mut self, profile_id: Option<String>) {
+    self.config.active_profile = profile_id.clone();
+
+    if let Some(session) = self.session.as_mut() {
+      let profile = self.config.profiles
+        .iter()
+        .find(|p| Some(&p.id) == profile_id.as_ref())
+        .cloned()
+        .map(Arc::new);
+      session.gamestate.set_profile(profile);
+
+      self.agent_loop = build_agent_loop(
+        std::mem::take(&mut self.agent_loop),
+        &self.config,
+        Some(session),
+      );
+    }
+  }
+
+  pub fn set_session(&mut self, session: Option<SessionV1>) {
+    self.session = session;
+    self.agent_loop = build_agent_loop(
+      std::mem::take(&mut self.agent_loop),
+      &self.config,
+      self.session.as_ref(),
+    );
+  }
+
   #[inline(always)]
   fn session(&self) -> Result<&SessionV1, EngineError> {
     self.session.as_ref().ok_or(EngineError::state("no active session"))
@@ -91,26 +124,6 @@ impl NovelCraftEngine {
       })
       .await;
     batch.and_then(|b| b.pages.get(local_index).cloned())
-  }
-
-  pub fn set_active_profile(&mut self, profile_id: Option<String>) {
-    self.config.active_profile = profile_id.clone();
-
-    if let Some(session) = self.session.as_mut() {
-      let profile = self.config.profiles
-        .iter()
-        .find(|p| Some(&p.id) == profile_id.as_ref())
-        .cloned()
-        .map(Arc::new);
-      session.gamestate.set_profile(profile);
-    }
-
-    self.agent_loop = Self::build_agent_loop(&self.config, self.session.as_ref());
-  }
-
-  pub fn set_session(&mut self, session: Option<SessionV1>) {
-    self.session = session;
-    self.agent_loop = Self::build_agent_loop(&self.config, self.session.as_ref());
   }
 
   /// Get the active profile. Resolves the [NovelCraftConfig::active_profile]
@@ -205,7 +218,7 @@ impl NovelCraftEngine {
     Self::truncate_batches(&sid, batch_index).await?;
     let session = SessionV1::load(&sid, &self.config.profiles).await?;
     self.session = Some(session);
-    self.agent_loop = Self::build_agent_loop(&self.config, self.session.as_ref());
+    // NOTE: no need to rebuild agent_loop because tools didn't change
     Ok(())
   }
 
@@ -266,31 +279,27 @@ impl NovelCraftEngine {
     Ok(ConversationMessage::System { content: f.finish() })
   }
 
-  /// Build the agent loop from the given config & session.
-  ///
-  /// Note that the session's gameplay modules will be cloned. They cannot be
-  /// borrowed as the underlying [AgentLoop] system uses toolsets as "local
-  /// storage," and each loop, including subagents, has its own local storage.
-  /// Thus, for optimization, consider using `Arc<...>` in the module config
-  /// where values are expected to potentially become very large (e.g. NPCs),
-  /// which is generally also fine as modules are deserialized only once, and
-  /// henceforth readonly anyways.
-  fn build_agent_loop(config: &NovelCraftConfig, session: Option<&SessionV1>) -> Option<AgentLoop<GameStateView>> {
-    let Some(session) = session else { return None };
-    let model_config = config.models.dungeon_master.clone();
-    Some(AgentLoop::<GameStateView>::new(model_config)
-      .with_max_steps(20)
-      .with_toolsets(
-        session.modules
-          .values()
-          .cloned()
-          .map(|module| module.toolset())
-      ))
-  }
-
   #[inline(always)]
   fn module_ids(&self) -> Vec<String> {
     let Some(session) = &self.session else { return vec![] };
     session.modules().cloned().collect()
   }
+}
+
+/// Build a new agent loop. Only needed when `session` changed. When only
+/// `config` changed, prefer calling [NovelCraftConfig::contribute] instead.
+fn build_agent_loop(
+  agent_loop: Option<AgentLoop<GameStateView>>,
+  config: &NovelCraftConfig,
+  session: Option<&SessionV1>,
+) -> Option<AgentLoop<GameStateView>> {
+  let Some(session) = session else { return None };
+  let mut agent_loop = agent_loop.unwrap_or_default();
+  config.contribute(Some(&mut agent_loop));
+  Some(agent_loop
+    .with_toolsets(
+      session.modules
+        .values()
+        .map(|m| m.clone().toolset())
+    ))
 }

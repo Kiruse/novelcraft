@@ -4,6 +4,8 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 **IMPORTANT:** Whenever you make changes, assert validity by running `just check`, then summarize & document the changes with the `@docs-writer` subagent.
 
+**NEVER run `cargo fmt`, `just fmt`, or `just fmt-check` in this project.** rustfmt is not well suited for formatting gpui components & element chains — it mangles the builder-call layout. Keep formatting manual.
+
 ## Architecture Overview
 
 NovelCraft is a **Rust/Cargo workspace desktop app** using gpui for rendering — fully offline-first, single-user, no server.
@@ -32,7 +34,7 @@ novelcraft/
 │   └── src/
 │       ├── lib.rs              # Crate root — re-exports modules
 │       ├── util.rs             # SSE stream parsing (StreamEvent enum, process_stream()), file I/O helpers
-│       ├── config.rs           # App configuration
+│       ├── config.rs           # App configuration (NovelCraftConfig; re-exports ModelConfig from kiruklaw-agent-loop)
 │       ├── error.rs            # Error types
 │       ├── commands/
 │       │   ├── mod.rs          # Module barrel
@@ -55,7 +57,11 @@ novelcraft/
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
 │   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, log)
 │   └── src/
-│       ├── main.rs             # Entry point — gpui app initialization
+│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig), AppRoot view, action routing
+│       ├── screens.rs          # Screen enum + screen view structs (create(cx) + Render)
+│       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
+│       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings)
+│       ├── theme.rs            # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name
 │       └── util.rs             # Loggable trait, LogLevel enum, Result<T,E> blanket impl
 └── docs/                       # Comprehensive documentation
     ├── gui-architecture.md # gpui GUI components, screens, styling conventions
@@ -76,7 +82,11 @@ novelcraft/
 | Markdown Utilities | `engine/src/markdown/` | `todo.rs` (`TodoItem`, `TodoList`, `TodoListDiff`, `TodoList::diff` — parsing & diffing with unit tests) |
 | Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
 | Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
-| GUI Entry | `gui/src/main.rs` | Binary entry point, gpui app setup |
+| GUI Entry | `gui/src/main.rs` | Engine thread, `CommandBus` global, `AppRoot` view, action routing |
+| GUI Screens | `gui/src/screens.rs` | `Screen` enum + screen view structs (`HomeScreen`, `SettingsScreen`, `CreateStoryScreen`, `StoryOverviewScreen`, `StoryGameplayScreen`) with `create(cx)` + `Render` |
+| GUI Components | `gui/src/comp.rs` | Stateless UI builder functions (`root`, `screen_root`, `top_bar`, `settings_gear`, `btn_icon_close`) |
+| GUI Text Input | `gui/src/text_input.rs` | Reusable `TextInput` component — custom `Element`, `EntityInputHandler` (IME), `init(cx)` key bindings scoped to the `"TextInput"` key context |
+| GUI Theme | `gui/src/theme.rs` | `Theme`/`ThemeKind` (bg, text colors), gpui `Global` impl, serde (de)serialization as theme name |
 | GUI Utilities | `gui/src/util.rs` | `Loggable` trait, `LogLevel` enum, blanket `impl Loggable for Result<T, E>` |
 | Path Resolution | `engine/src/commands/paths.rs` | `data_dir()`, `config_dir()` — single source of truth for filesystem paths |
 
@@ -209,11 +219,9 @@ just check
 
 # Cargo clippy
 just clippy
-
-# Cargo fmt / fmt --check
-just fmt
-just fmt-check
 ```
+
+Do not run `just fmt` / `just fmt-check` — see the note at the top of this file.
 
 ---
 
@@ -393,8 +401,8 @@ All build and development commands are in the root `justfile`.
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |
 | `just check-gui` | Cargo check (`novelcraft-gui` only) |
 | `just clippy` | Cargo clippy (entire workspace) |
-| `just fmt` | Cargo fmt (entire workspace) |
-| `just fmt-check` | Cargo fmt --check (entire workspace) |
+| `just fmt` | Cargo fmt (entire workspace) — **do not use**, see note at top |
+| `just fmt-check` | Cargo fmt --check (entire workspace) — **do not use**, see note at top |
 
 ## Key Dependencies
 
@@ -422,3 +430,4 @@ All build and development commands are in the root `justfile`.
 | `gpui` (git, Zed main) | UI framework — views, elements, styling |
 | `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |
 | `log` | Logging facade (used by `util.rs` `Loggable` trait) |
+| `unicode-segmentation` | Grapheme-boundary cursor movement (used by `text_input.rs`) |

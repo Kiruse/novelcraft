@@ -1,11 +1,11 @@
-use gpui::*;
+use gpui::{Action, App, Entity, Global, Window, WindowOptions, prelude::*};
 use gpui_platform::application;
 use log::*;
 use novelcraft_engine::config::NovelCraftConfig;
 use novelcraft_engine::{AgentMessageChunk, game::engine::NovelCraftEngine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::comp::root;
 use crate::screens::*;
@@ -14,6 +14,7 @@ use crate::util::Loggable;
 
 mod comp;
 mod screens;
+mod text_input;
 mod theme;
 mod util;
 
@@ -74,7 +75,6 @@ fn on_screen_action<A: Action>(
   });
 }
 
-#[derive(Debug)]
 pub(crate) struct CommandBus(mpsc::Sender<Command>);
 
 impl CommandBus {
@@ -116,6 +116,21 @@ fn main() -> anyhow::Result<()> {
           Command::Prompt(prompt) => {
             engine.prompt(prompt, tx_chunks.clone()).await.warn();
           }
+          Command::LoadConfig(tx) => {
+            let config = match NovelCraftConfig::load().await {
+              Ok(config) => config,
+              Err(err) => {
+                warn!("Failed to load config: {err} - using defaults");
+                NovelCraftConfig::default()
+              }
+            };
+            engine.set_config(config.clone());
+            let _ = tx.send(config);
+          }
+          Command::SaveConfig(config) => {
+            engine.set_config(*config.clone());
+            config.save().await.warn();
+          }
         }
       }
     });
@@ -124,6 +139,7 @@ fn main() -> anyhow::Result<()> {
   let config = load_config()?;
 
   application().run(|cx: &mut App| {
+    text_input::init(cx);
     cx.set_global(config.theme);
     cx.set_global(CommandBus(tx_cmds));
 
@@ -178,12 +194,15 @@ fn load_config() -> anyhow::Result<Config> {
   }
 }
 
-#[derive(Debug, Clone)]
-enum Command {
+pub(crate) enum Command {
   /// Switch profile to the one with the given ID.
   SwitchProfile(String),
   /// Submit user prompt to the game engine.
   Prompt(String),
+  /// Load the config from disk, sync it with the engine and reply with it.
+  LoadConfig(oneshot::Sender<NovelCraftConfig>),
+  /// Sync the config with the engine and persist it to disk.
+  SaveConfig(Box<NovelCraftConfig>),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Deserialize, JsonSchema)]

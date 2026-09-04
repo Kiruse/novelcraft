@@ -1,18 +1,20 @@
 use std::path::PathBuf;
 
-use kiruklaw_agent_loop::ModelConfig;
+use kiruklaw_agent_loop::AgentLoop;
+pub use kiruklaw_agent_loop::ModelConfig;
 use log::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::error::EngineError;
 use crate::game::profile::ProfileV1;
+use crate::game::state::GameStateView;
 use crate::paths;
 use crate::util::{deserialize, ensure_dir, serialize};
 
 /// Default host of llama.cpp
-const DEFAULT_HOST: &str = "http://localhost:8888/v1";
+pub const DEFAULT_HOST: &str = "http://localhost:8888/v1";
 
-const DEFAULT_SYSTEM_PROMPT: &str = r#"
+pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
 You are a Dungeon Master in a novel, modernized text adventure game session.
 Your objective is to guide the player through the story, managing your memory
 of events, updating the state of the player & NPCs, planning & tracking the
@@ -50,6 +52,14 @@ impl NovelCraftConfig {
 
   fn default_path() -> Result<PathBuf, EngineError> {
     Ok(paths::config_dir()?.join("config.json"))
+  }
+
+  /// Update the given `agent_loop` with values from this configuration.
+  pub(crate) fn contribute(&self, agent_loop: Option<&mut AgentLoop<GameStateView>>) {
+    let Some(agent_loop) = agent_loop else { return };
+    agent_loop.max_steps = self.max_agent_steps;
+    agent_loop.persona = Some(self.system_prompt.clone());
+    agent_loop.model = self.models.dungeon_master.clone();
   }
 }
 
@@ -109,6 +119,14 @@ impl Models {
     crate::util::serialize(&path, self).await
   }
 
+  /// Gets an iterator over [ModelConfig]s in this order:
+  /// 1. Dungeon Master
+  /// 2. Suggestions
+  #[inline(always)]
+  pub fn iter(&self) -> ModelIterator<'_> {
+    ModelIterator(self, 0)
+  }
+
   fn config_path() -> Result<PathBuf, EngineError> {
     paths::config_dir().map(|p| p.join("models.json"))
   }
@@ -127,6 +145,19 @@ impl Default for Models {
         model: "zai-org/glm-4.6v-flash".to_string(),
         api_key: "".to_string(),
       },
+    }
+  }
+}
+
+pub struct ModelIterator<'a>(&'a Models, usize);
+
+impl<'a> Iterator for ModelIterator<'a> {
+  type Item = &'a ModelConfig;
+  fn next(&mut self) -> Option<Self::Item> {
+    match self.1 {
+      0 => Some(&self.0.dungeon_master),
+      1 => Some(&self.0.suggestions),
+      _ => None,
     }
   }
 }

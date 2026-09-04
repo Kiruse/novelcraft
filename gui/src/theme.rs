@@ -35,6 +35,9 @@ pub struct Theme {
   kind: ThemeKind,
   pub bg: Rgba,
   pub text: Rgba,
+  /// Color of label text
+  pub label: Rgba,
+  pub border: Rgba,
 }
 
 impl Theme {
@@ -43,6 +46,8 @@ impl Theme {
       kind: ThemeKind::Dark,
       bg: Rgba::try_from("#283333").unwrap(),
       text: Rgba::try_from("#E1F5F5").unwrap(),
+      label: Rgba::try_from("#E87813").unwrap(),
+      border: Rgba::try_from("#666").unwrap().alpha(0.25),
     }
   }
 
@@ -62,11 +67,16 @@ impl Default for Theme {
   }
 }
 
-pub(crate) fn serialize_theme_name<S: Serializer>(theme: &Theme, serializer: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn serialize_theme_name<S: Serializer>(
+  theme: &Theme,
+  serializer: S,
+) -> Result<S::Ok, S::Error> {
   serializer.serialize_str(theme.kind.as_str())
 }
 
-pub(crate) fn deserialize_theme_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Theme, D::Error> {
+pub(crate) fn deserialize_theme_name<'de, D: Deserializer<'de>>(
+  deserializer: D,
+) -> Result<Theme, D::Error> {
   let kind = String::deserialize(deserializer)?;
   Theme::by_name(&kind)
     .map_err(|e| serde::de::Error::custom(format!("Failed to deserialize theme kind: {e}")))

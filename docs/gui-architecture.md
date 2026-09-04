@@ -4,145 +4,295 @@ This document describes the gpui-based GUI crate (`gui/`, binary `novelcraft-gui
 
 ## Overview
 
-The GUI is a native Rust binary using the **gpui** framework (from the Zed editor repo) for rendering. There is no HTML, no CSS, no JavaScript. Screens are plain Rust functions returning `Div` elements. Navigation between screens is handled by an enum-based state machine in the root view.
+The GUI is a native Rust binary using the **gpui** framework (from the Zed editor repo) for rendering. There is no HTML, no CSS, no JavaScript. Screens are gpui view structs constructed via a `create(cx)` constructor and rendered through the `Render` trait. Navigation between screens is handled by an enum-based state machine in the root view.
 
 ### Key Technologies
 
 - **gpui** (git, Zed main) — UI framework: views, elements, Tailwind-like styling via the `Styled` trait
 - **gpui_platform** (git, Zed main) — Platform integration: window management, app lifecycle
 - **novelcraft-engine** (path) — Business logic library for data persistence, LLM proxy, game loop
+- **unicode-segmentation** — Grapheme-boundary cursor movement (used by the `TextInput` component)
 
 ## Architecture
 
 ### Screen-Based Navigation
 
-The `Screen` enum (`gui/src/screens/mod.rs`) drives navigation. `AppRoot` matches on the current `Screen` variant and delegates to the corresponding screen's `render()` function.
+The `Screen` enum (`gui/src/screens.rs`) drives navigation. `AppRoot` matches on the current `Screen` variant and attaches the corresponding screen entity as a child.
 
 ```rust
+#[derive(Debug, Clone, Default)]
 pub enum Screen {
-  Gameplay,
-  Home(home::HomeData),
-  Settings(Theme),
-  Story,
+  #[default]
+  Home,
+  Settings,
+  CreateStory,
+  StoryOverview(StoryId),
+  StoryGameplay(StoryId),
 }
 ```
 
-Each screen module exposes a `pub fn render(...) -> Div` function. Screens are not gpui `View` structs — they are stateless rendering functions that return styled `Div` element trees. State lives in `AppRoot` (or engine-level persistence).
+Each screen is a gpui view struct with a `create(cx)` constructor and a `Render` impl. Screens with no local state are unit structs; screens that need state hold it as fields (e.g. `StoryOverviewScreen.id: StoryId`).
 
-### Screen Functions
+### Screens
 
-| Screen | Module | Signature |
-|--------|--------|-----------|
-| Home | `screens::home` | `render(data: &HomeData, gear: impl IntoElement) -> Div` |
-| Settings | `screens::settings` | `render(theme: &Theme, on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div` |
-| Gameplay | `screens::gameplay` | `render() -> Div` |
-| Story | `screens::story` | `render() -> Div` |
+| Screen | Struct | State |
+|--------|--------|-------|
+| Home | `HomeScreen` | none (unit struct) |
+| Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
+| Create Story | `CreateStoryScreen` | none (unit struct) |
+| Story Overview | `StoryOverviewScreen` | `id: StoryId` |
+| Story Gameplay | `StoryGameplayScreen` | `id: StoryId` |
+
+All screen structs live in `gui/src/screens.rs` — one file, one section per screen. `CreateStoryScreen`, `StoryOverviewScreen`, and `StoryGameplayScreen` are currently placeholders (`render` returns an empty `div()`).
 
 ### AppRoot View
 
 `AppRoot` (`gui/src/main.rs`) is the sole top-level gpui `View`. It holds:
 
 - `screen: Screen` — current screen variant
-- `settings_gear: Entity<SettingsGear>` — the gear icon as a gpui entity, shared across renders
-- `rx_chunks` / `tx_cmds` — channels for engine communication
+- `screen_home` / `screen_settings` / `screen_create_story` / `screen_story_overview` / `screen_story_gameplay` — `Entity<...Screen>` for each screen, created once via `cx.new(|cx| ...Screen::create(cx))`
+- `rx_chunks` — `mpsc::Receiver<AgentMessageChunk>` for engine communication (the `mpsc::Sender` side lives in the `CommandBus` global and in the engine thread)
 
-The `Render` impl matches on `self.screen` and calls the appropriate screen function. Navigation is performed by mutating `self.screen` and calling `cx.notify()`.
+The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed.
+
+Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. `Command` is a `pub(crate)` enum with four variants:
+
+| Variant | Payload | Semantics |
+|---------|---------|-----------|
+| `SwitchProfile(String)` | profile ID | Fire-and-forget: `engine.set_active_profile(Some(id))` |
+| `Prompt(String)` | user prompt | Fire-and-forget: `engine.prompt(...)`, chunks streamed over the `mpsc` chunk channel |
+| `LoadConfig(oneshot::Sender<NovelCraftConfig>)` | reply channel | Request/response: engine thread loads `{configDir}/NovelCraft/config.json` via `NovelCraftConfig::load()` (falling back to `NovelCraftConfig::default()` on error, logged as a warning), syncs it via `NovelCraftEngine::set_config`, replies over the channel |
+| `SaveConfig(Box<NovelCraftConfig>)` | boxed config | Fire-and-forget: engine thread syncs via `engine.set_config`, then persists with `config.save().await` |
+
+`Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen).
 
 ## Reusable Components (`gui/src/comp.rs`)
 
-### `root(theme: &Theme) -> Div`
+`comp.rs` contains **stateless builder functions** — plain functions returning styled elements. They hold no state and register no key bindings.
 
-Returns a `Div` pre-configured with the theme's background and text color. All screen render functions wrap their content in `root(&data.theme)` for consistent theming.
+| Function | Returns | Purpose |
+|----------|---------|---------|
+| `root(theme: &Theme)` | `Div` | Root of most screens: flex column, items centered, theme bg + text color |
+| `screen_root()` | `Div` | Screen content wrapper: flex column, items centered, `w_full h_full` |
+| `top_bar()` | `Div` | Title bar row: `relative w_full`, flex row, `justify_center` |
+| `settings_gear()` | `impl IntoElement` | Gear icon button (see below) |
+| `btn_icon_close()` | `impl IntoElement` | Close icon button (see below) |
 
-### `SettingsGear` (gpui View)
+### `settings_gear()` and `btn_icon_close()`
 
-A `pub(crate)` gpui `View` that renders a gear icon (Unicode `\u{2699}`, ⚙) with interactive behavior.
+Both are icon buttons with the same interaction pattern:
 
-**Construction:**
+- `settings_gear()` renders `"⚙"` (`\u{2699}`), `btn_icon_close()` renders `"×"` (`\u{00d7}`), both at `text_xl()`
+- `.id(...)` for interactivity, `.absolute().right_4()` positioning inside a `top_bar()`
+- Pointer cursor on hover, opacity drops to 0.7 on hover
+- `on_click` dispatches an action via `window.dispatch_action(...)` — `ShowSettings` for the gear, `Back` for the close button. The global action listeners in `main()` perform the navigation.
+
+This is the "stateless component + action dispatch" pattern: the component does not know about screens; navigation is decided by the app-level action handlers.
+
+## Component Module Convention
+
+- **Stateless builders** — free functions in `gui/src/comp.rs` (see above).
+- **Stateful interactive components** — standalone modules `gui/src/<component>.rs` with their own struct, `create(cx)` constructor, `Render` impl, and (when needed) a module-level `init(cx)` that registers key bindings. `gui/src/text_input.rs` is the current example: it defines a custom `Element`, a scoped key context, and an `EntityInputHandler`.
+
+`init(cx)` functions are called once from `application().run(...)` in `main.rs`, before any window is opened.
+
+## TextInput Component (`gui/src/text_input.rs`)
+
+A reusable text input component (adapted from Zed's official gpui input example). One struct serves both single-line and multiline modes via a `multiline: bool` field. `SettingsScreen` is its first consumer. The file still carries `#![allow(dead_code)]` because parts of its API surface (e.g. `on_submit`, `reset`) are not exercised yet.
+
+### Public API
 
 ```rust
-SettingsGear::new(|_ev: &ClickEvent, _window: &mut Window, cx: &mut App| {
-    // navigation logic
-})
+pub(crate) struct TextInput {
+  pub multiline: bool,                 // single-line vs multiline mode
+  pub placeholder: SharedString,       // shown at 35% opacity when content is empty
+  pub on_submit: Option<SubmitCallback>,
+  // ... private: focus_handle, content, selected_range, selection_reversed,
+  //     marked_range, last_layout, last_multiline, last_bounds,
+  //     last_wrap_width, is_selecting
+}
+
+pub(crate) type SubmitCallback = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
+impl TextInput {
+  pub(crate) fn create(multiline: bool, cx: &mut Context<Self>) -> Self;
+  pub(crate) fn value(&self) -> &str;
+  pub(crate) fn set_value(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>);
+  pub(crate) fn reset(&mut self, cx: &mut Context<Self>);
+}
 ```
 
-**Behavior:**
+`on_submit` receives the current content; the callback decides whether to clear the field afterwards (via `set_value`/`reset`) — the component never clears on its own.
 
-- Renders `"⚙"` at `text_xl()` size
-- Cursor changes to pointer on hover (`cursor_pointer()`)
-- Opacity drops to 0.7 on hover (`hover(|style| style.opacity(0.7))`)
-- Click invokes the callback provided at construction time
-- The callback is wrapped in `Arc` internally to satisfy gpui's `'static` requirements
-- Requires an `.id("settings-gear")` for interactivity (stateful element)
+**Usage:**
 
-**Usage pattern:** `SettingsGear` is instantiated as a gpui `Entity` in `AppRoot`'s constructor. The click callback captures a weak reference to `AppRoot` and mutates the screen state. The entity is passed to `screens::home::render()` as an `impl IntoElement` argument.
+```rust
+use std::rc::Rc;
+
+let input = cx.new(|cx| {
+  let mut input = TextInput::create(true, cx); // multiline
+  input.placeholder = "Describe your story...".into();
+  input.on_submit = Some(Rc::new(|value: &str, _window, _cx| {
+    log::info!("submitted: {value}");
+  }));
+  input
+});
+
+// Render inside any element tree:
+// .child(input.clone())
+
+// Read / write from outside the entity:
+let text = input.read(cx).value().to_string();
+input.update(cx, |input, cx| input.reset(cx));
+```
+
+### Key Bindings
+
+`text_input::init(cx)` is called once as the first statement inside `application().run(...)` in `main.rs`. It registers all bindings via `cx.bind_keys`, **every one scoped to the `"TextInput"` key context** — so they only fire while a `TextInput` is focused. Modifier combos that differ per platform (`ctrl-a/v/c/x`) are bound in both `ctrl-*` and `cmd-*` variants for portability.
+
+| Keys | Action |
+|------|--------|
+| `backspace`, `delete` | Delete backwards / forwards (grapheme-aware) |
+| `left`, `right` | Move cursor (grapheme-aware) |
+| `up`, `down` | Move cursor by visual row (multiline only) |
+| `shift-left/right/up/down` | Extend selection |
+| `ctrl-a` / `cmd-a` | Select all |
+| `home`, `end` | See behavior table below |
+| `ctrl-v` / `cmd-v`, `ctrl-c` / `cmd-c`, `ctrl-x` / `cmd-x` | Paste / copy / cut |
+| `enter` | Newline (multiline) or submit (single-line) |
+| `ctrl-enter` | Submit (both modes) |
+| `ctrl-cmd-space` | Show character palette |
+
+The actions themselves are declared with `actions!(text_input, [Backspace, Delete, Left, Right, Up, Down, SelectLeft, SelectRight, SelectUp, SelectDown, SelectAll, Home, End, ShowCharacterPalette, Paste, Cut, Copy, Enter, Submit])`.
+
+### Single-Line vs Multiline Behavior
+
+| Behavior | `multiline: false` | `multiline: true` |
+|----------|--------------------|-------------------|
+| `Enter` | Invokes `on_submit` | Inserts `\n` |
+| `Ctrl+Enter` (Submit) | Invokes `on_submit` | Invokes `on_submit` |
+| `Up`/`Down` (+Shift) | No-op | Move/extend cursor by visual row |
+| `Home`/`End` | Start / end of content | Start / end of current *source* line |
+| Typed / IME / pasted newlines | Filtered to spaces | Preserved |
+| Height | One `line_height` | Grows with content (visual rows × `line_height`) |
+| Word wrap | No | At element width |
+| Mouse selection | Yes | Yes |
+
+Multiline mode currently has no scrolling or max-height — the field grows vertically with its content (the Settings screen's System Prompt field uses this mode).
+
+### Rendering
+
+The `Render` impl returns a container `div()` with:
+
+- `.key_context("TextInput")` — scopes the key bindings above
+- `.track_focus(&self.focus_handle(cx))` and a `Focusable` impl
+- `.cursor(CursorStyle::IBeam)` over the whole field
+- An `.on_action(cx.listener(Self::...))` handler per action — 19 total (bubble phase)
+- Mouse listeners: `on_mouse_down`, `on_mouse_up`, `on_mouse_up_out`, `on_mouse_move` (click-to-position, drag selection in both modes)
+
+The only child is an inner `div()` styled from the `Theme` global — `.p_2().bg(theme.bg).border_1().border_color(theme.text.opacity(0.25)).text_color(theme.text)` — containing the custom **`TextElement { input: cx.entity() }`**.
+
+`TextElement` implements gpui's `Element` trait with the standard three phases:
+
+- **`request_layout`** — width `relative(1.)`; height is one `line_height` in single-line mode, or (shaped visual rows × `line_height`) in multiline mode, which is what makes the field grow with content.
+- **`prepaint`** — shapes the display text (content, or placeholder at 35% opacity when empty) into `TextRun`s via `ime_runs()` (which underlines the IME marked range), then:
+  - *Single-line:* `window.text_system().shape_line(...)` → one `ShapedLine`; cursor/selection quads from `line.x_for_index`.
+  - *Multiline:* `window.text_system().shape_text(..., Some(wrap_width))` → one `WrappedLine` per **source** line, stored as `MultilineLine { start, line }` with a running UTF-8 offset. The cursor is a single quad on the cursor's visual row; a selection produces one quad per **visual** (wrapped) row, computed via `wrap_row_ranges`.
+- **`paint`** — registers the IME bridge with `window.handle_input(&focus_handle, ElementInputHandler::new(bounds, input), cx)`, paints selection quads → lines (`TextAlign::Left`) → cursor quad (only while focused), and writes the shaped lines plus `last_bounds`/`last_wrap_width` back onto the input for hit-testing and keyboard navigation.
+
+Module-private helpers used by both the element and the input:
+
+| Helper | Purpose |
+|--------|---------|
+| `line_entry_index_for_offset` | Map a content offset → `(source line ix, local offset)` |
+| `rows_before` | Visual rows above a given source line |
+| `wrap_row_ranges` | Byte ranges of each visual row within a `WrappedLine` |
+| `row_for_local` | Visual row containing a local offset |
+| `x_for_local_in_row` | X position of a local offset within a visual row |
+| `ime_runs` | Build `TextRun`s, underlining the IME marked range |
+
+### IME Support
+
+`TextInput` implements `EntityInputHandler` (registered per-paint via `ElementInputHandler`), giving it full IME / candidate-window support:
+
+- UTF-16 ↔ UTF-8 offset conversion for all range-based methods (`offset_from_utf16`, `offset_to_utf16`, …)
+- The marked (composition) range is tracked and rendered underlined via `ime_runs()`
+- **Single-line newline filtering is centralized**: `filtered_text()` replaces `\n`/`\r` with spaces and is applied inside both `replace_text_in_range` and `replace_and_mark_text_in_range`, so IME commits *and* clipboard paste are both covered
+- `bounds_for_range` / `character_index_for_point` position the IME candidate window; multiline mode resolves through the per-visual-row math helpers
 
 ## Screen Details
 
-### Home Screen (`gui/src/screens/home.rs`)
+### Home Screen (`HomeScreen`)
 
-Displays the app title and a settings gear icon.
+`screen_root()` containing a `top_bar()` with the app title `"NovelCraft"` at `text_3xl()` (centered) and `settings_gear()` (absolute top-right). Clicking the gear dispatches `ShowSettings`, transitioning to `Screen::Settings`.
 
-**Signature:**
+### Settings Screen (`SettingsScreen`)
 
-```rust
-pub fn render(data: &HomeData, gear: impl IntoElement) -> Div
-```
+A functional editor for the engine's `NovelCraftConfig` (persisted at `{configDir}/NovelCraft/config.json`). The top bar keeps the title `"Settings"` at `text_3xl()` (centered) and `btn_icon_close()` (absolute top-right); clicking `×` dispatches `Back`, which `AppRoot::on_back` maps to `Screen::Home` (or `Screen::StoryOverview` when returning from gameplay).
 
-**Parameters:**
+#### Fields
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `data` | `&HomeData` | Contains `theme: Theme` |
-| `gear` | `impl IntoElement` | The settings gear element (typically an `Entity<SettingsGear>`) |
+| Screen field | Type | Editor |
+|--------------|------|--------|
+| `config` | `Option<NovelCraftConfig>` | — (populated by `load()`, kept as the save base) |
+| `max_agent_steps` | `Entity<TextInput>` | single-line, placeholder `"10"` |
+| `system_prompt` | `Entity<TextInput>` | multiline, no placeholder |
+| `models` | `Vec<ModelFields>` | two groups (`const MODEL_GROUPS: [&str; 2] = ["Dungeon Master", "Suggestions"]`) |
 
-**Layout:**
+`ModelFields` holds one `Entity<TextInput>` per `ModelConfig::OpenAi` field — `base_url` (placeholder `DEFAULT_HOST`, i.e. `http://localhost:8888/v1`), `api_key`, and `model`. All inputs are built in a module-private `text_input(cx, multiline, placeholder)` helper; `create(cx)` assembles the screen and immediately calls `load(cx)`.
 
-- Root: `root(&data.theme)`, positioned `relative()`, flex column, items centered
-- Heading row: `.flex().flex_row().justify_between().w_full()` — places the title left-aligned and the gear icon right-aligned
-- App title: `"NovelCraft"` at `text_3xl()` (left child of heading row)
-- Gear icon: right child of heading row (the `impl IntoElement` parameter)
-
-**Navigation:** Clicking the gear icon triggers the `on_click` callback defined in `SettingsGear::new()`, which transitions `AppRoot.screen` from `Screen::Home(data)` to `Screen::Settings(data.theme.clone())`.
-
-### Settings Screen (`gui/src/screens/settings.rs`)
-
-Displays a settings header with a close button.
-
-**Signature:**
+#### Load Flow (Oneshot Request/Response)
 
 ```rust
-pub fn render(
-    theme: &Theme,
-    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> Div
+fn load(&mut self, cx: &mut Context<'_, Self>) {
+  let (tx, rx) = oneshot::channel();
+  cx.global::<CommandBus>().send(Command::LoadConfig(tx));
+  cx.spawn(async move |this, cx| {
+    if let Ok(config) = rx.await
+      && let Ok(()) = this.update(cx, |screen, cx| screen.populate(config, cx))
+    {}
+  })
+  .detach();
+}
 ```
 
-**Parameters:**
+`Command::LoadConfig` is handled on the engine thread (see the command table under [Architecture](#architecture)): it loads `{configDir}/NovelCraft/config.json` via `NovelCraftConfig::load()`, falls back to `NovelCraftConfig::default()` on error (logged as a warning), syncs the config into the engine via `NovelCraftEngine::set_config(config.clone())`, then replies over the oneshot channel. The screen's spawned future awaits the reply and populates the inputs via `this.update(cx, ...)`; the future is detached.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `theme` | `&Theme` | Theme for background and text colors |
-| `on_close` | `impl Fn(&ClickEvent, &mut Window, &mut App) + 'static` | Callback invoked when the close button is clicked |
+`populate(config, cx)` fills every input via `TextInput::set_value` (`max_agent_steps` via `to_string()`, model fields destructured from the `ModelConfig::OpenAi` variants), stores the config in `self.config` — preserving `profiles` and `active_profile` for the later save — and calls `cx.notify()`.
 
-**Layout:**
+#### Save Flow
 
-- Root: `root(theme)`, positioned `relative()`, flex column, items centered
-- Title: `"NovelCraft Settings"` at `text_2xl()`
-- Close button: absolute-positioned top-right (`.absolute().top_4().right_4()`), renders `"×"` (Unicode `\u{00d7}`) at `text_xl()` with `cursor_pointer()` and hover opacity 0.7
+`save()` is bound to the Save button via `cx.listener`. It clones `self.config` (`unwrap_or_default()` if the load never completed) and rebuilds the editable parts from the inputs:
 
-**Navigation:** The `on_close` callback is provided by `AppRoot` via `cx.listener()`. It clones the theme, sets `self.screen = Screen::Home(HomeData { theme })`, and calls `cx.notify()`.
+- `max_agent_steps` — input text trimmed and parsed as `u8`; falls back to the previous value when unparsable (the input is not restricted to numeric text yet)
+- `system_prompt` — raw input text
+- Model groups — each `ModelFields` mapped to `ModelConfig::OpenAi { base_url, api_key, model }` (base URL and model trimmed) via the `model_config()` helper
+- `profiles` / `active_profile` — **not editable**; carried over untouched from the stored config
+
+The result is boxed and sent as `Command::SaveConfig(Box<NovelCraftConfig>)`. The engine thread syncs it via `engine.set_config(*config.clone())` and persists it with `config.save().await` (errors logged through `Loggable`).
+
+#### Layout
+
+`screen_root()` with the top bar plus a scrollable content column: `.id("settings-scroll").overflow_y_scroll()` (`flex_grow(1.)`, `min_h(px(0.))`, `w_full`) wrapping an inner column with `max_w(px(640.))`, `gap_4`, `p_4`. Fields are rendered by the `field(label, input, color)` helper (label at 55% text opacity above the input). Each model entry is a `model_group(label, fields, color, border)` bordered box (`border_1`, 25% opacity border, `rounded_sm`, `p_3`) containing Base URL / API Key / Model fields. The Save button is a full-width centered row styled inverted — `.bg(fg)` / `.text_color(bg)` (theme text color as background, theme background as text) — with `cursor_pointer()`, hover opacity 0.85, and `.id("btn-save")`.
+
+#### Gotcha: `text!` Does Not Format
+
+gpui's `text!` macro does **not** run format strings — `text!("{label}")` renders the literal `{label}`. Pass the expression directly instead: `text!(label)`. This is why the `field`/`model_group` helpers take `label: &str` and render `text!(label)`.
 
 ## Theme (`gui/src/theme.rs`)
 
 ```rust
 pub struct Theme {
-    pub bg: Rgba,
-    pub text: Rgba,
+  kind: ThemeKind,   // serde(skip)
+  pub bg: Rgba,
+  pub text: Rgba,
 }
 ```
 
-Provides a `dark()` constructor (bg `#283333`, text `#E1F5F5`) and implements `Default` by delegating to `dark()`.
+- `Theme::dark()` constructor (bg `#283333`, text `#E1F5F5`); `Default` delegates to `dark()`
+- `ThemeKind` is a unique-identifier enum (`Dark`) with `FromStr` parsing
+- Implements gpui's `Global` trait — screens read it via `cx.global::<Theme>()`; `main()` installs it with `cx.set_global(config.theme)`
+- Serialized/deserialized as the theme name string (`"dark"`) via `serialize_theme_name`/`deserialize_theme_name`; the GUI config lives at `{configDir}/NovelCraft/gui.config.json`
 
 ## Styling Conventions
 
@@ -234,42 +384,43 @@ cx.open_window(WindowOptions::default(), move |_, _| root.clone()).unwrap();
 
 ### Callbacks with View State
 
-Use `cx.listener()` to capture view state in callbacks:
+Use `cx.listener()` to bind action/element handlers to view methods — the listener captures `&mut Self` of the owning view:
 
 ```rust
-let on_close = cx.listener(move |this: &mut AppRoot, _ev: &ClickEvent, _window, cx| {
-    this.screen = Screen::Home(Default::default());
-    cx.notify();
-});
-screens::settings::render(theme, on_close)
+// In TextInput's Render impl — each action routes to a &mut self method:
+.on_action(cx.listener(Self::backspace))
+.on_action(cx.listener(Self::submit_action))
+
+// Or inline closures:
+.on_click(cx.listener(|this: &mut Self, ev: &ClickEvent, window, cx| {
+  this.screen = Screen::Home;
+  cx.notify();
+}))
 ```
 
-### Entity for Shared Callbacks
+### Views as Entities
 
-When a component with a `'static` callback needs to be passed as `impl IntoElement`, wrap it in an `Entity`:
+Views that appear in multiple places, or that need to outlive a single render, are created once via `cx.new` and stored as `Entity<T>`:
 
 ```rust
-let gear = cx.new(|_| {
-    SettingsGear::new(move |ev, window, cx| { /* ... */ })
-});
-// Later, in render:
-screens::home::render(&data, gear.clone())
+// Screens are created once and stored on AppRoot:
+screen_home: cx.new(|cx| HomeScreen::create(cx)),
+// Render attaches a clone of the entity:
+res = res.child(self.screen_home.clone());
 ```
+
+Inside a view's own `Render` impl, `cx.entity()` hands the entity to a custom element — this is how `TextInput` passes itself to `TextElement { input: cx.entity() }`.
 
 ## File Organization
 
-``
+```
 gui/src/
-├── main.rs          # Entry point, AppRoot view, screen dispatch
-├── comp.rs          # Reusable components (root(), SettingsGear)
-├── theme.rs         # Theme struct (bg, text colors)
-├── util.rs          # Loggable trait, LogLevel
-└── screens/
-    ├── mod.rs       # Screen enum, Default impl
-    ├── home.rs      # Home screen render function
-    ├── settings.rs  # Settings screen render function
-    ├── gameplay.rs  # Gameplay screen (placeholder)
-    └── story.rs     # Story screen (placeholder)
+├── main.rs          # Entry point — engine thread, CommandBus global, AppRoot view, action routing
+├── screens.rs       # Screen enum + screen view structs (create(cx) + Render)
+├── comp.rs          # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
+├── text_input.rs    # Reusable TextInput component (custom Element, IME, scoped key bindings)
+├── theme.rs         # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name
+└── util.rs          # Loggable trait, LogLevel
 ```
 
 ## Related Documentation
