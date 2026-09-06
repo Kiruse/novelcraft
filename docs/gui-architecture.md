@@ -11,6 +11,7 @@ The GUI is a native Rust binary using the **gpui** framework (from the Zed edito
 - **gpui** (git, Zed main) — UI framework: views, elements, Tailwind-like styling via the `Styled` trait
 - **gpui_platform** (git, Zed main) — Platform integration: window management, app lifecycle
 - **novelcraft-engine** (path) — Business logic library for data persistence, LLM proxy, game loop
+- **chrono** — Local-time formatting of session timestamps (used by the Home screen's session cards)
 - **unicode-segmentation** — Grapheme-boundary cursor movement (used by the `TextInput` component)
 
 ## Architecture
@@ -37,7 +38,7 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 
 | Screen | Struct | State |
 |--------|--------|-------|
-| Home | `HomeScreen` | none (unit struct) |
+| Home | `HomeScreen` | `sessions: Option<Vec<SessionV1>>` (see [Home Screen](#home-screen-homescreen)) |
 | Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
 | Create Story | `CreateStoryScreen` | none (unit struct) |
 | Story Overview | `StoryOverviewScreen` | `id: StoryId` |
@@ -55,7 +56,7 @@ All screen structs live in `gui/src/screens.rs` — one file, one section per sc
 
 The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed.
 
-Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. `Command` is a `pub(crate)` enum with four variants:
+Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. `Command` is a `pub(crate)` enum with five variants:
 
 | Variant | Payload | Semantics |
 |---------|---------|-----------|
@@ -63,8 +64,9 @@ Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) 
 | `Prompt(String)` | user prompt | Fire-and-forget: `engine.prompt(...)`, chunks streamed over the `mpsc` chunk channel |
 | `LoadConfig(oneshot::Sender<NovelCraftConfig>)` | reply channel | Request/response: engine thread loads `{configDir}/NovelCraft/config.json` via `NovelCraftConfig::load()` (falling back to `NovelCraftConfig::default()` on error, logged as a warning), syncs it via `NovelCraftEngine::set_config`, replies over the channel |
 | `SaveConfig(Box<NovelCraftConfig>)` | boxed config | Fire-and-forget: engine thread syncs via `engine.set_config`, then persists with `config.save().await` |
+| `ListSessions(oneshot::Sender<Vec<SessionV1>>)` | reply channel | Request/response: engine thread calls `NovelCraftEngine::list_sessions()` — enumerates session directories, loads each via `SessionV1::load_metadata` (metadata only: id, title, exposition, timestamps, modules, profile; no page batches or gamestate), skips directories with unreadable metadata (logged as a warning), sorts newest-first by `updated_at`, and replies; on error it logs a warning and replies with an empty `Vec` |
 
-`Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen).
+`Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`, `ListSessions`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen) and [Home Screen](#home-screen-homescreen).
 
 ## Reusable Components (`gui/src/comp.rs`)
 
@@ -224,7 +226,23 @@ Module-private helpers used by both the element and the input:
 
 ### Home Screen (`HomeScreen`)
 
-`screen_root()` containing a `top_bar()` with the app title `"NovelCraft"` at `text_3xl()` (centered) and `settings_gear()` (absolute top-right). Clicking the gear dispatches `ShowSettings`, transitioning to `Screen::Settings`.
+The Home screen is the app's session launcher. It uses the standard layout: `screen_root()` containing a `top_bar()` with the app title `"NovelCraft"` at `text_3xl()` (centered) and `settings_gear()` (absolute top-right, dispatches `ShowSettings`).
+
+#### State & Load Flow
+
+`HomeScreen` holds a single field, `sessions: Option<Vec<SessionV1>>`. `create(cx)` immediately calls `load(cx)`, which sends `Command::ListSessions` via the `CommandBus` using the same oneshot + `cx.spawn` request/response pattern as `SettingsScreen::load` — the spawned future awaits the reply and stores it in `self.sessions` via `populate(...)`, then `cx.notify()` triggers a re-render.
+
+#### Render
+
+Below the top bar, a `content()` column renders:
+
+- **"Create new Vignette" card** — a jumbo full-width clickable bordered card (`create_vignette(theme)` helper): a horizontally+vertically centered title row (`flex().items_center().justify_center().gap_2()`) with a "+" text glyph before the "Create new Vignette" text, both at `text_2xl()`, plus the description that Vignettes are free-form stories that don't follow any template, resembling other story generator platforms. Hover swaps the border color to the label color; clicking dispatches the existing `nav::CreateStory` action via `window.dispatch_action`.
+- **"Sessions" section** — a `text_xl()` heading followed by the sessions list (`sessions_ui`), which has three states:
+  - `None` (loading) — a "Loading ..." placeholder pulsating via gpui's animation API: `with_animation(..., Animation::new(1s).repeat().with_easing(pulsating_between(0.2, 1.0)), |el, delta| el.opacity(delta))`
+  - `Some([])` — the static text "No sessions yet."
+  - `Some(sessions)` — a column (gap-2) of clickable session cards
+
+Each session card is built by the `session_card(theme, session)` helper: a bordered, hover-highlighted, clickable row showing the session title (`text_lg`), the `updated_at` timestamp formatted in local time via `chrono` (`%Y-%m-%d %H:%M`), and the exposition text. Cards get their session ID as the element ID; `on_click` dispatches `nav::ShowStory(StoryId)` where `StoryId` wraps the session ID. Both card types dispatch via `window.dispatch_action` and navigate through the app-level action listeners in `main()`.
 
 ### Settings Screen (`SettingsScreen`)
 

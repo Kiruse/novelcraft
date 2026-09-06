@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::sync::Arc;
 
 use kiruklaw_agent_loop::{AgentLoop, AgentMessageChunk, ContextProvider, Conversation, ConversationMessage};
+use log::warn;
 use moka::future::Cache;
 use tokio::sync::mpsc::Sender;
 
@@ -91,13 +91,24 @@ impl NovelCraftEngine {
     self.session().map(|s| s.gamestate.clone())
   }
 
-  pub async fn list_sessions() -> Result<Vec<OsString>, EngineError> {
+  /// Enumerate all saved sessions on the local filesystem, newest first.
+  /// Only session metadata is loaded; page batches and game states are
+  /// left untouched. Sessions with unreadable metadata are skipped.
+  pub async fn list_sessions() -> Result<Vec<SessionV1>, EngineError> {
     let path = SessionV1::root()?;
     let mut dir_iter = tokio::fs::read_dir(&path).await?;
     let mut result = Vec::new();
     while let Some(entry) = dir_iter.next_entry().await? {
-      result.push(entry.file_name());
+      if !entry.file_type().await.map(|ty| ty.is_dir()).unwrap_or(false) {
+        continue;
+      }
+      let sid = entry.file_name().to_string_lossy().to_string();
+      match SessionV1::load_metadata(&sid).await {
+        Ok(session) => result.push(session),
+        Err(err) => warn!("Skipping session {sid}: {err}"),
+      }
     }
+    result.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
     Ok(result)
   }
 

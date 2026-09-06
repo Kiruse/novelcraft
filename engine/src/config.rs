@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
+use exhaustive_map::Finite;
 use kiruklaw_agent_loop::AgentLoop;
 pub use kiruklaw_agent_loop::ModelConfig;
-use log::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::error::EngineError;
 use crate::game::profile::ProfileV1;
 use crate::game::state::GameStateView;
 use crate::paths;
-use crate::util::{deserialize, ensure_dir, serialize};
+use crate::util::{deserialize, serialize};
 
 /// Default host of llama.cpp
 pub const DEFAULT_HOST: &str = "http://localhost:8888/v1";
@@ -59,7 +59,7 @@ impl NovelCraftConfig {
     let Some(agent_loop) = agent_loop else { return };
     agent_loop.max_steps = self.max_agent_steps;
     agent_loop.persona = Some(self.system_prompt.clone());
-    agent_loop.model = self.models.dungeon_master.clone();
+    agent_loop.model = self.models[ModelPurpose::DungeonMaster].clone();
   }
 }
 
@@ -75,89 +75,20 @@ impl Default for NovelCraftConfig {
   }
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum ModelUsage {
+#[derive(Debug, Copy, Clone, Finite, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPurpose {
   DungeonMaster,
   Suggestions,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Models {
-  pub dungeon_master: ModelConfig,
-  pub suggestions: ModelConfig,
-}
-
-impl Models {
-  pub fn get_config(&self, usage: ModelUsage) -> &ModelConfig {
-    match usage {
-      ModelUsage::DungeonMaster => &self.dungeon_master,
-      ModelUsage::Suggestions => &self.suggestions,
-    }
-  }
-
-  pub fn all_configs(&self) -> Vec<&ModelConfig> {
-    vec![&self.dungeon_master, &self.suggestions]
-  }
-
-  pub async fn load() -> Result<Models, EngineError> {
-    let path = Self::config_path()?;
-    if path.exists() {
-      crate::util::deserialize::<Models>(&path).await
-        .or_else(|err| {
-          warn!("Failed to deserialize models at {}: {} - initializing with defaults", path.display(), err);
-          Ok(Models::default())
-        })
-    } else {
-      Ok(Models::default())
-    }
-  }
-
-  pub async fn save(&self) -> Result<(), EngineError> {
-    let path = Self::config_path()?;
-    ensure_dir(&path).await?;
-    crate::util::serialize(&path, self).await
-  }
-
-  /// Gets an iterator over [ModelConfig]s in this order:
-  /// 1. Dungeon Master
-  /// 2. Suggestions
-  #[inline(always)]
-  pub fn iter(&self) -> ModelIterator<'_> {
-    ModelIterator(self, 0)
-  }
-
-  fn config_path() -> Result<PathBuf, EngineError> {
-    paths::config_dir().map(|p| p.join("models.json"))
-  }
-}
-
-impl Default for Models {
-  fn default() -> Self {
-    Self {
-      dungeon_master: ModelConfig::OpenAi {
-        base_url: DEFAULT_HOST.to_string(),
-        model: "zai-org/glm-4.6v-flash".to_string(),
-        api_key: "".to_string(),
-      },
-      suggestions: ModelConfig::OpenAi {
-        base_url: DEFAULT_HOST.to_string(),
-        model: "zai-org/glm-4.6v-flash".to_string(),
-        api_key: "".to_string(),
-      },
+impl ModelPurpose {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Self::DungeonMaster => "Dungeon Master",
+      Self::Suggestions   => "Suggestions",
     }
   }
 }
 
-pub struct ModelIterator<'a>(&'a Models, usize);
-
-impl<'a> Iterator for ModelIterator<'a> {
-  type Item = &'a ModelConfig;
-  fn next(&mut self) -> Option<Self::Item> {
-    match self.1 {
-      0 => Some(&self.0.dungeon_master),
-      1 => Some(&self.0.suggestions),
-      _ => None,
-    }
-  }
-}
+pub type Models = exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>;

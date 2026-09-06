@@ -55,9 +55,9 @@ novelcraft/
 │           ├── api.rs          # OpenAI API types (request/response structs for SSE)
 │           └── internal.rs     # Command-level types (ModelConfig, LlmMessage, LlmTool, LlmPromptRequest, etc.)
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
-│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, log)
+│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
 │   └── src/
-│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig), AppRoot view, action routing
+│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions), AppRoot view, action routing
 │       ├── screens.rs          # Screen enum + screen view structs (create(cx) + Render)
 │       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 │       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings)
@@ -430,4 +430,5 @@ All build and development commands are in the root `justfile`.
 | `gpui` (git, Zed main) | UI framework — views, elements, styling |
 | `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |
 | `log` | Logging facade (used by `util.rs` `Loggable` trait) |
+| `chrono` | Local-time formatting of session timestamps (used by `screens.rs`) |
 | `unicode-segmentation` | Grapheme-boundary cursor movement (used by `text_input.rs`) |

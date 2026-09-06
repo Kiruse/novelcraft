@@ -45,7 +45,7 @@ novelcraft/
 │           ├── api.rs                # OpenAI API types (request/response structs for SSE)
 │           └── internal.rs           # Command-level types (ModelConfig, LlmMessage, LlmTool, etc.)
 ├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft)
-│   ├── Cargo.toml                    # GUI dependencies (novelcraft-engine, gpui, gpui_platform, log)
+│   ├── Cargo.toml                    # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
 │   └── src/
 │       ├── main.rs                   # Entry point — gpui app initialization, AppRoot view
 │       ├── util.rs                   # Loggable trait, LogLevel enum, Result<T,E> blanket impl
@@ -87,8 +87,8 @@ Pure Rust library with all business logic. No UI framework coupling.
   - `lore.rs` — Lore query for `lore/{id}.json`. Version-gated deserialization.
   - `fs.rs` — File operations: export/import session JSON, native file/folder picker dialogs.
 - `game/` — Game engine types (separate from `commands/game.rs`)
-  - `engine.rs` — `GameEngine`: loads game sessions, manages page batches, provides history for prompting, page CRUD, fork. Uses LRU cache (`moka::future::Cache`, capacity 8).
-  - `session.rs` — `SessionV1`: game session model with file-based persistence.
+  - `engine.rs` — `GameEngine`: loads game sessions, manages page batches, provides history for prompting, page CRUD, fork, lists sessions (metadata-only `SessionV1`s, newest first). Uses LRU cache (`moka::future::Cache`, capacity 8).
+  - `session.rs` — `SessionV1`: game session model with file-based persistence (`save`, `save_metadata`, `load`, `load_metadata`).
   - `pages.rs` — Page types: `PageV1`, `PageBatch`, `ResponseV1`.
   - `state.rs` — `AppState`: holds `config`, `profiles`, and `models` mutexes.
   - `module.rs` — Game module abstractions.

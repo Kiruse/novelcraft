@@ -2,6 +2,7 @@ use gpui::{Action, App, Entity, Global, Window, WindowOptions, prelude::*};
 use gpui_platform::application;
 use log::*;
 use novelcraft_engine::config::NovelCraftConfig;
+use novelcraft_engine::game::session::SessionV1;
 use novelcraft_engine::{AgentMessageChunk, game::engine::NovelCraftEngine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::comp::root;
 use crate::screens::*;
 use crate::theme::{Theme, deserialize_theme_name, serialize_theme_name};
-use crate::util::Loggable;
+use crate::util::{ExpectLoggable, Loggable};
 
 mod comp;
 mod screens;
@@ -117,19 +118,19 @@ fn main() -> anyhow::Result<()> {
             engine.prompt(prompt, tx_chunks.clone()).await.warn();
           }
           Command::LoadConfig(tx) => {
-            let config = match NovelCraftConfig::load().await {
-              Ok(config) => config,
-              Err(err) => {
-                warn!("Failed to load config: {err} - using defaults");
-                NovelCraftConfig::default()
-              }
-            };
+            let config = NovelCraftConfig::load().await.expect_warn();
             engine.set_config(config.clone());
             let _ = tx.send(config);
           }
           Command::SaveConfig(config) => {
-            engine.set_config(*config.clone());
-            config.save().await.warn();
+            config.save().await.error();
+            engine.set_config(config);
+          }
+          Command::ListSessions(tx) => {
+            let sessions = NovelCraftEngine::list_sessions()
+              .await
+              .expect_warn();
+            let _ = tx.send(sessions);
           }
         }
       }
@@ -202,7 +203,9 @@ pub(crate) enum Command {
   /// Load the config from disk, sync it with the engine and reply with it.
   LoadConfig(oneshot::Sender<NovelCraftConfig>),
   /// Sync the config with the engine and persist it to disk.
-  SaveConfig(Box<NovelCraftConfig>),
+  SaveConfig(NovelCraftConfig),
+  /// List the player's saved sessions (metadata only), newest first.
+  ListSessions(oneshot::Sender<Vec<SessionV1>>),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Deserialize, JsonSchema)]

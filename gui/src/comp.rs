@@ -76,6 +76,11 @@ pub(crate) fn title(content: Text) -> Div {
   div().text_3xl().child(content)
 }
 
+#[inline(always)]
+pub(crate) fn subtitle(content: Text) -> Div {
+  div().text_2xl().child(content)
+}
+
 pub(crate) fn field(theme: &Theme, label: &str, input: &Entity<TextInput>) -> Div {
   div()
     .flex()

@@ -158,6 +158,13 @@ impl SessionV1 {
     Ok(())
   }
 
+  /// Load only this session's metadata from disk, without its page batches
+  /// or game state.
+  pub async fn load_metadata(id: impl Into<String>) -> Result<SessionV1, EngineError> {
+    let path = Self::meta_path(&id.into())?;
+    deserialize(&path).await
+  }
+
   /// Enumerate all saved sessions on the local filesystem
   pub async fn list(profiles: &[ProfileV1]) -> Result<Vec<SessionV1>, EngineError> {
     let dir = Self::root()?;
