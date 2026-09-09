@@ -8,6 +8,7 @@ use gpui::prelude::*;
 use novelcraft_engine::game::session::SessionV1;
 use tokio::sync::oneshot;
 
+use super::screen;
 use crate::actions::{CreateStory, ShowStory};
 use crate::comp::*;
 use crate::theme::Theme;
@@ -73,14 +74,10 @@ impl Render for HomeScreen {
         .into_any_element(),
     };
 
-    screen_root()
-      .child(top_bar()
-        .child(title(text!("NovelCraft")))
-        .child(settings_gear()))
-      .child(content()
-        .child(create_vignette(theme))
-        .child(subtitle(text!("Sessions")))
-        .child(sessions_ui))
+    screen(text!("NovelCraft"))
+      .child(create_vignette(theme))
+      .child(subtitle(text!("Sessions")))
+      .child(sessions_ui)
   }
 }
 

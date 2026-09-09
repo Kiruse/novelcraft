@@ -46,6 +46,18 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 
 Each screen lives in its own submodule under `gui/src/screens/` (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); `mod.rs` declares the submodules, defines the `Screen` enum, and re-exports the screen structs. `StoryOverviewScreen` and `StoryGameplayScreen` are currently placeholders (`render` returns an empty `div()`).
 
+Screens share a common layout through `ScreenBase` (`gui/src/screens/mod.rs`). A screen's `render` starts with the `screen(title)` helper, attaches content via `.child(...)` (`ScreenBase` implements `ParentElement`), and returns it directly (`ScreenBase` implements `IntoElement`). By default the top bar shows the settings gear; call `.closable()` to show the close (`Back`) button instead. The helper composes the `comp.rs` builders (`screen_root`, `top_bar`, `title`, `content`) so individual screens don't repeat that boilerplate:
+
+```rust
+screen(text!("NovelCraft"))            // gear in the top bar
+  .child(create_vignette(theme))
+  .child(subtitle(text!("Sessions")))
+  .child(sessions_ui)
+
+screen(text!("Settings")).closable()   // close button instead of gear
+  .child(field(&theme, "Max Agent Steps", &self.max_agent_steps))
+```
+
 ### AppRoot View
 
 `AppRoot` (`gui/src/main.rs`) is the sole top-level gpui `View`. It holds:

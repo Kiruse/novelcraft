@@ -4,6 +4,7 @@ use gpui::prelude::*;
 use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose, NovelCraftConfig};
 use tokio::sync::oneshot;
 
+use super::screen;
 use crate::comp::*;
 use crate::text_input::TextInput;
 use crate::theme::Theme;
@@ -105,38 +106,33 @@ impl Render for SettingsScreen {
     let theme = cx.global::<Theme>();
     let (bg, fg) = (theme.bg, theme.text);
 
-    screen_root()
-      .child(top_bar()
-        .child(title(text!("Settings")))
-        .child(btn_icon_close()))
-      .child(content()
-        .child(field(&theme, "Max Agent Steps", &self.max_agent_steps))
-        .child(field(&theme, "System Prompt", &self.system_prompt))
-        .child(div()
-          .flex()
-          .flex_col()
-          .gap_2()
-          .w_full()
-          .child(div().text_xl().child(text!("Models")))
-          .children(
-            self
-              .models
-              .iter()
-              .map(|(purpose, fields)| model_group(&theme, purpose.as_str(), fields))))
-        .child(div()
-          .id("btn-save")
-          .w_full()
-          .p_2()
-          .flex()
-          .justify_center()
-          .rounded_sm()
-          .bg(fg)
-          .text_color(bg)
-          .cursor_pointer()
-          .hover(|style| style.opacity(0.85))
-          .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
-          .child(text!("Save")))
-      )
+    screen(text!("Settings")).closable()
+      .child(field(&theme, "Max Agent Steps", &self.max_agent_steps))
+      .child(field(&theme, "System Prompt", &self.system_prompt))
+      .child(div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .child(div().text_xl().child(text!("Models")))
+        .children(
+          self
+            .models
+            .iter()
+            .map(|(purpose, fields)| model_group(&theme, purpose.as_str(), fields))))
+      .child(div()
+        .id("btn-save")
+        .w_full()
+        .p_2()
+        .flex()
+        .justify_center()
+        .rounded_sm()
+        .bg(fg)
+        .text_color(bg)
+        .cursor_pointer()
+        .hover(|style| style.opacity(0.85))
+        .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
+        .child(text!("Save")))
   }
 }
 

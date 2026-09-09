@@ -2,6 +2,7 @@ use gpui::{Entity, InteractiveElement, Render, Window, div, text};
 use gpui::prelude::*;
 use tokio::sync::oneshot;
 
+use super::screen;
 use crate::actions::ShowStory;
 use crate::comp::*;
 use crate::text_input::TextInput;
@@ -20,7 +21,7 @@ impl CreateStoryScreen {
       premise: create_text_input(
         cx,
         true,
-        "Describe the premise your story starts from ..."
+        "Describe the premise of your story ..."
       ),
     }
   }
@@ -55,26 +56,21 @@ impl Render for CreateStoryScreen {
     let theme = cx.global::<Theme>();
     let (bg, fg) = (theme.bg, theme.text);
 
-    screen_root()
-      .child(top_bar()
-        .child(title(text!("Create Vignette")))
-        .child(btn_icon_close()))
-      .child(content()
-        .child(field(&theme, "Title", &self.title))
-        .child(field(&theme, "Premise", &self.premise))
-        .child(div()
-          .id("btn-create")
-          .w_full()
-          .p_2()
-          .flex()
-          .justify_center()
-          .rounded_sm()
-          .bg(fg)
-          .text_color(bg)
-          .cursor_pointer()
-          .hover(|style| style.opacity(0.85))
-          .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
-          .child(text!("Create")))
-      )
+    screen(text!("Create Vignette")).closable()
+      .child(field(&theme, "Title", &self.title))
+      .child(field(&theme, "Premise", &self.premise))
+      .child(div()
+        .id("btn-create")
+        .w_full()
+        .p_2()
+        .flex()
+        .justify_center()
+        .rounded_sm()
+        .bg(fg)
+        .text_color(bg)
+        .cursor_pointer()
+        .hover(|style| style.opacity(0.85))
+        .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
+        .child(text!("Create")))
   }
 }

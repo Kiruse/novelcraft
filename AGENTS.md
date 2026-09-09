@@ -58,7 +58,7 @@ novelcraft/
 │   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
 │   └── src/
 │       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view, action routing
-│       ├── screens/            # Screen enum (mod.rs) + one submodule per screen (create(cx) + Render)
+│       ├── screens/            # Screen enum + ScreenBase/screen(title) helper (mod.rs) + one submodule per screen (create(cx) + Render)
 │       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 │       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings)
 │       ├── theme.rs            # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name
@@ -83,7 +83,7 @@ novelcraft/
 | Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
 | Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
 | GUI Entry | `gui/src/main.rs` | Engine thread, `CommandBus` global, `AppRoot` view, action routing |
-| GUI Screens | `gui/src/screens/` | `Screen` enum (`mod.rs`) + one submodule per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) with `create(cx)` + `Render` |
+| GUI Screens | `gui/src/screens/` | `Screen` enum + `ScreenBase`/`screen(title)` layout helper (`mod.rs`) + one submodule per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) with `create(cx)` + `Render` |
 | GUI Components | `gui/src/comp.rs` | Stateless UI builder functions (`root`, `screen_root`, `top_bar`, `settings_gear`, `btn_icon_close`) |
 | GUI Text Input | `gui/src/text_input.rs` | Reusable `TextInput` component — custom `Element`, `EntityInputHandler` (IME), `init(cx)` key bindings scoped to the `"TextInput"` key context |
 | GUI Theme | `gui/src/theme.rs` | `Theme`/`ThemeKind` (bg, text colors), gpui `Global` impl, serde (de)serialization as theme name |
