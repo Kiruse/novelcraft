@@ -57,12 +57,12 @@ novelcraft/
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
 │   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
 │   └── src/
-│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view, action routing
+│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view (incl. toast overlay), action routing
 │       ├── screens/            # Screen enum + ScreenBase/screen(title) helper (mod.rs) + one submodule per screen (create(cx) + Render)
 │       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 │       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings)
-│       ├── theme.rs            # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name
-│       └── util.rs             # Loggable trait, LogLevel enum, Result<T,E> blanket impl
+│       ├── theme.rs            # Theme/ThemeKind (bg, text, label, border, danger/success/warn colors), Global impl, serde as theme name
+│       └── util.rs             # Loggable/ExpectLoggable, Toastable/ExpectToastable (Result -> toast), HslaExt, LogLevel
 └── docs/                       # Comprehensive documentation
     ├── gui-architecture.md # gpui GUI components, screens, styling conventions
 ```

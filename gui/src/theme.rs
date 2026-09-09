@@ -42,6 +42,10 @@ pub struct Theme {
   pub danger_bg: Rgba,
   /// Foreground color of destructive UI elements (lighter than `danger_bg`)
   pub danger_fg: Rgba,
+  /// Accent color for positive UI feedback
+  pub success: Rgba,
+  /// Accent color for warning UI feedback
+  pub warn: Rgba,
 }
 
 impl Theme {
@@ -54,6 +58,8 @@ impl Theme {
       border: Rgba::try_from("#666").unwrap().alpha(0.25),
       danger_bg: Rgba::try_from("#642C2C").unwrap(),
       danger_fg: Rgba::try_from("#E88C8C").unwrap(),
+      success: Rgba::try_from("#5FA867").unwrap(),
+      warn: Rgba::try_from("#E8B813").unwrap(),
     }
   }
 

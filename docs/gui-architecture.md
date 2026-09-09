@@ -64,6 +64,7 @@ screen(text!("Settings")).closable()   // close button instead of gear
 
 - `screen: Screen` — current screen variant
 - `screen_home` / `screen_settings` / `screen_create_story` / `screen_story_overview` / `screen_story_gameplay` — `Entity<...Screen>` for each screen, created once via `cx.new(|cx| ...Screen::create(cx))`
+- `toasts: Vec<(usize, Toast)>` + `next_toast_id` — active toast queue (see [Toasts](#toasts))
 - `rx_chunks` — `mpsc::Receiver<AgentMessageChunk>` for engine communication (the `mpsc::Sender` side lives in the `CommandBus` global and in the engine thread)
 
 The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed.
@@ -80,6 +81,18 @@ Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) 
 | `CreateSession { title, exposition, reply }` | title, exposition, reply channel | Request/response: engine thread calls `NovelCraftEngine::create_session(title, exposition)` — builds a fresh `SessionV1` with default gameplay modules and the engine's active profile, persists it — and replies `Some(session)`; on error it logs the error and replies `None` |
 
 `Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`, `ListSessions`, `CreateSession`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen), [Home Screen](#home-screen-homescreen), and [Create Story Screen](#create-story-screen-createstoryscreen).
+
+### Toasts
+
+Toasts provide non-blocking input feedback and live entirely in `AppRoot` (`gui/src/main.rs`).
+
+- **Data**: `Toast { variant: ToastVariant, msg, title: Option<String>, duration }` with constructors `Toast::info/success/warn/error(msg)` (5s default duration; `title: None` falls back to a variant default: Info/Success/Caution/Error). `ToastVariant::color(&theme)` maps Info → `theme.text`, Success → `theme.success`, Warn → `theme.warn`, Error → `theme.danger_fg`.
+- **Spawning**: dispatch the `toast::SpawnToast(Toast)` action (`actions` module in `main.rs`, carries the full `Toast`). A global `on_action` listener calls `AppRoot::spawn_toast`, which assigns a sequential id, appends to `self.toasts`, and — when `duration != Duration::ZERO` — detaches a `cx.spawn`ed task that awaits `cx.background_executor().timer(duration)` and then dismisses the toast. `duration == 0` toasts stay until dismissed manually.
+- **Removal**: `AppRoot::dismiss_toast(id)` retains all other toasts; both paths call `cx.notify()`.
+- **Rendering**: when non-empty, `AppRoot::render` appends an absolute overlay (`bottom_4`, full width, centered column, `gap_2`) after the screen child — painted last, so it sits above screen content. Each toast (`toast_view` helper) is a bordered rounded box with a drop shadow (`shadow_lg`) (Error uses `danger_bg` bg + `danger_fg` border; others `theme.bg`/`theme.border`) with the variant-colored title, the message, and a "×" cancel button (top-right, styled like `btn_icon_close`) whose `on_click` listener dismisses that toast.
+- **Ergonomics**: the `Toastable<T, E>` / `ExpectToastable<T>` traits (`gui/src/util.rs`) are implemented for `Result` (mirroring `Loggable`/`ExpectLoggable`): `dispatch_toast(ok, err, cx)` picks a toast per branch, `info/success/warn/error_toast(cx)` use defaults built from the value/error (`Display`), and `expect_toast`/`expect_error_toast` unwrap-or-default while toasting the error. They take `cx: &mut App` — `Context` derefs to `App`, so view code passes its context directly; async code wraps with `AsyncApp::update`. Dispatching goes through `App::dispatch_action(&SpawnToast(...))`.
+
+First consumer: the Create Story screen shows an error toast when session creation fails.
 
 ## Reusable Components (`gui/src/comp.rs`)
 
@@ -300,7 +313,7 @@ Both inputs are created with the `create_text_input(cx, multiline, placeholder)`
 
 #### Submit Flow
 
-`submit()` (bound to the Create button via `cx.listener`) reads both values trimmed and no-ops when the title is empty. Otherwise it sends `Command::CreateSession { title, exposition, reply }` over the `CommandBus` and, inside a `cx.spawn`ed (detached) task, awaits the oneshot reply. On `Some(session)` it dispatches the `nav::ShowStory(StoryId(session.id))` action via `App::dispatch_action` — allowed here because the spawned future runs outside a window update (note that `AsyncApp::update` returns the closure result directly, not a `Result`). The app-level listener routes the app to `Screen::StoryOverview`.
+`submit()` (bound to the Create button via `cx.listener`) reads both values trimmed and no-ops when the title is empty. Otherwise it sends `Command::CreateSession { title, exposition, reply }` over the `CommandBus` and, inside a `cx.spawn`ed (detached) task, awaits the oneshot reply. On `Some(session)` it dispatches the `nav::ShowStory(StoryId(session.id))` action via `App::dispatch_action` — allowed here because the spawned future runs outside a window update (note that `AsyncApp::update` returns the closure result directly, not a `Result`). The app-level listener routes the app to `Screen::StoryOverview`. On `None` it dispatches `toast::SpawnToast(Toast::error("Failed to create Vignette"))` instead (see [Toasts](#toasts)).
 
 Known limitation (deferred): input values are not reset when re-entering the screen — the screen entity is created once at startup and reused.
 
@@ -368,10 +381,12 @@ pub struct Theme {
   pub border: Rgba,      // borders at 25% opacity
   pub danger_bg: Rgba,   // destructive UI background (dark red)
   pub danger_fg: Rgba,   // destructive UI foreground (lighter red than danger_bg)
+  pub success: Rgba,     // positive feedback accent (soft green)
+  pub warn: Rgba,        // warning feedback accent (amber)
 }
 ```
 
-- `Theme::dark()` constructor (bg `#283333`, text `#E1F5F5`, label `#E87813`, border `#666` @ 25%, danger_bg `#642C2C`, danger_fg `#E88C8C`); `Default` delegates to `dark()`
+- `Theme::dark()` constructor (bg `#283333`, text `#E1F5F5`, label `#E87813`, border `#666` @ 25%, danger_bg `#642C2C`, danger_fg `#E88C8C`, success `#5FA867`, warn `#E8B813`); `Default` delegates to `dark()`
 - `ThemeKind` is a unique-identifier enum (`Dark`) with `FromStr` parsing
 - Implements gpui's `Global` trait — screens read it via `cx.global::<Theme>()`; `main()` installs it with `cx.set_global(config.theme)`
 - Serialized/deserialized as the theme name string (`"dark"`) via `serialize_theme_name`/`deserialize_theme_name`; the GUI config lives at `{configDir}/NovelCraft/gui.config.json`

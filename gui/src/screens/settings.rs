@@ -5,7 +5,7 @@ use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose, NovelCr
 use tokio::sync::oneshot;
 
 use super::screen;
-use crate::comp::*;
+use crate::{Toast, comp::*};
 use crate::text_input::TextInput;
 use crate::theme::Theme;
 use crate::{Command, CommandBus};
@@ -122,7 +122,10 @@ impl Render for SettingsScreen {
       .child(button("btn-save", text!("Save"))
         .primary(&theme)
         .into_element()
-        .on_click(cx.listener(|this, _, _, cx| this.save(cx))))
+        .on_click(cx.listener(|this, _, _, cx| {
+          this.save(cx);
+          Toast::success("Settings saved!").dispatch(cx);
+        })))
   }
 }
 

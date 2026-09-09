@@ -12,6 +12,8 @@ pub(crate) fn root(theme: &Theme) -> Div {
     .flex()
     .flex_col()
     .items_center()
+    .w_full()
+    .h_full()
     .bg(theme.bg)
     .text_color(theme.text)
 }

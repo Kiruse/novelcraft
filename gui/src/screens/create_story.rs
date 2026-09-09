@@ -7,7 +7,7 @@ use crate::actions::ShowStory;
 use crate::comp::*;
 use crate::text_input::TextInput;
 use crate::theme::Theme;
-use crate::{Command, CommandBus, StoryId};
+use crate::{Command, CommandBus, StoryId, Toast};
 
 pub(crate) struct CreateStoryScreen {
   title: Entity<TextInput>,
@@ -44,7 +44,9 @@ impl CreateStoryScreen {
           Some(session) => cx.update(|cx| {
             cx.dispatch_action(&ShowStory(StoryId(session.id)));
           }),
-          None => todo!("show error toast"),
+          None => cx.update(|cx| {
+            Toast::error("Failed to create Vignette").dispatch(cx);
+          }),
         }
       }
     }).detach();

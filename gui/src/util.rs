@@ -1,7 +1,9 @@
 use std::fmt::Display;
 
-use gpui::Hsla;
+use gpui::{App, Hsla};
 pub use log::Level as LogLevel;
+
+use crate::{Toast, ToastVariant};
 
 #[allow(unused)]
 pub trait Loggable {
@@ -83,6 +85,41 @@ impl<T: Default, E: Display> ExpectLoggable<T> for Result<T, E> {
         Default::default()
       }
     }
+  }
+}
+
+/// Dispatches toasts based on the outcome of a [`Result`].
+///
+/// The `cx` receiver is `&mut App` — [`gpui::Context`] derefs to it,
+/// so view code can simply pass its own context.
+#[allow(unused)]
+pub trait Toastable {
+  /// Dispatch a toast based on self's contents.
+  fn report_toast(&self, variant: ToastVariant, cx: &mut App) -> &Self;
+  /// Info toast (message from the value) on success, error toast on failure.
+  fn info_toast(&self, cx: &mut App) -> &Self {
+    self.report_toast(ToastVariant::Info, cx)
+  }
+  /// Success toast (message from the value) on success, error toast on failure.
+  fn success_toast(&self, cx: &mut App) -> &Self {
+    self.report_toast(ToastVariant::Success, cx)
+  }
+  /// Warning toast (message from the value) on success, error toast on failure.
+  fn warn_toast(&self, cx: &mut App) -> &Self {
+    self.report_toast(ToastVariant::Warn, cx)
+  }
+  /// Error toast on failure, nothing on success.
+  fn error_toast(&self, cx: &mut App) -> &Self {
+    self.report_toast(ToastVariant::Error, cx)
+  }
+}
+
+impl<T, E: Display> Toastable for Result<T, E> {
+  fn report_toast(&self, variant: ToastVariant, cx: &mut App) -> &Self {
+    if let Err(e) = self {
+      Toast::variant_default(variant, format!("{e}")).dispatch(cx);
+    }
+    self
   }
 }
 
