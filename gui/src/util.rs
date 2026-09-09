@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use gpui::Hsla;
 pub use log::Level as LogLevel;
 
 #[allow(unused)]
@@ -81,6 +82,48 @@ impl<T: Default, E: Display> ExpectLoggable<T> for Result<T, E> {
         log::log!(level.into(), "Err: {e}");
         Default::default()
       }
+    }
+  }
+}
+
+#[allow(unused)]
+pub trait HslaExt {
+  fn hue(self, cb: impl FnOnce(f32) -> f32) -> Self;
+  fn sat(self, cb: impl FnOnce(f32) -> f32) -> Self;
+  fn lum(self, cb: impl FnOnce(f32) -> f32) -> Self;
+  fn al(self, cb: impl FnOnce(f32) -> f32) -> Self;
+}
+
+impl HslaExt for Hsla {
+  #[inline(always)]
+  fn al(self, cb: impl FnOnce(f32) -> f32) -> Self {
+    Self {
+      a: cb(self.a).clamp(0., 1.),
+      ..self
+    }
+  }
+
+  #[inline(always)]
+  fn hue(self, cb: impl FnOnce(f32) -> f32) -> Self {
+    Self {
+      h: cb(self.h).clamp(0., 1.),
+      ..self
+    }
+  }
+
+  #[inline(always)]
+  fn lum(self, cb: impl FnOnce(f32) -> f32) -> Self {
+    Self {
+      l: cb(self.l).clamp(0., 1.),
+      ..self
+    }
+  }
+
+  #[inline(always)]
+  fn sat(self, cb: impl FnOnce(f32) -> f32) -> Self {
+    Self {
+      s: cb(self.s).clamp(0., 1.),
+      ..self
     }
   }
 }

@@ -38,6 +38,10 @@ pub struct Theme {
   /// Color of label text
   pub label: Rgba,
   pub border: Rgba,
+  /// Background color of destructive UI elements
+  pub danger_bg: Rgba,
+  /// Foreground color of destructive UI elements (lighter than `danger_bg`)
+  pub danger_fg: Rgba,
 }
 
 impl Theme {
@@ -48,6 +52,8 @@ impl Theme {
       text: Rgba::try_from("#E1F5F5").unwrap(),
       label: Rgba::try_from("#E87813").unwrap(),
       border: Rgba::try_from("#666").unwrap().alpha(0.25),
+      danger_bg: Rgba::try_from("#642C2C").unwrap(),
+      danger_fg: Rgba::try_from("#E88C8C").unwrap(),
     }
   }
 

@@ -1,4 +1,4 @@
-use gpui::{Entity, InteractiveElement, Render, Window, div, text};
+use gpui::{Entity, Render, Window, text};
 use gpui::prelude::*;
 use tokio::sync::oneshot;
 
@@ -54,23 +54,18 @@ impl CreateStoryScreen {
 impl Render for CreateStoryScreen {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.global::<Theme>();
-    let (bg, fg) = (theme.bg, theme.text);
+
+    let title_valid = cx.read_entity(&self.title, |t, _| !t.value().trim().is_empty());
+    let premise_valid = cx.read_entity(&self.premise, |t, _| !t.value().trim().is_empty());
+    let valid = title_valid && premise_valid;
 
     screen(text!("Create Vignette")).closable()
       .child(field(&theme, "Title", &self.title))
       .child(field(&theme, "Premise", &self.premise))
-      .child(div()
-        .id("btn-create")
-        .w_full()
-        .p_2()
-        .flex()
-        .justify_center()
-        .rounded_sm()
-        .bg(fg)
-        .text_color(bg)
-        .cursor_pointer()
-        .hover(|style| style.opacity(0.85))
-        .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
-        .child(text!("Create")))
+      .child(button("btn-create", text!("Create"))
+        .primary(&theme)
+        .disable(!valid)
+        .into_element()
+        .on_click(cx.listener(|this, _, _, cx| this.submit(cx))))
   }
 }

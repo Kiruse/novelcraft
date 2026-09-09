@@ -1,5 +1,5 @@
 use exhaustive_map::{ExhaustiveMap, FiniteExt};
-use gpui::{Div, Entity, InteractiveElement, Render, Window, div, text};
+use gpui::{Div, Entity, Render, Window, div, text};
 use gpui::prelude::*;
 use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose, NovelCraftConfig};
 use tokio::sync::oneshot;
@@ -104,7 +104,6 @@ impl SettingsScreen {
 impl Render for SettingsScreen {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.global::<Theme>();
-    let (bg, fg) = (theme.bg, theme.text);
 
     screen(text!("Settings")).closable()
       .child(field(&theme, "Max Agent Steps", &self.max_agent_steps))
@@ -120,19 +119,10 @@ impl Render for SettingsScreen {
             .models
             .iter()
             .map(|(purpose, fields)| model_group(&theme, purpose.as_str(), fields))))
-      .child(div()
-        .id("btn-save")
-        .w_full()
-        .p_2()
-        .flex()
-        .justify_center()
-        .rounded_sm()
-        .bg(fg)
-        .text_color(bg)
-        .cursor_pointer()
-        .hover(|style| style.opacity(0.85))
-        .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
-        .child(text!("Save")))
+      .child(button("btn-save", text!("Save"))
+        .primary(&theme)
+        .into_element()
+        .on_click(cx.listener(|this, _, _, cx| this.save(cx))))
   }
 }
 

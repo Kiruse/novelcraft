@@ -95,8 +95,31 @@ Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) 
 | `field(theme, label, input)` | `Div` | Labeled form field: label above an `Entity<TextInput>` |
 | `field_group(theme, label)` | `Div` | Bordered group box with a heading (used for model groups) |
 | `create_text_input(cx, multiline, placeholder)` | `Entity<TextInput>` | Creates a `TextInput` entity with the given mode and placeholder |
+| `button(anim_id, label)` | `IncompleteButton` | Starts a themed `Button` (see below) |
 | `settings_gear()` | `impl IntoElement` | Gear icon button (see below) |
 | `btn_icon_close()` | `impl IntoElement` | Close icon button (see below) |
+
+### `button()` — Themed Buttons
+
+`button(anim_id, label)` returns an `IncompleteButton` whose variant methods apply the `Theme` and produce a `Button` (an `IntoElement` wrapper around a styled, full-width `Stateful<Div>`). The four variants:
+
+| Variant | Background | Text | Border |
+|---------|-----------|------|--------|
+| `primary(&theme)` | theme `text` | theme `bg` | none (transparent) |
+| `secondary(&theme)` | transparent | theme `text` | theme `text` |
+| `danger_primary(&theme)` | `danger_bg` | theme `bg` | none (transparent) |
+| `danger_secondary(&theme)` | transparent | `danger_fg` | `danger_fg` |
+
+Hover states are color-only (no opacity): `primary` dims its background (`text` @ 85% alpha), `danger_primary` lightens `danger_bg` lightness by `+0.15` (`HslaExt::lum`), and the outlined variants tint the background with their foreground @ 10% alpha (`danger_secondary` also lightens its text/border). Pressed states (mouse down until release, via gpui's `active` style — triggered by any mouse button) darken `primary`/`danger_primary` by `-0.1` lightness and strengthen the outlined variants' background tint to 20% alpha; pressed colors override hover. The 1px border is always present in the element so layout is stable; "no border" variants use a fully transparent border color.
+
+Since `Button` only implements `IntoElement` (not interactivity), attach `on_click` by converting first:
+
+```rust
+button("btn-save", text!("Save"))
+  .primary(&theme)
+  .into_element()                // -> Stateful<Div>
+  .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
+```
 
 ### `settings_gear()` and `btn_icon_close()`
 
@@ -273,7 +296,7 @@ The vignette creation form, reached from the Home screen's "Create new Vignette"
 | `title` | `Entity<TextInput>` | single-line, placeholder `"Title"` |
 | `premise` | `Entity<TextInput>` | multiline, placeholder `"Describe the premise your story starts from ..."` |
 
-Both inputs are created with the `create_text_input(cx, multiline, placeholder)` comp helper and rendered via `field(theme, label, input)`. The Create button is styled identically to the Settings save button: full-width centered row, inverted colors (`.bg(fg)` / `.text_color(bg)`), `cursor_pointer()`, hover opacity 0.85, `.id("btn-create")`.
+Both inputs are created with the `create_text_input(cx, multiline, placeholder)` comp helper and rendered via `field(theme, label, input)`. The Create button is a `button("btn-create", text!("Create")).primary(&theme)` — identical to the Settings save button (see [`button()` — Themed Buttons](#button--themed-buttons)).
 
 #### Submit Flow
 
@@ -328,7 +351,7 @@ The result is boxed and sent as `Command::SaveConfig(Box<NovelCraftConfig>)`. Th
 
 #### Layout
 
-`screen_root()` with the top bar plus a scrollable content column: `.id("settings-scroll").overflow_y_scroll()` (`flex_grow(1.)`, `min_h(px(0.))`, `w_full`) wrapping an inner column with `max_w(px(640.))`, `gap_4`, `p_4`. Fields are rendered by the `field(label, input, color)` helper (label at 55% text opacity above the input). Each model entry is a `model_group(label, fields, color, border)` bordered box (`border_1`, 25% opacity border, `rounded_sm`, `p_3`) containing Base URL / API Key / Model fields. The Save button is a full-width centered row styled inverted — `.bg(fg)` / `.text_color(bg)` (theme text color as background, theme background as text) — with `cursor_pointer()`, hover opacity 0.85, and `.id("btn-save")`.
+`screen_root()` with the top bar plus a scrollable content column: `.id("settings-scroll").overflow_y_scroll()` (`flex_grow(1.)`, `min_h(px(0.))`, `w_full`) wrapping an inner column with `max_w(px(640.))`, `gap_4`, `p_4`. Fields are rendered by the `field(label, input, color)` helper (label at 55% text opacity above the input). Each model entry is a `model_group(label, fields, color, border)` bordered box (`border_1`, 25% opacity border, `rounded_sm`, `p_3`) containing Base URL / API Key / Model fields. The Save button is `button("btn-save", text!("Save")).primary(&theme)` — inverted colors (theme text as background, theme bg as text), converted with `.into_element()` to attach `on_click` (see [`button()` — Themed Buttons](#button--themed-buttons)).
 
 #### Gotcha: `text!` Does Not Format
 
@@ -341,10 +364,14 @@ pub struct Theme {
   kind: ThemeKind,   // serde(skip)
   pub bg: Rgba,
   pub text: Rgba,
+  pub label: Rgba,       // label text (orange in the dark theme)
+  pub border: Rgba,      // borders at 25% opacity
+  pub danger_bg: Rgba,   // destructive UI background (dark red)
+  pub danger_fg: Rgba,   // destructive UI foreground (lighter red than danger_bg)
 }
 ```
 
-- `Theme::dark()` constructor (bg `#283333`, text `#E1F5F5`); `Default` delegates to `dark()`
+- `Theme::dark()` constructor (bg `#283333`, text `#E1F5F5`, label `#E87813`, border `#666` @ 25%, danger_bg `#642C2C`, danger_fg `#E88C8C`); `Default` delegates to `dark()`
 - `ThemeKind` is a unique-identifier enum (`Dark`) with `FromStr` parsing
 - Implements gpui's `Global` trait — screens read it via `cx.global::<Theme>()`; `main()` installs it with `cx.set_global(config.theme)`
 - Serialized/deserialized as the theme name string (`"dark"`) via `serialize_theme_name`/`deserialize_theme_name`; the GUI config lives at `{configDir}/NovelCraft/gui.config.json`
