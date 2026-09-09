@@ -188,12 +188,14 @@ A single file containing the LLM model configuration. Held in memory in `AppStat
 
 State snapshots enable undo/fork by capturing module state at each page:
 
-- **Session creation** → head snapshot with empty state `{}`
+- **Session creation** → the GUI path is `NovelCraftEngine::create_session` (`engine/src/game/engine.rs`), which persists `meta.json` plus an attached, empty `pages.000.json` batch (the initial batch is attached to the session in `SessionV1::default()`); the commands-level `session_create` additionally writes a head snapshot with empty state `{}`
 - **After each page's tool calls** → head snapshot (`state.head.json`) updated in place
 - **Every 100 pages** → copy current head as checkpoint (`state.{batch}.json`) before updating
 - **Fork** → `GameEngine::fork(page_index)` truncates page batch files after the batch containing `page_index`, then reloads the session to rebuild state
 - **State is immutable** — the canonical state is the snapshot data
 - **Initial module state** is always empty (`{}`); first tool call populates what's needed via `init()` fallback
+- **Batch save guard** → `SessionV1::save` writes a tail batch only when its `session_id` matches the session; unattached placeholder batches are skipped, so no junk `pages.*.json` files leak into the sessions root
+- **Zero-batch loads** → `SessionV1::load` resolves tail batch indices with saturating arithmetic, so fresh sessions with no batch files on disk load without usize underflow
 
 ---
 

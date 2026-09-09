@@ -132,6 +132,11 @@ fn main() -> anyhow::Result<()> {
               .expect_warn();
             let _ = tx.send(sessions);
           }
+          Command::CreateSession { title, exposition, reply } => {
+            let session = engine.create_session(title, exposition).await;
+            session.error();
+            let _ = reply.send(session.ok());
+          }
         }
       }
     });
@@ -206,6 +211,13 @@ pub(crate) enum Command {
   SaveConfig(NovelCraftConfig),
   /// List the player's saved sessions (metadata only), newest first.
   ListSessions(oneshot::Sender<Vec<SessionV1>>),
+  /// Create a new session with the given title & exposition, replying with
+  /// the created session (or None on failure).
+  CreateSession {
+    title: String,
+    exposition: String,
+    reply: oneshot::Sender<Option<SessionV1>>,
+  },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Deserialize, JsonSchema)]

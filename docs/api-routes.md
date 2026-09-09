@@ -171,6 +171,28 @@ Game agent commands provide a backend-driven agent loop for LLM gameplay session
 
 **File:** `engine/src/commands/game.rs`
 
+#### `create_session`
+
+Creates and persists a new game session with a title and exposition. Defined as a method on `NovelCraftEngine` rather than a free command function.
+
+**File:** `engine/src/game/engine.rs`
+
+**Parameters:**
+
+- `&mut self`
+- `title: String`
+- `exposition: String`
+
+**Returns:** `Result<SessionV1, EngineError>`
+
+**Behavior:**
+
+1. Builds a fresh `SessionV1` via `SessionV1::default()` (generates a UUID and attaches the initial `pages.000.json` batch to the session)
+2. Sets `title` and `exposition`
+3. Fills `modules` with fresh default instances of all existing gameplay modules via the private `default_modules()` helper — story, npcs, player, keyed by each module's `ID`
+4. Records the engine's active profile (if any) as `session.profile`
+5. Persists via `SessionV1::save()` and returns the created session
+
 #### `game_prompt`
 
 Starts an agent loop for a game session. Reads session history, adds prompt as user message (if non-empty), iterates LLM calls (up to `max_agent_steps` from `AppState.config`). Streams events via the `on_event` callback.

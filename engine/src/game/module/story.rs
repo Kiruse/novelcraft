@@ -7,7 +7,7 @@ use crate::game::state::GameState;
 use crate::markdown::{TodoList, TodoListDiff};
 use crate::util::prompting::{PromptFormatter, PromptifyResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoryModule {}
 
 impl StoryModule {

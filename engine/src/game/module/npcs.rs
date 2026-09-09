@@ -8,7 +8,7 @@ use crate::game::module::GameStateView;
 use crate::game::state::GameState;
 use crate::util::prompting::{PromptFormatter, PromptifyResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NpcsModule {
   pub npcs: Arc<HashMap<String, NpcDescriptor>>,
 }

@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Sender;
 
 use crate::config::NovelCraftConfig;
 use crate::error::EngineError;
+use crate::game::module::{self, GameplayModule};
 use crate::game::pages::{PageBatchV1, PageV1};
 use crate::game::profile::ProfileV1;
 use crate::game::session::SessionV1;
@@ -110,6 +111,32 @@ impl NovelCraftEngine {
     }
     result.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
     Ok(result)
+  }
+
+  /// Create and persist a new session with the given title & exposition.
+  /// The session is set up with fresh instances of all existing gameplay
+  /// modules, and records the engine's active profile (if any).
+  pub async fn create_session(
+    &mut self,
+    title: String,
+    exposition: String,
+  ) -> Result<SessionV1, EngineError> {
+    let mut session = SessionV1::default();
+    session.title = title;
+    session.exposition = exposition;
+    session.modules = Self::default_modules();
+    session.profile = self.profile().map(|p| p.id.clone());
+    session.save().await?;
+    Ok(session)
+  }
+
+  /// Fresh instances of all existing gameplay modules, keyed by module ID.
+  fn default_modules() -> HashMap<String, GameplayModule> {
+    HashMap::from([
+      (module::story::StoryModule::ID.to_string(), GameplayModule::Story(Default::default())),
+      (module::npcs::NpcsModule::ID.to_string(), GameplayModule::Npcs(Default::default())),
+      (module::player::PlayerModule::ID.to_string(), GameplayModule::Player(Default::default())),
+    ])
   }
 
   fn conversation(&self, modids: &[String]) -> Result<Conversation, EngineError> {

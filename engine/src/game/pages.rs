@@ -59,6 +59,9 @@ impl PageBatchV1 {
   }
 
   pub async fn save(&self) -> Result<(), EngineError> {
+    if self.session_id.is_empty() {
+      return Err(EngineError::illegal("PageBatch must not have empty page ID (default)"));
+    }
     let path = Self::path(&self.session_id, self.batch_num)?;
     serialize(&path, self).await?;
     Ok(())

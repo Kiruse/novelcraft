@@ -32,7 +32,7 @@ pub trait Loggable {
   }
 }
 
-impl<E: Display> Loggable for Result<(), E> {
+impl<T, E: Display> Loggable for Result<T, E> {
   fn log(&self, level: LogLevel) {
     match self {
       Ok(_) => {}

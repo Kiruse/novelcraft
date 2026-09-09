@@ -35,7 +35,7 @@ novelcraft/
 │       │   └── todo.rs               # TodoItem/TodoList parsing & diffing
 │       ├── game/                     # Game engine types
 │       │   ├── mod.rs                # Module barrel
-│       │   ├── engine.rs             # GameEngine (session loading, page CRUD, fork, history, LRU page cache)
+│       │   ├── engine.rs             # GameEngine (session creation/loading, page CRUD, fork, history, LRU page cache)
 │       │   ├── session.rs            # Game session model (SessionV1, file-based persistence)
 │       │   ├── pages.rs              # Page types (PageV1, PageBatch, ResponseV1)
 │       │   ├── state.rs              # AppState (config + profiles, initialized in lib.rs setup)
@@ -87,8 +87,8 @@ Pure Rust library with all business logic. No UI framework coupling.
   - `lore.rs` — Lore query for `lore/{id}.json`. Version-gated deserialization.
   - `fs.rs` — File operations: export/import session JSON, native file/folder picker dialogs.
 - `game/` — Game engine types (separate from `commands/game.rs`)
-  - `engine.rs` — `GameEngine`: loads game sessions, manages page batches, provides history for prompting, page CRUD, fork, lists sessions (metadata-only `SessionV1`s, newest first). Uses LRU cache (`moka::future::Cache`, capacity 8).
-  - `session.rs` — `SessionV1`: game session model with file-based persistence (`save`, `save_metadata`, `load`, `load_metadata`).
+  - `engine.rs` — `GameEngine`: creates game sessions (`create_session`: fresh `SessionV1` with default instances of all gameplay modules and the active profile), loads game sessions, manages page batches, provides history for prompting, page CRUD, fork, lists sessions (metadata-only `SessionV1`s, newest first). Uses LRU cache (`moka::future::Cache`, capacity 8).
+  - `session.rs` — `SessionV1`: game session model with file-based persistence (`save`, `save_metadata`, `load`, `load_metadata`). `save` skips unattached placeholder page batches; `load` uses saturating arithmetic so zero-batch sessions load without underflow.
   - `pages.rs` — Page types: `PageV1`, `PageBatch`, `ResponseV1`.
   - `state.rs` — `AppState`: holds `config`, `profiles`, and `models` mutexes.
   - `module.rs` — Game module abstractions.

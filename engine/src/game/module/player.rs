@@ -7,7 +7,7 @@ use crate::game::state::{GameState, ModuleState};
 use crate::util::discard_channel;
 use crate::util::prompting::{PromptFormatter, Promptify, PromptifyResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerModule {
   /// Player's starting apparel
   apparel: Option<String>,

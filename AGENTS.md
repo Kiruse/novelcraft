@@ -57,8 +57,8 @@ novelcraft/
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
 │   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
 │   └── src/
-│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions), AppRoot view, action routing
-│       ├── screens.rs          # Screen enum + screen view structs (create(cx) + Render)
+│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view, action routing
+│       ├── screens/            # Screen enum (mod.rs) + one submodule per screen (create(cx) + Render)
 │       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 │       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings)
 │       ├── theme.rs            # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name
@@ -83,7 +83,7 @@ novelcraft/
 | Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
 | Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
 | GUI Entry | `gui/src/main.rs` | Engine thread, `CommandBus` global, `AppRoot` view, action routing |
-| GUI Screens | `gui/src/screens.rs` | `Screen` enum + screen view structs (`HomeScreen`, `SettingsScreen`, `CreateStoryScreen`, `StoryOverviewScreen`, `StoryGameplayScreen`) with `create(cx)` + `Render` |
+| GUI Screens | `gui/src/screens/` | `Screen` enum (`mod.rs`) + one submodule per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) with `create(cx)` + `Render` |
 | GUI Components | `gui/src/comp.rs` | Stateless UI builder functions (`root`, `screen_root`, `top_bar`, `settings_gear`, `btn_icon_close`) |
 | GUI Text Input | `gui/src/text_input.rs` | Reusable `TextInput` component — custom `Element`, `EntityInputHandler` (IME), `init(cx)` key bindings scoped to the `"TextInput"` key context |
 | GUI Theme | `gui/src/theme.rs` | `Theme`/`ThemeKind` (bg, text colors), gpui `Global` impl, serde (de)serialization as theme name |
@@ -174,11 +174,13 @@ let results = lore::lore_query(&app, id, "search").await?;
 
 State snapshots enable undo/fork by capturing module state at each page:
 
-- **Session creation** — head snapshot (`state.head.json`) with empty state `{}`
+- **Session creation** — the GUI path is `NovelCraftEngine::create_session(title, exposition)` (`engine/src/game/engine.rs`): builds a fresh `SessionV1` via `SessionV1::default()`, fills `modules` with default instances of all gameplay modules (private `default_modules()` helper: story, npcs, player keyed by module ID), records the engine's active profile, and persists via `SessionV1::save()`. The commands-level `session_create` instead writes `meta.json` + a head snapshot with empty state `{}`
 - **After each page's tool calls** — head snapshot updated in place via `session::session_save_head_snapshot()`
 - **Every 100 pages** — copy current head as checkpoint (`state.{batch}.json`) via `session::session_save_checkpoint()` before updating
 - **Fork** — `GameEngine::fork(page_index)` truncates page batch files after the batch containing `page_index`, then reloads the session via `SessionV1::load` to obtain correct `tail_batches`, `page_count`, `batch_count`, and `gamestate`, and rebuilds the agent loop
 - **State is immutable** — the canonical state is the snapshot data
+- **Batch save guard** — `SessionV1::save` writes a tail batch only when `batch.session_id` matches the session; unattached placeholder batches (e.g. `PageBatchV1::default()`) are skipped via the private `save_batch` helper, so no junk `pages.*.json` files leak into the sessions root
+- **Zero-batch loads** — `SessionV1::load` resolves tail batch indices with saturating arithmetic (`batch_count.saturating_sub(2)` / `saturating_sub(1)`), so fresh sessions with no batch files load without usize underflow
 
 ### Game Agent Loop
 
@@ -430,5 +432,5 @@ All build and development commands are in the root `justfile`.
 | `gpui` (git, Zed main) | UI framework — views, elements, styling |
 | `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |
 | `log` | Logging facade (used by `util.rs` `Loggable` trait) |
-| `chrono` | Local-time formatting of session timestamps (used by `screens.rs`) |
+| `chrono` | Local-time formatting of session timestamps (used by `screens/home.rs`) |
 | `unicode-segmentation` | Grapheme-boundary cursor movement (used by `text_input.rs`) |

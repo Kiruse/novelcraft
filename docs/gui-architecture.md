@@ -18,7 +18,7 @@ The GUI is a native Rust binary using the **gpui** framework (from the Zed edito
 
 ### Screen-Based Navigation
 
-The `Screen` enum (`gui/src/screens.rs`) drives navigation. `AppRoot` matches on the current `Screen` variant and attaches the corresponding screen entity as a child.
+The `Screen` enum (`gui/src/screens/mod.rs`) drives navigation. `AppRoot` matches on the current `Screen` variant and attaches the corresponding screen entity as a child.
 
 ```rust
 #[derive(Debug, Clone, Default)]
@@ -40,11 +40,11 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 |--------|--------|-------|
 | Home | `HomeScreen` | `sessions: Option<Vec<SessionV1>>` (see [Home Screen](#home-screen-homescreen)) |
 | Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
-| Create Story | `CreateStoryScreen` | none (unit struct) |
+| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>` (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
 | Story Overview | `StoryOverviewScreen` | `id: StoryId` |
 | Story Gameplay | `StoryGameplayScreen` | `id: StoryId` |
 
-All screen structs live in `gui/src/screens.rs` — one file, one section per screen. `CreateStoryScreen`, `StoryOverviewScreen`, and `StoryGameplayScreen` are currently placeholders (`render` returns an empty `div()`).
+Each screen lives in its own submodule under `gui/src/screens/` (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); `mod.rs` declares the submodules, defines the `Screen` enum, and re-exports the screen structs. `StoryOverviewScreen` and `StoryGameplayScreen` are currently placeholders (`render` returns an empty `div()`).
 
 ### AppRoot View
 
@@ -56,7 +56,7 @@ All screen structs live in `gui/src/screens.rs` — one file, one section per sc
 
 The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed.
 
-Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. `Command` is a `pub(crate)` enum with five variants:
+Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. `Command` is a `pub(crate)` enum with six variants:
 
 | Variant | Payload | Semantics |
 |---------|---------|-----------|
@@ -65,8 +65,9 @@ Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) 
 | `LoadConfig(oneshot::Sender<NovelCraftConfig>)` | reply channel | Request/response: engine thread loads `{configDir}/NovelCraft/config.json` via `NovelCraftConfig::load()` (falling back to `NovelCraftConfig::default()` on error, logged as a warning), syncs it via `NovelCraftEngine::set_config`, replies over the channel |
 | `SaveConfig(Box<NovelCraftConfig>)` | boxed config | Fire-and-forget: engine thread syncs via `engine.set_config`, then persists with `config.save().await` |
 | `ListSessions(oneshot::Sender<Vec<SessionV1>>)` | reply channel | Request/response: engine thread calls `NovelCraftEngine::list_sessions()` — enumerates session directories, loads each via `SessionV1::load_metadata` (metadata only: id, title, exposition, timestamps, modules, profile; no page batches or gamestate), skips directories with unreadable metadata (logged as a warning), sorts newest-first by `updated_at`, and replies; on error it logs a warning and replies with an empty `Vec` |
+| `CreateSession { title, exposition, reply }` | title, exposition, reply channel | Request/response: engine thread calls `NovelCraftEngine::create_session(title, exposition)` — builds a fresh `SessionV1` with default gameplay modules and the engine's active profile, persists it — and replies `Some(session)`; on error it logs the error and replies `None` |
 
-`Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`, `ListSessions`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen) and [Home Screen](#home-screen-homescreen).
+`Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`, `ListSessions`, `CreateSession`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen), [Home Screen](#home-screen-homescreen), and [Create Story Screen](#create-story-screen-createstoryscreen).
 
 ## Reusable Components (`gui/src/comp.rs`)
 
@@ -76,7 +77,12 @@ Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) 
 |----------|---------|---------|
 | `root(theme: &Theme)` | `Div` | Root of most screens: flex column, items centered, theme bg + text color |
 | `screen_root()` | `Div` | Screen content wrapper: flex column, items centered, `w_full h_full` |
+| `content()` | `Stateful<Div>` | Scrollable content column: `w_full`, `max_w(px(640.))`, `gap_4`, `p_4` |
 | `top_bar()` | `Div` | Title bar row: `relative w_full`, flex row, `justify_center` |
+| `title(content: Text)` | `Div` | Screen title text at `text_3xl()` |
+| `field(theme, label, input)` | `Div` | Labeled form field: label above an `Entity<TextInput>` |
+| `field_group(theme, label)` | `Div` | Bordered group box with a heading (used for model groups) |
+| `create_text_input(cx, multiline, placeholder)` | `Entity<TextInput>` | Creates a `TextInput` entity with the given mode and placeholder |
 | `settings_gear()` | `impl IntoElement` | Gear icon button (see below) |
 | `btn_icon_close()` | `impl IntoElement` | Close icon button (see below) |
 
@@ -243,6 +249,25 @@ Below the top bar, a `content()` column renders:
   - `Some(sessions)` — a column (gap-2) of clickable session cards
 
 Each session card is built by the `session_card(theme, session)` helper: a bordered, hover-highlighted, clickable row showing the session title (`text_lg`), the `updated_at` timestamp formatted in local time via `chrono` (`%Y-%m-%d %H:%M`), and the exposition text. Cards get their session ID as the element ID; `on_click` dispatches `nav::ShowStory(StoryId)` where `StoryId` wraps the session ID. Both card types dispatch via `window.dispatch_action` and navigate through the app-level action listeners in `main()`.
+
+### Create Story Screen (`CreateStoryScreen`)
+
+The vignette creation form, reached from the Home screen's "Create new Vignette" card (`nav::CreateStory` → `Screen::CreateStory`). The top bar shows the title `"Create Vignette"` at `text_3xl()` (centered) with `btn_icon_close()` (`Back` → `Screen::Home`).
+
+#### Fields
+
+| Screen field | Type | Editor |
+|--------------|------|--------|
+| `title` | `Entity<TextInput>` | single-line, placeholder `"Title"` |
+| `premise` | `Entity<TextInput>` | multiline, placeholder `"Describe the premise your story starts from ..."` |
+
+Both inputs are created with the `create_text_input(cx, multiline, placeholder)` comp helper and rendered via `field(theme, label, input)`. The Create button is styled identically to the Settings save button: full-width centered row, inverted colors (`.bg(fg)` / `.text_color(bg)`), `cursor_pointer()`, hover opacity 0.85, `.id("btn-create")`.
+
+#### Submit Flow
+
+`submit()` (bound to the Create button via `cx.listener`) reads both values trimmed and no-ops when the title is empty. Otherwise it sends `Command::CreateSession { title, exposition, reply }` over the `CommandBus` and, inside a `cx.spawn`ed (detached) task, awaits the oneshot reply. On `Some(session)` it dispatches the `nav::ShowStory(StoryId(session.id))` action via `App::dispatch_action` — allowed here because the spawned future runs outside a window update (note that `AsyncApp::update` returns the closure result directly, not a `Result`). The app-level listener routes the app to `Screen::StoryOverview`.
+
+Known limitation (deferred): input values are not reset when re-entering the screen — the screen entity is created once at startup and reused.
 
 ### Settings Screen (`SettingsScreen`)
 
@@ -434,7 +459,7 @@ Inside a view's own `Render` impl, `cx.entity()` hands the entity to a custom el
 ```
 gui/src/
 ├── main.rs          # Entry point — engine thread, CommandBus global, AppRoot view, action routing
-├── screens.rs       # Screen enum + screen view structs (create(cx) + Render)
+├── screens/           # Screen enum (mod.rs) + one submodule per screen (create(cx) + Render)
 ├── comp.rs          # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 ├── text_input.rs    # Reusable TextInput component (custom Element, IME, scoped key bindings)
 ├── theme.rs         # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name

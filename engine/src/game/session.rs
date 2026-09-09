@@ -49,9 +49,10 @@ pub struct SessionV1 {
 
 impl Default for SessionV1 {
   fn default() -> Self {
+    let id = Uuid::new_v4().to_string();
     Self {
       version: Self::VERSION,
-      id: Uuid::new_v4().to_string(),
+      id: id.clone(),
       title: String::new(),
       exposition: String::new(),
       created_at: Utc::now(),
@@ -60,7 +61,7 @@ impl Default for SessionV1 {
       profile: None,
       page_count: 0,
       batch_count: 0,
-      tail_batches: (PageBatchV1::default(), PageBatchV1::default()),
+      tail_batches: (PageBatchV1::new(id.clone(), 0), PageBatchV1::default()),
       gamestate: GameState::default(),
     }
   }
@@ -106,8 +107,8 @@ impl SessionV1 {
     res.batch_count = batch_count;
 
     let (b0, b1) = tokio::join!(
-      PageBatchV1::load(id.clone(), batch_count - 2),
-      PageBatchV1::load(id.clone(), batch_count - 1),
+      PageBatchV1::load(id.clone(), batch_count.saturating_sub(2)),
+      PageBatchV1::load(id.clone(), batch_count.saturating_sub(1)),
     );
 
     let batch = match batch_count {
@@ -142,13 +143,22 @@ impl SessionV1 {
   pub async fn save(&self) -> Result<(), EngineError> {
     let (r_self, r_b1, r_b2) = tokio::join!(
       self.save_metadata(),
-      self.tail_batches.0.save(),
-      self.tail_batches.1.save(),
+      self.save_batch(&self.tail_batches.0),
+      self.save_batch(&self.tail_batches.1),
     );
     r_self?;
     r_b1?;
     r_b2?;
     Ok(())
+  }
+
+  /// Save the given page batch unless it's initial or empty.
+  async fn save_batch(&self, batch: &PageBatchV1) -> Result<(), EngineError> {
+    if !batch.session_id.is_empty() && !batch.pages.is_empty() {
+      batch.save().await
+    } else {
+      Ok(())
+    }
   }
 
   /// Save only this session's metadata, not its [SessionV1::tail_batches].
