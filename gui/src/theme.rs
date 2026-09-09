@@ -52,8 +52,8 @@ impl Theme {
   pub fn dark() -> Self {
     Theme {
       kind: ThemeKind::Dark,
-      bg: Rgba::try_from("#283333").unwrap(),
-      text: Rgba::try_from("#E1F5F5").unwrap(),
+      bg: Rgba::try_from("#202833").unwrap(),
+      text: Rgba::try_from("#b1c5db").unwrap(),
       label: Rgba::try_from("#E87813").unwrap(),
       border: Rgba::try_from("#666").unwrap().alpha(0.25),
       danger_bg: Rgba::try_from("#642C2C").unwrap(),
