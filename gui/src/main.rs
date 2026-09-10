@@ -104,65 +104,12 @@ impl Render for AppRoot {
             self
               .toasts
               .iter()
-              .map(|(id, toast)| toast_view(theme, *id, toast, cx)),
+              .map(|(id, toast)| toast.to_elem(theme, *id, cx)),
           ),
       );
     }
     res
   }
-}
-
-fn toast_view(
-  theme: &Theme,
-  id: usize,
-  toast: &Toast,
-  cx: &Context<'_, AppRoot>,
-) -> Stateful<Div> {
-  let accent = toast.variant.color(theme);
-  let (bg, border) = match toast.variant {
-    ToastVariant::Error => (theme.danger_bg, theme.danger_fg),
-    _ => (theme.bg, theme.border),
-  };
-  let title = toast.title.clone().unwrap_or_else(|| {
-    match toast.variant {
-      ToastVariant::Info => "Info",
-      ToastVariant::Success => "Success",
-      ToastVariant::Warn => "Caution",
-      ToastVariant::Error => "Error",
-    }
-    .to_string()
-  });
-
-  div()
-    .id(ElementId::named_usize("toast", id))
-    .relative()
-    .w_full()
-    .max_w(px(640.))
-    .flex()
-    .flex_col()
-    .gap_1()
-    .p_3()
-    .pr_8()
-    .border_1()
-    .border_color(border)
-    .rounded_sm()
-    .bg(bg)
-    .shadow_lg()
-    .child(div().text_color(accent).child(text!(title)))
-    .child(div().text_color(theme.text).child(text!(toast.msg.clone())))
-    .child(
-      div()
-        .id(ElementId::named_usize("toast-cancel", id))
-        .absolute()
-        .top_1()
-        .right_2()
-        .text_color(theme.label)
-        .text_lg()
-        .cursor_pointer()
-        .hover(|style| style.opacity(0.7))
-        .on_click(cx.listener(move |root, _, _, cx| root.dismiss_toast(id, cx)))
-        .child(text!("\u{00d7}")),
-    )
 }
 
 fn on_screen_action<A: Action>(
@@ -395,6 +342,44 @@ impl Toast {
   pub fn dispatch(self, cx: &mut App) {
     cx.defer(move |cx| cx.dispatch_action(&self.to_spawn_action()));
   }
+
+  fn to_elem(&self, theme: &Theme, id: usize, cx: &Context<'_, AppRoot>) -> Stateful<Div> {
+    let accent = self.variant.color(theme);
+    let title = self.title
+      .clone()
+      .unwrap_or_else(|| self.variant.as_title().to_string());
+
+    div()
+      .id(ElementId::named_usize("toast", id))
+      .w_full()
+      .max_w(px(640.))
+      .flex()
+      .flex_col()
+      .gap_1()
+      .p_3()
+      .items_stretch()
+      .border_1()
+      .border_color(accent)
+      .rounded_sm()
+      .bg(theme.bg)
+      .shadow_lg()
+      .child(div()
+        .relative()
+        .flex()
+        .w_full()
+        .child(div().text_color(accent).child(text!(title)))
+        .child(div()
+          .id(ElementId::named_usize("toast-cancel", id))
+          .absolute()
+          .right_1()
+          .text_color(theme.text)
+          .text_lg()
+          .cursor_pointer()
+          .hover(|style| style.opacity(0.7))
+          .on_click(cx.listener(move |root, _, _, cx| root.dismiss_toast(id, cx)))
+          .child(text!("\u{00d7}"))))
+      .child(div().text_color(theme.text).child(text!(self.msg.clone())))
+  }
 }
 
 impl Default for Toast {
@@ -426,6 +411,15 @@ impl ToastVariant {
       Self::Success => theme.success,
       Self::Warn => theme.warn,
       Self::Error => theme.danger_fg,
+    }
+  }
+
+  fn as_title(&self) -> &'static str {
+    match self {
+      Self::Info    => "Info",
+      Self::Success => "Success",
+      Self::Warn    => "Caution",
+      Self::Error   => "Error",
     }
   }
 }
