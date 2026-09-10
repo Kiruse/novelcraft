@@ -51,6 +51,13 @@ impl CreateStoryScreen {
       }
     }).detach();
   }
+
+  pub(crate) fn enter(&mut self, cx: &mut Context<'_, Self>) {}
+
+  pub(crate) fn exit(&mut self, cx: &mut Context<'_, Self>) {
+    self.title.update(cx, |n, cx| n.reset(cx));
+    self.premise.update(cx, |n, cx| n.reset(cx));
+  }
 }
 
 impl Render for CreateStoryScreen {

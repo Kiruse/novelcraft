@@ -37,11 +37,27 @@ struct AppRoot {
 }
 
 impl AppRoot {
-  fn on_back(&mut self) {
-    self.screen = match std::mem::take(&mut self.screen) {
-      Screen::StoryGameplay(id) => Screen::StoryOverview(id),
+  fn on_back(&mut self, cx: &mut Context<Self>) {
+    self.switch_screen(match &self.screen {
+      Screen::StoryGameplay(id) => Screen::StoryOverview(id.clone()),
       _ => Screen::Home,
-    };
+    }, cx);
+  }
+
+  fn switch_screen(&mut self, new_screen: Screen, cx: &mut Context<Self>) {
+    match self.screen {
+      Screen::CreateStory =>
+        self.screen_create_story.update(cx, CreateStoryScreen::exit),
+      _ => {}
+    }
+
+    self.screen = new_screen;
+
+    match self.screen {
+      Screen::CreateStory =>
+        self.screen_create_story.update(cx, CreateStoryScreen::enter),
+      _ => {}
+    }
   }
 
   fn spawn_toast(&mut self, toast: Toast, cx: &mut Context<Self>) {
@@ -120,7 +136,7 @@ fn on_screen_action<A: Action>(
   let root = root.clone();
   cx.on_action(move |action: &A, cx| {
     let screen = to(action);
-    root.update(cx, |root, _cx| root.screen = screen);
+    root.update(cx, |root, cx| root.switch_screen(screen, cx));
   });
 }
 
@@ -211,7 +227,7 @@ fn main() -> anyhow::Result<()> {
 
     cx.on_action({
       let root = root.clone();
-      move |_: &actions::Back, cx| root.update(cx, |root, _cx| root.on_back())
+      move |_: &actions::Back, cx| root.update(cx, |root, cx| root.on_back(cx))
     });
     on_screen_action(cx, &root, |_: &actions::ShowSettings| Screen::Settings);
     on_screen_action(cx, &root, |_: &actions::CreateStory| Screen::CreateStory);
