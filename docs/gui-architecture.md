@@ -40,7 +40,7 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 |--------|--------|-------|
 | Home | `HomeScreen` | `sessions: Option<Vec<SessionV1>>` (see [Home Screen](#home-screen-homescreen)) |
 | Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
-| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>` (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
+| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>`; Get Inspired: `categories` / `inspirations`: `Loadable<Result<_, GuiError>>`, `selected: BTreeSet<String>` + `inspirations_gen` generation guard (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
 | Story Overview | `StoryOverviewScreen` | `id: StoryId` |
 | Story Gameplay | `StoryGameplayScreen` | `id: StoryId` |
 
@@ -90,7 +90,7 @@ Toasts provide non-blocking input feedback and live entirely in `AppRoot` (`gui/
 - **Spawning**: dispatch the `toast::SpawnToast(Toast)` action (`actions` module in `main.rs`, carries the full `Toast`). A global `on_action` listener calls `AppRoot::spawn_toast`, which assigns a sequential id, appends to `self.toasts`, and — when `duration != Duration::ZERO` — detaches a `cx.spawn`ed task that awaits `cx.background_executor().timer(duration)` and then dismisses the toast. `duration == 0` toasts stay until dismissed manually.
 - **Removal**: `AppRoot::dismiss_toast(id)` retains all other toasts; both paths call `cx.notify()`.
 - **Rendering**: when non-empty, `AppRoot::render` appends an absolute overlay (`bottom_4`, full width, centered column, `gap_2`) after the screen child — painted last, so it sits above screen content. Each toast (`toast_view` helper) is a bordered rounded box with a drop shadow (`shadow_lg`) (Error uses `danger_bg` bg + `danger_fg` border; others `theme.bg`/`theme.border`) with the variant-colored title, the message, and a "×" cancel button (top-right, styled like `btn_icon_close`) whose `on_click` listener dismisses that toast.
-- **Ergonomics**: the `Toastable<T, E>` / `ExpectToastable<T>` traits (`gui/src/util.rs`) are implemented for `Result` (mirroring `Loggable`/`ExpectLoggable`): `dispatch_toast(ok, err, cx)` picks a toast per branch, `info/success/warn/error_toast(cx)` use defaults built from the value/error (`Display`), and `expect_toast`/`expect_error_toast` unwrap-or-default while toasting the error. They take `cx: &mut App` — `Context` derefs to `App`, so view code passes its context directly; async code wraps with `AsyncApp::update`. Dispatching goes through `App::dispatch_action(&SpawnToast(...))`.
+- **Ergonomics**: the `Toastable<T, E>` trait (`gui/src/util.rs`) is implemented for `Result` (mirroring `Loggable`): `report_toast(variant, cx)` dispatches a toast only on failure, and `info/success/warn/error_toast(cx)` are shortcuts that also pick the failure message from the error's `Display`. They take `cx: &mut App` — `Context` derefs to `App`, so view code passes its context directly; async code wraps with `AsyncApp::update`. Dispatching goes through `App::dispatch_action(&SpawnToast(...))`.
 
 First consumer: the Create Story screen shows an error toast when session creation fails.
 
@@ -105,10 +105,13 @@ First consumer: the Create Story screen shows an error toast when session creati
 | `content()` | `Stateful<Div>` | Scrollable content column: `w_full`, `max_w(px(640.))`, `gap_4`, `p_4` |
 | `top_bar()` | `Div` | Title bar row: `relative w_full`, flex row, `justify_center` |
 | `title(content: Text)` | `Div` | Screen title text at `text_3xl()` |
+| `subtitle(content: Text)` | `Div` | Section subtitle text at `text_2xl()` |
 | `field(theme, label, input)` | `Div` | Labeled form field: label above an `Entity<TextInput>` |
 | `field_group(theme, label)` | `Div` | Bordered group box with a heading (used for model groups) |
 | `create_text_input(cx, multiline, placeholder)` | `Entity<TextInput>` | Creates a `TextInput` entity with the given mode and placeholder |
 | `button(anim_id, label)` | `IncompleteButton` | Starts a themed `Button` (see below) |
+| `chip(anim_id, label)` | `IncompleteChip` | Starts a themed toggle `Chip` (see below) |
+| `loading_text(anim_id, text)` | `AnimationElement<Div>` | Pulsating loading placeholder: the text breathes between 0.2–1.0 opacity on a 1s repeating gpui animation |
 | `settings_gear()` | `impl IntoElement` | Gear icon button (see below) |
 | `btn_icon_close()` | `impl IntoElement` | Close icon button (see below) |
 
@@ -133,6 +136,26 @@ button("btn-save", text!("Save"))
   .into_element()                // -> Stateful<Div>
   .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
 ```
+
+### `chip()` — Toggle Chips
+
+`chip(anim_id, label)` mirrors `button()`: it returns an `IncompleteChip` whose variant method applies the `Theme` and produces a `Chip` (an `IntoElement` wrapper around a styled `Stateful<Div>`). The single variant, `select(&theme, selected)`, styles one of two toggle states:
+
+| State | Background | Text | Border |
+|-------|-----------|------|--------|
+| `select(&theme, true)` | theme `text` | theme `bg` | none (transparent) |
+| `select(&theme, false)` | transparent | theme `text` | theme `border` |
+
+Hover follows the button conventions: the toggled-on chip dims its background (`text` @ 85% alpha, like `primary`); the toggled-off chip tints its background with `theme.text` @ 10% alpha and raises its border to `theme.label`. Unlike `Button` there are no pressed or disabled states. The `Chip` renders a content-sized pill — `px_2 py_0p5 text_sm rounded_full border_1` with `cursor_pointer`; as with `Button`, the 1px border is always present in the element and "no border" means a transparent border color. No click handler is built in — convert first, then attach `on_click` yourself:
+
+```rust
+chip(format!("chip-category-{id}"), text!(label))
+  .select(&theme, self.selected.contains(&id))
+  .into_element()                // -> Stateful<Div>
+  .on_click(cx.listener(move |this, _, _, cx| this.toggle_category(&id, cx)))
+```
+
+First consumer: the Create Story screen's category filter row (see [Get Inspired](#get-inspired-local-mock-data)).
 
 ### `settings_gear()` and `btn_icon_close()`
 
@@ -307,15 +330,44 @@ The vignette creation form, reached from the Home screen's "Create new Vignette"
 | Screen field | Type | Editor |
 |--------------|------|--------|
 | `title` | `Entity<TextInput>` | single-line, placeholder `"Title"` |
-| `premise` | `Entity<TextInput>` | multiline, placeholder `"Describe the premise your story starts from ..."` |
+| `premise` | `Entity<TextInput>` | multiline, placeholder `"Describe the premise of your story ..."` |
+| `categories` | `Loadable<Result<Vec<InspirationCategory>, GuiError>>` | — (chip filter row, populated by `load_categories()`) |
+| `inspirations` | `Loadable<Result<Vec<Inspiration>, GuiError>>` | — (inspiration cards, populated by the debounced fetch) |
+| `selected` | `BTreeSet<String>` | ids of the toggled-on category chips |
+| `inspirations_gen` | `usize` | fetch generation counter (stale-response guard) |
 
-Both inputs are created with the `create_text_input(cx, multiline, placeholder)` comp helper and rendered via `field(theme, label, input)`. The Create button is a `button("btn-create", text!("Create")).primary(&theme)` — identical to the Settings save button (see [`button()` — Themed Buttons](#button--themed-buttons)).
+Both inputs are created with the `create_text_input(cx, multiline, placeholder)` comp helper and rendered via `field(theme, label, input)`. The Create button is a `button("btn-create", text!("Create")).primary(&theme).disable(!valid)` — `valid` (both inputs non-empty when trimmed) is recomputed on every render via `cx.read_entity`, so the button renders muted with no hover/press states until the form is filled; otherwise it is identical to the Settings save button (see [`button()` — Themed Buttons](#button--themed-buttons)).
 
 #### Submit Flow
 
 `submit()` (bound to the Create button via `cx.listener`) reads both values trimmed and no-ops when the title is empty. Otherwise it sends `Command::CreateSession { title, exposition, reply }` over the `CommandBus` and, inside a `cx.spawn`ed (detached) task, awaits the oneshot reply. On `Some(session)` it dispatches the `nav::ShowStory(StoryId(session.id))` action via `App::dispatch_action` — allowed here because the spawned future runs outside a window update (note that `AsyncApp::update` returns the closure result directly, not a `Result`). The app-level listener routes the app to `Screen::StoryOverview`. On `None` it dispatches `toast::SpawnToast(Toast::error("Failed to create Vignette"))` instead (see [Toasts](#toasts)).
 
 Known limitation (deferred): input values are not reset when re-entering the screen — the screen entity is created once at startup and reused.
+
+#### Enter/Exit Lifecycle
+
+`AppRoot::switch_screen` invokes `CreateStoryScreen::exit` when navigating away and `enter` when navigating back. `exit` resets both text inputs (`TextInput::reset`) and tears down the Get Inspired state: both lists return to `Loadable::Pending`, `selected` is cleared, and `inspirations_gen` is bumped so any in-flight fetch is invalidated and cannot repopulate stale data into the hidden screen. `enter` re-kicks off `load_categories`/`fetch_inspirations` for anything still `Pending`, so every visit reloads the section.
+
+#### Get Inspired (Local Mock Data)
+
+Below the Create button, a `subtitle(text!("Get Inspired"))` section offers a category filter row plus a list of inspiration cards. **Everything is local to `create_story.rs`** — the engine is not involved. The data comes from module-private async mocks marked with a TODO to be replaced with REST calls once the inspiration service exists:
+
+- `InspirationCategory { id, label }` and `Inspiration { title, premise, categories }` (`categories` holds category ids) — module-private types
+- `Loadable<T> { Pending, Done(T) }` — generic pending/done wrapper from `gui/src/util.rs` (also exposes `is_pending`/`is_done`/`unwrap`); both lists are typed `Loadable<Result<Vec<_>, GuiError>>`, so the fetched `Result` is kept as-is and only interpreted at render time
+- `GuiError` (`gui/src/error.rs`, via `thiserror`) — the GUI-side error type: `Engine(EngineError)` (via `#[from]`), plus `Io`/`Api` string-carrying variants (with `io()`/`api()` constructors) reserved for IO and the future REST calls
+- `fetch_categories()` — returns the mock category list
+- `fetch_inspirations(selected: &[String])` — returns the mock inspirations OR-filtered by the selected category ids (an empty selection matches everything), mirroring where the future server-side filter will live
+
+`create(cx)` kicks off `load_categories(cx)` and an initial, non-debounced `fetch_inspirations(cx)`; `enter(cx)` re-triggers them for anything still `Pending` (see the lifecycle above).
+
+**Filter flow — debounce + generation guard:** `toggle_category(id)` (bound to each chip's `on_click`) flips the id in `selected`, bumps `inspirations_gen`, and spawns a task that awaits `cx.background_executor().timer(INSPIRATIONS_DEBOUNCE)` (300ms) and bails if the generation went stale, then fetches with the captured selection and populates only after a second generation check — rapid chip clicks coalesce into one fetch, and superseded responses are discarded. (The captured counter local is named `generation` because `gen` is a reserved keyword in Rust edition 2024.) On completion the raw `Result` is stored via `Loadable::Done` and `Toastable::report_toast(ToastVariant::Error, cx)` dispatches an error toast on failure (see [Toasts](#toasts)).
+
+**Render:** the two lists render through state-matched helpers:
+
+- `categories_ui(...)` — a wrapping chip row (`flex_wrap`, `gap_2`); each chip id is `chip-category-{id}` and its `on_click` routes to `toggle_category` via `cx.listener` (see [`chip()` — Toggle Chips](#chip--toggle-chips))
+- `inspirations_ui(...)` — a column of static `inspiration_card(theme, inspiration, labels)` cards: bordered `rounded_sm` boxes with the title at `text_lg`, the premise, and small pill-shaped category labels (`theme.label` text, `theme.border` border) resolved through the `category_labels()` id→label map (unknown ids render raw). An empty result renders "No inspirations found"
+
+Both helpers use a `let Loadable::Done(res) = ... else` guard: while `Pending` they return `loading_text(anim_id, "Loading ...")` (the shared comp helper, see the component table); an `Err` renders plain theme-colored inline text ("Failed to query inspirations" / "Failed to load inspirations") — the details were already reported via toast by the fetch task.
 
 ### Settings Screen (`SettingsScreen`)
 

@@ -1,4 +1,6 @@
-use gpui::{Action, Div, ElementId, Entity, Hsla, Rgba, Stateful, Text, div, px, text};
+use std::time::Duration;
+
+use gpui::{Action, Animation, AnimationElement, AnimationExt, Div, ElementId, Entity, Hsla, Rgba, SharedString, Stateful, Text, div, pulsating_between, px, text};
 use gpui::prelude::*;
 
 use crate::actions::{Back, ShowSettings};
@@ -255,11 +257,101 @@ impl IncompleteButton {
   }
 }
 
+#[inline(always)]
 pub(crate) fn button(
   anim_id: impl Into<ElementId>,
   label: Text,
 ) -> IncompleteButton {
   IncompleteButton { anim_id: anim_id.into(), label }
+}
+
+pub(crate) struct Chip {
+  anim_id: ElementId,
+  label: Text,
+  fg: Rgba,
+  bg: Rgba,
+  fg_hover: Rgba,
+  bg_hover: Rgba,
+  border: Rgba,
+  border_hover: Rgba,
+}
+
+impl IntoElement for Chip {
+  type Element = Stateful<Div>;
+  fn into_element(self) -> Self::Element {
+    div()
+      .id(self.anim_id)
+      .px_2()
+      .py_0p5()
+      .text_sm()
+      .rounded_full()
+      .border_1()
+      .border_color(self.border)
+      .bg(self.bg)
+      .text_color(self.fg)
+      .cursor_pointer()
+      .hover(move |style| style
+        .text_color(self.fg_hover)
+        .bg(self.bg_hover)
+        .border_color(self.border_hover))
+      .child(self.label)
+  }
+}
+
+pub(crate) struct IncompleteChip {
+  anim_id: ElementId,
+  label: Text,
+}
+
+impl IncompleteChip {
+  /// Chip toggled on: inverted colors, no border.
+  /// Chip toggled off: outlined, theme text color.
+  pub fn select(self, theme: &Theme, selected: bool) -> Chip {
+    if selected {
+      Chip {
+        anim_id: self.anim_id,
+        label: self.label,
+        fg: theme.bg,
+        bg: theme.text,
+        fg_hover: theme.bg,
+        bg_hover: theme.text.alpha(0.85),
+        border: transparent(),
+        border_hover: transparent(),
+      }
+    } else {
+      Chip {
+        anim_id: self.anim_id,
+        label: self.label,
+        fg: theme.text,
+        bg: transparent(),
+        fg_hover: theme.text,
+        bg_hover: theme.text.alpha(0.1),
+        border: theme.border,
+        border_hover: theme.label,
+      }
+    }
+  }
+}
+
+#[inline(always)]
+pub(crate) fn chip(
+  anim_id: impl Into<ElementId>,
+  label: Text,
+) -> IncompleteChip {
+  IncompleteChip { anim_id: anim_id.into(), label }
+}
+
+/// Text for loading indicators that pulsates gently between [0.2, 1.0] opacity.
+pub(crate) fn loading_text(anim_id: impl Into<ElementId>, text: impl Into<SharedString>) -> AnimationElement<Div> {
+  div()
+    .child(text!(text.into()))
+    .with_animation(
+      anim_id.into(),
+      Animation::new(Duration::from_secs(1))
+        .repeat()
+        .with_easing(pulsating_between(0.2, 1.0)),
+      |loading, delta| loading.opacity(delta),
+    )
 }
 
 /// Fully transparent color — used to opt out of the border / background.

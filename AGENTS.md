@@ -59,10 +59,11 @@ novelcraft/
 │   └── src/
 │       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view (incl. toast overlay), action routing
 │       ├── screens/            # Screen enum + ScreenBase/screen(title) helper (mod.rs) + one submodule per screen (create(cx) + Render)
-│       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
+│       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close, button, chip, loading_text, ...)
+│       ├── error.rs            # GuiError (thiserror): Engine/Io/Api variants
 │       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings)
 │       ├── theme.rs            # Theme/ThemeKind (bg, text, label, border, danger/success/warn colors), Global impl, serde as theme name
-│       └── util.rs             # Loggable/ExpectLoggable, Toastable/ExpectToastable (Result -> toast), HslaExt, LogLevel
+│       └── util.rs             # Loggable/ExpectLoggable, Toastable (Result -> toast), Loadable (Pending/Done), HslaExt, LogLevel
 └── docs/                       # Comprehensive documentation
     ├── gui-architecture.md # gpui GUI components, screens, styling conventions
 ```

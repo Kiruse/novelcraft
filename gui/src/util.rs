@@ -164,3 +164,29 @@ impl HslaExt for Hsla {
     }
   }
 }
+
+#[derive(Debug)]
+pub enum Loadable<T> {
+  Pending,
+  Done(T),
+}
+
+impl<T> Loadable<T> {
+  #[inline(always)]
+  pub fn is_pending(&self) -> bool {
+    matches!(self, Loadable::Pending)
+  }
+
+  #[inline(always)]
+  pub fn is_done(&self) -> bool {
+    matches!(self, Loadable::Done(_))
+  }
+
+  #[inline(always)]
+  pub fn unwrap(self) -> T {
+    match self {
+      Loadable::Done(v) => v,
+      Loadable::Pending => panic!("Pending loadable value"),
+    }
+  }
+}

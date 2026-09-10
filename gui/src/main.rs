@@ -18,6 +18,7 @@ use crate::theme::{Theme, deserialize_theme_name, serialize_theme_name};
 use crate::util::{ExpectLoggable, Loggable};
 
 mod comp;
+mod error;
 mod screens;
 mod text_input;
 mod theme;

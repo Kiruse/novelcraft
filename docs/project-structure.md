@@ -104,7 +104,8 @@ Native GUI using gpui (from the Zed editor repo). Depends on `novelcraft-engine`
 
 **`gui/src/`**
 - `main.rs` — Binary entry point, `AppRoot` view with screen dispatch
-- `util.rs` — `Loggable` trait, `LogLevel` enum, blanket `impl Loggable for Result<T, E>`
+- `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`), `Io`, `Api` variants
+- `util.rs` — `Loggable`/`Toastable` traits (logging & `Result`→toast ergonomics), `Loadable` (`Pending`/`Done`), `HslaExt`, `LogLevel`
 - `theme.rs` — `Theme` struct (bg/text colors, `dark()` constructor)
 - `comp.rs` — Reusable components: `root()` (themed div), `SettingsGear` (gpui View)
 - `screens/` — Screen render functions (stateless, return `Div`)
