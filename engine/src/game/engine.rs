@@ -55,7 +55,7 @@ impl NovelCraftEngine {
         .find(|p| Some(&p.id) == profile_id.as_ref())
         .cloned()
         .map(Arc::new);
-      session.gamestate.set_profile(profile);
+      session.set_profile(profile);
 
       self.agent_loop = build_agent_loop(
         std::mem::take(&mut self.agent_loop),
@@ -63,6 +63,24 @@ impl NovelCraftEngine {
         Some(session),
       );
     }
+  }
+
+  /// Read-only access to the engine's active configuration.
+  pub fn config(&self) -> &NovelCraftConfig {
+    &self.config
+  }
+
+  /// Number of pages in the active session, if any.
+  pub fn page_count(&self) -> Option<usize> {
+    Some(self.session.as_ref()?.page_count)
+  }
+
+  pub async fn save(&self) -> Result<(), EngineError> {
+    if let Some(session) = self.session.as_ref() {
+      session.save().await?;
+    }
+    self.config.save().await?;
+    Ok(())
   }
 
   pub fn set_session(&mut self, session: Option<SessionV1>) {
@@ -75,7 +93,7 @@ impl NovelCraftEngine {
   }
 
   #[inline(always)]
-  fn session(&self) -> Result<&SessionV1, EngineError> {
+  pub fn session(&self) -> Result<&SessionV1, EngineError> {
     self.session.as_ref().ok_or(EngineError::state("no active session"))
   }
   #[inline(always)]
@@ -254,6 +272,7 @@ impl NovelCraftEngine {
     let sid = self.session_id()?.clone();
     let batch_index = PageBatchV1::batch_of(page_index);
     Self::truncate_batches(&sid, batch_index).await?;
+    Self::truncate_batch_pages(&sid, page_index).await?;
     let session = SessionV1::load(&sid, &self.config.profiles).await?;
     self.session = Some(session);
     // NOTE: no need to rebuild agent_loop because tools didn't change
@@ -274,6 +293,21 @@ impl NovelCraftEngine {
     for batch in batches {
       let path = PageBatchV1::join_path(&dir, batch);
       tokio::fs::remove_file(&path).await?;
+    }
+    Ok(())
+  }
+
+  /// Delete the pages after the given `page_index` within its containing batch.
+  async fn truncate_batch_pages(sid: &String, page_index: usize) -> Result<(), EngineError> {
+    let keep = PageBatchV1::page_offset(page_index) + 1;
+    let Ok(mut batch) = PageBatchV1::load(sid.clone(), PageBatchV1::batch_of(page_index)).await
+    else {
+      // No batch file for this page — nothing to truncate.
+      return Ok(());
+    };
+    if batch.pages.len() > keep {
+      batch.pages.truncate(keep);
+      batch.save().await?;
     }
     Ok(())
   }

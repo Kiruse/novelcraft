@@ -3,16 +3,16 @@ use std::time::Duration;
 
 use gpui::{AnyElement, Div, Entity, Render, Window, div, text};
 use gpui::prelude::*;
-use tokio::sync::oneshot;
+use novelcraft_engine::game::session::SessionV1;
 
 use super::screen;
 use crate::actions::ShowStory;
+use crate::{EngineQuery, comp::*};
 use crate::error::GuiError;
-use crate::{ToastVariant, comp::*};
 use crate::text_input::TextInput;
 use crate::theme::Theme;
-use crate::util::{Loadable, Toastable};
-use crate::{Command, CommandBus, StoryId, Toast};
+use crate::util::Toastable;
+use crate::{Command, StoryId};
 
 /// Grace period after the last category toggle before inspirations are
 /// refetched, so rapid chip clicks coalesce into a single request.
@@ -35,8 +35,8 @@ struct Inspiration {
 pub(crate) struct CreateStoryScreen {
   title: Entity<TextInput>,
   premise: Entity<TextInput>,
-  categories: Loadable<Result<Vec<InspirationCategory>, GuiError>>,
-  inspirations: Loadable<Result<Vec<Inspiration>, GuiError>>,
+  categories: Option<Result<Vec<InspirationCategory>, GuiError>>,
+  inspirations: Option<Result<Vec<Inspiration>, GuiError>>,
   selected: BTreeSet<String>,
   /// Bumped on every inspirations (re)fetch; stale responses are discarded.
   inspirations_gen: usize,
@@ -51,8 +51,8 @@ impl CreateStoryScreen {
         true,
         "Describe the premise of your story ..."
       ),
-      categories: Loadable::Pending,
-      inspirations: Loadable::Pending,
+      categories: None,
+      inspirations: None,
       selected: BTreeSet::new(),
       inspirations_gen: 0,
     };
@@ -65,8 +65,7 @@ impl CreateStoryScreen {
     cx.spawn(async move |this, cx| {
       let result = fetch_categories().await;
       this.update(cx, |this, cx| {
-        result.report_toast(ToastVariant::Error, cx);
-        this.categories = Loadable::Done(result);
+        this.categories = Some(result.error_toast(cx));
         cx.notify();
       }).ok();
     }).detach();
@@ -80,8 +79,7 @@ impl CreateStoryScreen {
       let result = fetch_inspirations(&selected).await;
       this.update(cx, |this, cx| {
         if this.inspirations_gen == generation {
-          result.report_toast(ToastVariant::Error, cx);
-          this.inspirations = Loadable::Done(result);
+          this.inspirations = Some(result.error_toast(cx));
           cx.notify();
         }
       }).ok();
@@ -107,8 +105,7 @@ impl CreateStoryScreen {
       let result = fetch_inspirations(&selected).await;
       this.update(cx, |this, cx| {
         if this.inspirations_gen == generation {
-          result.report_toast(ToastVariant::Error, cx);
-          this.inspirations = Loadable::Done(result);
+          this.inspirations = Some(result.error_toast(cx));
           cx.notify();
         }
       }).ok();
@@ -121,32 +118,34 @@ impl CreateStoryScreen {
 
     let exposition = self.premise.read(cx).value().trim().to_string();
 
-    let (tx, rx) = oneshot::channel();
-    cx.global::<CommandBus>().send(Command::CreateSession {
+    Command::CreateSession {
       title,
       exposition,
-      reply: tx,
-    });
+    }.dispatch(cx);
+
+    // Scheduled after CreateSession on the engine thread, so the awaited
+    // refresh observes the freshly created (or failed) session.
+    let mut rx_session = cx.global::<EngineQuery<SessionV1>>().refresh(cx);
+
     cx.spawn(async move |_, cx| {
-      if let Ok(response) = rx.await {
-        match response {
-          Some(session) => cx.update(|cx| {
-            cx.dispatch_action(&ShowStory(StoryId(session.id)));
-          }),
-          None => cx.update(|cx| {
-            Toast::error("Failed to create Vignette").dispatch(cx);
-          }),
-        }
-      }
+      let Ok(()) = rx_session.changed().await else { return };
+      let result = rx_session.borrow();
+      // Only navigate on a fresh, error-free session — failures are
+      // toasted by the engine thread.
+      if result.error().is_some() { return };
+      let Some(id) = result.value().map(|session| StoryId(session.id.clone())) else { return };
+      cx.update(|cx| {
+        cx.dispatch_action(&ShowStory(id));
+      });
     }).detach();
   }
 
   pub(crate) fn enter(&mut self, cx: &mut Context<'_, Self>) {
     // `exit` resets the inspiration state, so every visit reloads it.
-    if self.categories.is_pending() {
+    if self.categories.is_none() {
       self.load_categories(cx);
     }
-    if self.inspirations.is_pending() {
+    if self.inspirations.is_none() {
       self.fetch_inspirations(cx);
     }
   }
@@ -156,13 +155,13 @@ impl CreateStoryScreen {
     self.premise.update(cx, |n, cx| n.reset(cx));
     // Invalidate in-flight fetches so they can't repopulate stale data.
     self.inspirations_gen += 1;
-    self.inspirations = Loadable::Pending;
-    self.categories = Loadable::Pending;
+    self.inspirations = None;
+    self.categories = None;
     self.selected.clear();
   }
 
   fn categories_ui(&self, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
-    let Loadable::Done(res) = &self.categories else {
+    let Some(res) = &self.categories else {
       return loading_text("categories-loading", "Loading categories ...")
         .into_any_element();
     };
@@ -193,7 +192,7 @@ impl CreateStoryScreen {
   }
 
   fn inspirations_ui(&self, theme: &Theme) -> AnyElement {
-    let Loadable::Done(res) = &self.inspirations else {
+    let Some(res) = &self.inspirations else {
       return loading_text("inspirations-loading", "Loading inspirations ...")
         .into_any_element();
     };
@@ -222,7 +221,7 @@ impl CreateStoryScreen {
 
   fn category_labels(&self) -> HashMap<&str, &str> {
     match &self.categories {
-      Loadable::Done(Ok(categories)) => categories
+      Some(Ok(categories)) => categories
         .iter()
         .map(|category| (category.id.as_str(), category.label.as_str()))
         .collect(),

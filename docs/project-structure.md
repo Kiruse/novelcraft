@@ -103,17 +103,19 @@ Pure Rust library with all business logic. No UI framework coupling.
 Native GUI using gpui (from the Zed editor repo). Depends on `novelcraft-engine` as a library.
 
 **`gui/src/`**
-- `main.rs` — Binary entry point, `AppRoot` view with screen dispatch
+- `main.rs` — Binary entry point — engine thread, `CommandBus`/`AppEvents` channels, `EngineQuery`/`PageQuery` globals, `AppRoot` view, action routing
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`), `Io`, `Api` variants
-- `util.rs` — `Loggable`/`Toastable` traits (logging & `Result`→toast ergonomics), `Loadable` (`Pending`/`Done`), `HslaExt`, `LogLevel`
+- `util.rs` — `Loggable`/`ExpectLoggable`/`Toastable` traits (logging & `Result`→toast ergonomics), `Loader`/`LoaderResult`, `HslaExt`, `LogLevel`
 - `theme.rs` — `Theme` struct (bg/text colors, `dark()` constructor)
-- `comp.rs` — Reusable components: `root()` (themed div), `SettingsGear` (gpui View)
-- `screens/` — Screen render functions (stateless, return `Div`)
-  - `mod.rs` — `Screen` enum
-  - `home.rs` — Home screen (title, settings gear)
-  - `settings.rs` — Settings screen (header, close button)
-  - `gameplay.rs` — Gameplay screen (placeholder)
-  - `story.rs` — Story screen (placeholder)
+- `comp.rs` — Stateless UI builders (`root`, `screen_root`, `top_bar`, `field`, `button`, `chip`, `loading_text`, ...)
+- `text_input.rs` — Reusable `TextInput` component (custom Element, IME, scoped key bindings)
+- `screens/` — `Screen` enum (`mod.rs`) + one submodule per screen (`create(cx)` + `Render`)
+  - `mod.rs` — `Screen` enum, `ScreenBase`/`screen(title)` layout helper
+  - `home.rs` — Home screen (session launcher)
+  - `settings.rs` — Settings screen (config editor)
+  - `create_story.rs` — Vignette creation form + Get Inspired section
+  - `story_overview.rs` — Story overview (placeholder)
+  - `story_gameplay.rs` — Gameplay screen (page viewport, chat bar, side bar)
 
 **Note:** `gui/src/` also contains vestigial Vue 3 frontend files (`package.json`, `src/App.vue`, etc.) from the previous Tauri architecture. These are no longer used and should not be modified.
 

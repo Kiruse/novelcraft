@@ -3755,6 +3755,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "exhaustive-map",
+ "futures",
  "gpui",
  "gpui_platform",
  "log",

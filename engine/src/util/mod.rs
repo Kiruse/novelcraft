@@ -15,6 +15,12 @@ pub(crate) async fn ensure_dir(path: &Path) -> Result<(), EngineError> {
     .map_err(|e| EngineError::io(format!("Failed to create directory: {}", e)))
 }
 
+pub(crate) fn deserialize_sync<T: DeserializeOwned>(path: &Path) -> Result<T, EngineError> {
+  let raw = std::fs::read_to_string(path)
+    .map_err(|e| EngineError::io(format!("Read error: {}", e)))?;
+  serde_json::from_str(&raw).map_err(|e| EngineError::parse(format!("Parse error: {}", e)))
+}
+
 pub(crate) async fn deserialize<T: DeserializeOwned>(path: &Path) -> Result<T, EngineError> {
   let raw = tokio::fs::read_to_string(path)
     .await

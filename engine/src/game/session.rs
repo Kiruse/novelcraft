@@ -162,7 +162,7 @@ impl SessionV1 {
   }
 
   /// Save only this session's metadata, not its [SessionV1::tail_batches].
-  async fn save_metadata(&self) -> Result<(), EngineError> {
+  pub(crate) async fn save_metadata(&self) -> Result<(), EngineError> {
     let path = Self::meta_path(&self.id)?;
     serialize(&path, self).await?;
     Ok(())

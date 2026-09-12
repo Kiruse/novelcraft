@@ -38,13 +38,13 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 
 | Screen | Struct | State |
 |--------|--------|-------|
-| Home | `HomeScreen` | `sessions: Option<Vec<SessionV1>>` (see [Home Screen](#home-screen-homescreen)) |
-| Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
-| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>`; Get Inspired: `categories` / `inspirations`: `Loadable<Result<_, GuiError>>`, `selected: BTreeSet<String>` + `inspirations_gen` generation guard (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
+| Home | `HomeScreen` | `task: Task<()>` — owns the `EngineQuery<Vec<SessionV1>>` watcher (see [Home Screen](#home-screen-homescreen)) |
+| Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `task: Task<()>` (config watcher) + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
+| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>`; Get Inspired: `categories` / `inspirations`: `Option<Result<_, GuiError>>`, `selected: BTreeSet<String>` + `inspirations_gen` generation guard (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
 | Story Overview | `StoryOverviewScreen` | `id: StoryId` |
-| Story Gameplay | `StoryGameplayScreen` | `id: StoryId` |
+| Story Gameplay | `StoryGameplayScreen` | `id: StoryId`; `watch_task: Task<()>` — owns the single query watcher, `stream: Option<Stream>`, `input: Entity<TextInput>`, `popover_open`, `sidebar_open`, swipe accumulators `swipe_x` / `swipe_last` — no duplicated domain state, all data is read from the global query caches (see [Story Gameplay Screen](#story-gameplay-screen-storygameplayscreen)) |
 
-Each screen lives in its own submodule under `gui/src/screens/` (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); `mod.rs` declares the submodules, defines the `Screen` enum, and re-exports the screen structs. `StoryOverviewScreen` and `StoryGameplayScreen` are currently placeholders (`render` returns an empty `div()`).
+Each screen lives in its own submodule under `gui/src/screens/` (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); `mod.rs` declares the submodules, defines the `Screen` enum, and re-exports the screen structs. `StoryOverviewScreen` is currently a placeholder (`render` returns an empty `div()`).
 
 Screens share a common layout through `ScreenBase` (`gui/src/screens/mod.rs`). A screen's `render` starts with the `screen(title)` helper, attaches content via `.child(...)` (`ScreenBase` implements `ParentElement`), and returns it directly (`ScreenBase` implements `IntoElement`). By default the top bar shows the settings gear; call `.closable()` to show the close (`Back`) button instead. The helper composes the `comp.rs` builders (`screen_root`, `top_bar`, `title`, `content`) so individual screens don't repeat that boilerplate:
 
@@ -65,22 +65,36 @@ screen(text!("Settings")).closable()   // close button instead of gear
 - `screen: Screen` — current screen variant
 - `screen_home` / `screen_settings` / `screen_create_story` / `screen_story_overview` / `screen_story_gameplay` — `Entity<...Screen>` for each screen, created once via `cx.new(|cx| ...Screen::create(cx))`
 - `toasts: Vec<(usize, Toast)>` + `next_toast_id` — active toast queue (see [Toasts](#toasts))
-- `rx_chunks` — `mpsc::Receiver<AgentMessageChunk>` for engine communication (the `mpsc::Sender` side lives in the `CommandBus` global and in the engine thread)
 
 The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed.
 
-Engine communication: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. `Command` is a `pub(crate)` enum with six variants:
+Engine communication uses two `mpsc` channels. GUI → engine: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. Engine → GUI: an `AppEvents` channel (`Toast(Toast)`, `UpdateConfig`, `SwitchSession`, `SwitchProfile`) — the engine thread reports command failures as toasts and signals state changes, and a task spawned in `main()` consumes the events, dispatching toasts and refreshing the matching global `EngineQuery` (`UpdateConfig` → config query, `SwitchProfile` → profiles query, `SwitchSession` → active-session query). `Command` is a `pub(crate)` enum with six variants:
 
 | Variant | Payload | Semantics |
 |---------|---------|-----------|
-| `SwitchProfile(String)` | profile ID | Fire-and-forget: `engine.set_active_profile(Some(id))` |
-| `Prompt(String)` | user prompt | Fire-and-forget: `engine.prompt(...)`, chunks streamed over the `mpsc` chunk channel |
-| `LoadConfig(oneshot::Sender<NovelCraftConfig>)` | reply channel | Request/response: engine thread loads `{configDir}/NovelCraft/config.json` via `NovelCraftConfig::load()` (falling back to `NovelCraftConfig::default()` on error, logged as a warning), syncs it via `NovelCraftEngine::set_config`, replies over the channel |
-| `SaveConfig(Box<NovelCraftConfig>)` | boxed config | Fire-and-forget: engine thread syncs via `engine.set_config`, then persists with `config.save().await` |
-| `ListSessions(oneshot::Sender<Vec<SessionV1>>)` | reply channel | Request/response: engine thread calls `NovelCraftEngine::list_sessions()` — enumerates session directories, loads each via `SessionV1::load_metadata` (metadata only: id, title, exposition, timestamps, modules, profile; no page batches or gamestate), skips directories with unreadable metadata (logged as a warning), sorts newest-first by `updated_at`, and replies; on error it logs a warning and replies with an empty `Vec` |
-| `CreateSession { title, exposition, reply }` | title, exposition, reply channel | Request/response: engine thread calls `NovelCraftEngine::create_session(title, exposition)` — builds a fresh `SessionV1` with default gameplay modules and the engine's active profile, persists it — and replies `Some(session)`; on error it logs the error and replies `None` |
+| `SwitchProfile(String)` | profile ID | Fire-and-forget: engine thread sets the global active profile via `engine.set_active_profile`, emits `AppEvents::SwitchProfile`, and persists the engine config; on persist failure it logs the error and toasts "Failed to save active profile" |
+| `SaveConfig(NovelCraftConfig)` | config | Fire-and-forget: engine thread persists with `config.save().await`, syncs it into the engine via `engine.set_config`, and emits `AppEvents::UpdateConfig`; on failure it toasts "Failed to save new config" |
+| `CreateSession { title, exposition }` | title, exposition | Fire-and-forget: engine thread calls `NovelCraftEngine::create_session(title, exposition)` — builds a fresh `SessionV1` with default gameplay modules and the engine's active profile, persists it — sets it as the active session via `set_session`, and emits `AppEvents::SwitchSession`; on error it clears the active session, logs the error, and toasts "Session creation failed" |
+| `PlaySession { id }` | session ID | Fire-and-forget: engine thread calls `SessionV1::load(id, &config.profiles)` (full load incl. page counts + gamestate replay), makes it the engine's active session via `set_session`, and emits `AppEvents::SwitchSession`; on error it clears the active session, logs the error, and toasts "Failed to load session" |
+| `GamePrompt { content, from_page, chunks, done }` | prompt, optional fork point, chunk channel, reply channel | Streaming request: engine thread forks at `from_page` via `engine.fork(..)` when set (deleting all pages after it), then runs `engine.prompt(content, chunks)` — agent chunks stream over the `mpsc` channel — and replies `Result<(), EngineError>` over the oneshot channel |
+| `QueryEngine(querier)` | boxed higher-ranked closure | General-purpose escape hatch (primarily used internally by `EngineQuery`): the engine thread invokes `querier(&engine)` with shared access to the active `NovelCraftEngine` and awaits the returned future on the engine thread. The closure is typed `Box<dyn for<'a> FnOnce(&'a NovelCraftEngine) -> LocalBoxFuture<'a, ()> + Send>` — the future borrows the engine, so it must be a `LocalBoxFuture` tied to that borrow (not a `'static`/`Send` `BoxFuture`) |
 
-`Command` derives nothing — the oneshot sender field is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait). The request/response pattern (`LoadConfig`, `ListSessions`, `CreateSession`) works by having the caller create a `tokio::sync::oneshot` channel, pass the `Sender` in the command, and await the `Receiver` inside a `cx.spawn`ed (detached) future — see [Settings Screen](#settings-screen-settingsscreen), [Home Screen](#home-screen-homescreen), and [Create Story Screen](#create-story-screen-createstoryscreen).
+`Command` derives nothing — the oneshot sender field of `GamePrompt` is neither `Debug` nor `Clone`. Commands are sent via `CommandBus::send` (a `blocking_send` whose error is logged through the `Loggable` trait) or the `Command::dispatch(cx)` convenience helper. `CreateSession`/`PlaySession` are fire-and-forget — their outcome is observed by refreshing `EngineQuery<SessionV1>` (see below).
+
+`EngineQuery<T>` (also in `main.rs`) is the GUI's reusable engine-read primitive; instances are registered as gpui `Global`s keyed by type. `register_queries` installs five: `EngineQuery<NovelCraftConfig>` and `EngineQuery<Profiles>` (both seeded via `init` with the config loaded at startup — `Profiles` is a `main.rs` snapshot type `{ profiles, active_profile }` with `iter()`/`active_profile()` accessors), `EngineQuery<Vec<SessionV1>>` (querier: `NovelCraftEngine::list_sessions()`), `EngineQuery<SessionV1>` (querier: `engine.session()`), and the `PageQuery` wrapper described below.
+
+All synchronization lives in a single `tokio::sync::watch` channel of `EngineQueryResult<T>`, plus an `Arc<AtomicUsize>` round counter and the querier — a dyn `EngineQuerier<T>` backed by an `async` closure `for<'a> AsyncFn(&'a NovelCraftEngine) -> Result<T, GuiError>` (boxed at the abstraction boundary via the `QuerierFn` adapter, since `AsyncFn` itself is not dyn compatible; stored behind `Arc`, hence `Send + Sync`). `EngineQueryResult<T>` is a four-state enum:
+
+| Variant | Meaning |
+|---------|---------|
+| `Empty { round }` | Initial/reset state — the channel's default, (re)published by `clear()` |
+| `Error { error, round }` | Refresh failed, no previous value to keep |
+| `Stale { value, error, round }` | Refresh failed, but a previous value exists and is kept alongside the error |
+| `Recent { value, round }` | Fresh success |
+
+Accessors on the result: `round()`, `value() -> Option<&T>`, `error() -> Option<&GuiError>`, `is_empty()`, `is_stale()`. Accessors on the query: `rx()` returns a single cloned receiver marked unchanged — so `changed().await` resolves on the next publish, making "spawn a watcher, then refresh" the standard consumption pattern; `curr()` borrows the current result as a `watch::Ref`; `is_in_flight()` compares the round counter against the published round; `is_stale()` (true for `Empty` **or** `Stale` — no fresh value to show) and `has_error()` classify the current state. `refresh_with_bus(&CommandBus)` (or `refresh(&App)`, which extracts the global bus) dispatches a `QueryEngine` command — running the querier on the engine thread — and returns the receiver. The round counter guards superseding: each invocation claims a round and only the newest publishes (earlier results are dropped, and a `clear()` invalidates in-flight refreshes the same way). On success the result becomes `Recent`; on failure the previous value — when present — is downgraded to `Stale` with the new error, otherwise `Error` is published. `init(value)` seeds a `Recent` value; `clear()` resets to `Empty`. Callers write queriers as `async |engine: &NovelCraftEngine| { ... }` closures; the async block borrows the engine and is awaited on the engine thread, so no `Send`/`'static` bound applies to the future itself.
+
+`PageQuery` (also in `main.rs`, also a global) wraps an `EngineQuery<PageV1>` with an `Arc<AtomicUsize>` page index: `load(page_index, &CommandBus)` stores the index (read on the engine thread, so a superseded in-flight load may query the newest index — its result is discarded by the round guard regardless), refreshes, and returns the single receiver; `page_index()` reads the stored index and `curr()` borrows the inner query's current `EngineQueryResult<PageV1>`; `clear()` resets, rewinds the page index to 0 (a newly entered session starts at page 0), and discards in-flight loads.
 
 ### Toasts
 
@@ -92,7 +106,7 @@ Toasts provide non-blocking input feedback and live entirely in `AppRoot` (`gui/
 - **Rendering**: when non-empty, `AppRoot::render` appends an absolute overlay (`bottom_4`, full width, centered column, `gap_2`) after the screen child — painted last, so it sits above screen content. Each toast (`toast_view` helper) is a bordered rounded box with a drop shadow (`shadow_lg`) (Error uses `danger_bg` bg + `danger_fg` border; others `theme.bg`/`theme.border`) with the variant-colored title, the message, and a "×" cancel button (top-right, styled like `btn_icon_close`) whose `on_click` listener dismisses that toast.
 - **Ergonomics**: the `Toastable<T, E>` trait (`gui/src/util.rs`) is implemented for `Result` (mirroring `Loggable`): `report_toast(variant, cx)` dispatches a toast only on failure, and `info/success/warn/error_toast(cx)` are shortcuts that also pick the failure message from the error's `Display`. They take `cx: &mut App` — `Context` derefs to `App`, so view code passes its context directly; async code wraps with `AsyncApp::update`. Dispatching goes through `App::dispatch_action(&SpawnToast(...))`.
 
-First consumer: the Create Story screen shows an error toast when session creation fails.
+Toasts originate from two places: the engine thread sends `AppEvents::Toast` over the event channel for command failures (session creation/loading, config save, profile persistence — see the command table under [Architecture](#architecture)), which the GUI event loop dispatches; and GUI-side code dispatches its own via `Toastable` (Get Inspired fetches, gameplay prompt submission) or directly (the Settings save button's success toast).
 
 ## Reusable Components (`gui/src/comp.rs`)
 
@@ -307,17 +321,20 @@ The Home screen is the app's session launcher. It uses the standard layout: `scr
 
 #### State & Load Flow
 
-`HomeScreen` holds a single field, `sessions: Option<Vec<SessionV1>>`. `create(cx)` immediately calls `load(cx)`, which sends `Command::ListSessions` via the `CommandBus` using the same oneshot + `cx.spawn` request/response pattern as `SettingsScreen::load` — the spawned future awaits the reply and stores it in `self.sessions` via `populate(...)`, then `cx.notify()` triggers a re-render.
+`HomeScreen` holds a single field, `task: Task<()>` — it keeps no session data itself; the data lives in the global `EngineQuery<Vec<SessionV1>>`. `create(cx)` calls `refresh(cx)` on that query (querier: `NovelCraftEngine::list_sessions()`) and spawns a watcher task on the returned receiver — a `while let Ok(()) = rx_sessions.changed().await` loop that calls `cx.notify()` on every publish, so the screen re-renders whenever the query state changes. The receiver is marked unchanged at creation, so the watcher fires exactly once for the refresh triggered right before it.
 
 #### Render
 
 Below the top bar, a `content()` column renders:
 
 - **"Create new Vignette" card** — a jumbo full-width clickable bordered card (`create_vignette(theme)` helper): a horizontally+vertically centered title row (`flex().items_center().justify_center().gap_2()`) with a "+" text glyph before the "Create new Vignette" text, both at `text_2xl()`, plus the description that Vignettes are free-form stories that don't follow any template, resembling other story generator platforms. Hover swaps the border color to the label color; clicking dispatches the existing `nav::CreateStory` action via `window.dispatch_action`.
-- **"Sessions" section** — a `text_xl()` heading followed by the sessions list (`sessions_ui`), which has three states:
-  - `None` (loading) — a "Loading ..." placeholder pulsating via gpui's animation API: `with_animation(..., Animation::new(1s).repeat().with_easing(pulsating_between(0.2, 1.0)), |el, delta| el.opacity(delta))`
-  - `Some([])` — the static text "No sessions yet."
-  - `Some(sessions)` — a column (gap-2) of clickable session cards
+- **"Sessions" section** — a `subtitle(text!("Sessions"))` heading followed by the sessions list, rendered by the `sessions_ui` helper from the query's current `EngineQueryResult` (read via `curr()`). It matches on `(result.value(), result.error())` to respect all logical states:
+  - `(None, None)` (loading) — a "Loading ..." placeholder pulsating via gpui's animation API: `with_animation(..., Animation::new(1s).repeat().with_easing(pulsating_between(0.2, 1.0)), |el, delta| el.opacity(delta))`
+  - `(None, Some(_))` — the static text "Failed to load sessions" in `theme.danger_fg`
+  - `(Some([]), _)` — the static text "No sessions yet"
+  - `(Some(sessions), _)` — a column (gap-2) of clickable session cards
+
+  When `result.is_stale()` (refresh failed but a previous list exists), a danger-colored note — "Failed to refresh — showing the last known sessions" — is rendered above the list, so stale data is never shown silently.
 
 Each session card is built by the `session_card(theme, session)` helper: a bordered, hover-highlighted, clickable row showing the session title (`text_lg`), the `updated_at` timestamp formatted in local time via `chrono` (`%Y-%m-%d %H:%M`), and the exposition text. Cards get their session ID as the element ID; `on_click` dispatches `nav::ShowStory(StoryId)` where `StoryId` wraps the session ID. Both card types dispatch via `window.dispatch_action` and navigate through the app-level action listeners in `main()`.
 
@@ -331,8 +348,8 @@ The vignette creation form, reached from the Home screen's "Create new Vignette"
 |--------------|------|--------|
 | `title` | `Entity<TextInput>` | single-line, placeholder `"Title"` |
 | `premise` | `Entity<TextInput>` | multiline, placeholder `"Describe the premise of your story ..."` |
-| `categories` | `Loadable<Result<Vec<InspirationCategory>, GuiError>>` | — (chip filter row, populated by `load_categories()`) |
-| `inspirations` | `Loadable<Result<Vec<Inspiration>, GuiError>>` | — (inspiration cards, populated by the debounced fetch) |
+| `categories` | `Option<Result<Vec<InspirationCategory>, GuiError>>` | — (chip filter row, populated by `load_categories()`) |
+| `inspirations` | `Option<Result<Vec<Inspiration>, GuiError>>` | — (inspiration cards, populated by the debounced fetch) |
 | `selected` | `BTreeSet<String>` | ids of the toggled-on category chips |
 | `inspirations_gen` | `usize` | fetch generation counter (stale-response guard) |
 
@@ -340,34 +357,78 @@ Both inputs are created with the `create_text_input(cx, multiline, placeholder)`
 
 #### Submit Flow
 
-`submit()` (bound to the Create button via `cx.listener`) reads both values trimmed and no-ops when the title is empty. Otherwise it sends `Command::CreateSession { title, exposition, reply }` over the `CommandBus` and, inside a `cx.spawn`ed (detached) task, awaits the oneshot reply. On `Some(session)` it dispatches the `nav::ShowStory(StoryId(session.id))` action via `App::dispatch_action` — allowed here because the spawned future runs outside a window update (note that `AsyncApp::update` returns the closure result directly, not a `Result`). The app-level listener routes the app to `Screen::StoryOverview`. On `None` it dispatches `toast::SpawnToast(Toast::error("Failed to create Vignette"))` instead (see [Toasts](#toasts)).
-
-Known limitation (deferred): input values are not reset when re-entering the screen — the screen entity is created once at startup and reused.
+`submit()` (bound to the Create button via `cx.listener`) reads both values trimmed and no-ops when the title is empty. Otherwise it dispatches `Command::CreateSession { title, exposition }` and **then** calls `EngineQuery::<SessionV1>::refresh(cx)` on the global query — commands execute in order on the engine thread, so the awaited refresh observes the freshly created (or failed) session. Inside a `cx.spawn`ed (detached) task it awaits `rx_session.changed()`: only when the result has no error **and** carries a value does it dispatch the `nav::ShowStory(StoryId(session.id))` action via `cx.update(|cx| cx.dispatch_action(...))` — allowed here because the spawned future runs outside a window update (note that `AsyncApp::update` returns the closure result directly, not a `Result`). The app-level listener routes the app to `Screen::StoryOverview`. Failures never navigate — they are toasted by the engine thread instead (see [Toasts](#toasts)).
 
 #### Enter/Exit Lifecycle
 
-`AppRoot::switch_screen` invokes `CreateStoryScreen::exit` when navigating away and `enter` when navigating back. `exit` resets both text inputs (`TextInput::reset`) and tears down the Get Inspired state: both lists return to `Loadable::Pending`, `selected` is cleared, and `inspirations_gen` is bumped so any in-flight fetch is invalidated and cannot repopulate stale data into the hidden screen. `enter` re-kicks off `load_categories`/`fetch_inspirations` for anything still `Pending`, so every visit reloads the section.
+`AppRoot::switch_screen` invokes `CreateStoryScreen::exit` when navigating away and `enter` when navigating back. `exit` resets both text inputs (`TextInput::reset`) and tears down the Get Inspired state: both lists return to `None`, `selected` is cleared, and `inspirations_gen` is bumped so any in-flight fetch is invalidated and cannot repopulate stale data into the hidden screen. `enter` re-kicks off `load_categories`/`fetch_inspirations` for anything still `None`, so every visit reloads the section.
 
 #### Get Inspired (Local Mock Data)
 
 Below the Create button, a `subtitle(text!("Get Inspired"))` section offers a category filter row plus a list of inspiration cards. **Everything is local to `create_story.rs`** — the engine is not involved. The data comes from module-private async mocks marked with a TODO to be replaced with REST calls once the inspiration service exists:
 
 - `InspirationCategory { id, label }` and `Inspiration { title, premise, categories }` (`categories` holds category ids) — module-private types
-- `Loadable<T> { Pending, Done(T) }` — generic pending/done wrapper from `gui/src/util.rs` (also exposes `is_pending`/`is_done`/`unwrap`); both lists are typed `Loadable<Result<Vec<_>, GuiError>>`, so the fetched `Result` is kept as-is and only interpreted at render time
+- both lists are typed `Option<Result<Vec<_>, GuiError>>` — `None` means "still loading"; the fetched `Result` is kept as-is and only interpreted at render time
 - `GuiError` (`gui/src/error.rs`, via `thiserror`) — the GUI-side error type: `Engine(EngineError)` (via `#[from]`), plus `Io`/`Api` string-carrying variants (with `io()`/`api()` constructors) reserved for IO and the future REST calls
 - `fetch_categories()` — returns the mock category list
 - `fetch_inspirations(selected: &[String])` — returns the mock inspirations OR-filtered by the selected category ids (an empty selection matches everything), mirroring where the future server-side filter will live
 
-`create(cx)` kicks off `load_categories(cx)` and an initial, non-debounced `fetch_inspirations(cx)`; `enter(cx)` re-triggers them for anything still `Pending` (see the lifecycle above).
+`create(cx)` kicks off `load_categories(cx)` and an initial, non-debounced `fetch_inspirations(cx)`; `enter(cx)` re-triggers them for anything still `None` (see the lifecycle above).
 
-**Filter flow — debounce + generation guard:** `toggle_category(id)` (bound to each chip's `on_click`) flips the id in `selected`, bumps `inspirations_gen`, and spawns a task that awaits `cx.background_executor().timer(INSPIRATIONS_DEBOUNCE)` (300ms) and bails if the generation went stale, then fetches with the captured selection and populates only after a second generation check — rapid chip clicks coalesce into one fetch, and superseded responses are discarded. (The captured counter local is named `generation` because `gen` is a reserved keyword in Rust edition 2024.) On completion the raw `Result` is stored via `Loadable::Done` and `Toastable::report_toast(ToastVariant::Error, cx)` dispatches an error toast on failure (see [Toasts](#toasts)).
+**Filter flow — debounce + generation guard:** `toggle_category(id)` (bound to each chip's `on_click`) flips the id in `selected`, bumps `inspirations_gen`, and spawns a task that awaits `cx.background_executor().timer(INSPIRATIONS_DEBOUNCE)` (300ms) and bails if the generation went stale, then fetches with the captured selection and populates only after a second generation check — rapid chip clicks coalesce into one fetch, and superseded responses are discarded. (The captured counter local is named `generation` because `gen` is a reserved keyword in Rust edition 2024.) On completion the raw `Result` is stored as `Some(...)` via `Toastable::error_toast(cx)`, which dispatches an error toast on failure (see [Toasts](#toasts)).
 
 **Render:** the two lists render through state-matched helpers:
 
 - `categories_ui(...)` — a wrapping chip row (`flex_wrap`, `gap_2`); each chip id is `chip-category-{id}` and its `on_click` routes to `toggle_category` via `cx.listener` (see [`chip()` — Toggle Chips](#chip--toggle-chips))
 - `inspirations_ui(...)` — a column of static `inspiration_card(theme, inspiration, labels)` cards: bordered `rounded_sm` boxes with the title at `text_lg`, the premise, and small pill-shaped category labels (`theme.label` text, `theme.border` border) resolved through the `category_labels()` id→label map (unknown ids render raw). An empty result renders "No inspirations found"
 
-Both helpers use a `let Loadable::Done(res) = ... else` guard: while `Pending` they return `loading_text(anim_id, "Loading ...")` (the shared comp helper, see the component table); an `Err` renders plain theme-colored inline text ("Failed to query inspirations" / "Failed to load inspirations") — the details were already reported via toast by the fetch task.
+Both helpers use a `let Some(res) = ... else` guard: while `None` they return `loading_text(anim_id, "Loading ...")` (the shared comp helper, see the component table); an `Err` renders plain theme-colored inline text ("Failed to query inspirations" / "Failed to load inspirations") — the details were already reported via toast by the fetch task.
+
+### Story Gameplay Screen (`StoryGameplayScreen`)
+
+The play view, reached from the (future) story overview via `nav::PlayStory(StoryId)`; `Back` returns to `Screen::StoryOverview` (see `AppRoot::on_back`). Unlike the other screens it does not use the `screen(title)` helper — it is a fixed three-region layout (page / chat bar / side bar), not a scrolling content column. The screen keeps only pure UI state: all domain data (session, page, profiles) is read from the global query caches (`EngineQuery<SessionV1>`, `PageQuery`, `EngineQuery<Profiles>`), so it stays in sync across the app.
+
+#### Lifecycle
+
+`create(cx)` spawns a single watcher task (`watch_task`) that `tokio::select!`s over three receivers — `PageQuery::rx()`, `EngineQuery<SessionV1>::rx()`, and `EngineQuery<Profiles>::rx()` — and calls `cx.notify` on the screen for any change, so a publish on any of the three queries re-renders the screen.
+
+`AppRoot::switch_screen` calls `StoryGameplayScreen::enter(id, cx)` when the screen becomes visible. `enter` stores the requested `StoryId`, closes the popover, then — after `reset(cx)` — dispatches `Command::PlaySession` (the `EngineQuery<SessionV1>` querier reads the engine's ACTIVE session, so the command is required to switch sessions) and refreshes both `EngineQuery<SessionV1>` and `EngineQuery<Profiles>`. The session refresh is scheduled explicitly because the engine thread does not emit the `SwitchSession` event on failure — commands execute in order on the engine thread, so the awaited refresh observes the loaded (or failed) session. A detached task awaits the refresh publishing and opens the session's last page via `goto(count - 1)`.
+
+`reset` clears the per-session UI state (`stream`, swipe accumulators) and calls `PageQuery::clear()` on the global — discarding the previous session's page and any in-flight load, and rewinding its page index to 0 so a newly entered session starts at page 0.
+
+#### Layout & Page Navigation
+
+The screen renders `root(&theme)` with: a custom top bar (sidebar toggle `\u{2630}` on the left, centered session title, `btn_icon_close()` on the right); a middle row with the page viewport (`flex_1`, `overflow_y_scroll`) plus the side bar when open; a status row (page indicator `k / n` and the "Jump to end" pill, only when not on the last page); and the chat bar. The top bar's title comes from the session query cache (`"..."` until a value is published).
+
+Pages are fetched through the global `PageQuery`: `goto(index)` clamps to the cached session page count (`session_page_count(cx)` reads `EngineQuery<SessionV1>::curr().value()`) and calls `PageQuery::load(index, cx)`; `navigate(delta)` computes the clamped target from `PageQuery::page_index()`. Both are no-ops when the session cache holds no value or zero pages, and both are locked while a `stream` is active. There is no dedicated fetch loop — the single `watch_task` re-renders whenever the page query publishes, and superseded fetches are discarded entirely by the query's round guard (no screen-side generation counter). Three triggers:
+
+- **Swipe** — the viewport starts a gpui drag with a unit `PageSwipe` payload and an invisible `DragGhost` view, and tracks `on_drag_move(DragMoveEvent<PageSwipe>)`: horizontal movement accumulates in `swipe_x` (anchored at `swipe_last`, reset on `on_mouse_down` and after each flip; per-move jumps larger than `4 × SWIPE_THRESHOLD` (240px) are treated as gesture-boundary artifacts and re-anchor instead). Crossing `SWIPE_THRESHOLD` (60px) — swipe left → next page, swipe right → previous — flips the page mid-drag.
+- **Keyboard** — `alt-left` / `alt-right` fire the global `nav::PagePrev` / `nav::PageNext` actions; `AppRoot::gameplay_nav` forwards to `navigate` only while the gameplay screen is showing.
+- **Jump to end** — the `status_row_ui` pill shown when `PageQuery::page_index() + 1 < session_page_count(cx)`.
+
+#### Rendering a Page
+
+`page_content_ui(theme, cx)` renders from the caches, in precedence order: streaming takes precedence (below); then the session query (error → "Failed to load session", no value → "Loading session ...", with the failure itself already toasted by the engine thread); then the fresh-session empty state (`page_count == 0` → the "Send your first prompt to begin the story ..." intro, without fetching any page); then `PageQuery` (error → "Failed to load page", no value → `loading_text`); an empty fetched page (`page_is_empty`) renders the same intro; and finally `page_card` — the page's prompt in a muted bordered box followed by each `AgentResponseV1::content` as plain story text (tool calls/reasons are part of the persisted conversation but are not rendered). The `status_row_ui` indicator reads the current index from `PageQuery::page_index()`.
+
+#### Chat Bar & Profile Switching
+
+The chat bar (bottom row) is: the profile avatar (a `rounded_full` circle with the active profile's initial, `"?"` when none), the multiline `TextInput` (`flex_1 min_w_0`, placeholder `"What do you do or say?"`; `Enter` = newline, `ctrl-enter` fires its `on_submit` hook which routes to `submit_input` like the Send button), and a compact Send button (ad-hoc `div`, primary colors when enabled — muted when `stream` is active, the input is empty, or no session is loaded).
+
+The avatar toggles a `popover_open` popover (`absolute bottom_full left_0`, list of `ProfileV1` names, check mark on the active one, "No profiles yet" fallback). Both `avatar_ui` and `profile_popover_ui` read the profile list live via `EngineQuery<Profiles>::curr().value()`. The active profile is the **session's stored profile**: `active_profile_id(cx)` reads it from the session query cache, falling back to the global profiles query's `active_profile` value (the global active profile only matters for new sessions). Selecting a profile closes the popover and `switch_profile` dispatches `Command::SwitchProfile(id)`, then refreshes BOTH the Profiles and `SessionV1` queries — no optimistic local mutation, since the engine's `set_active_profile` also updates the active session's profile (see the Command table); the engine's own `SwitchProfile` event triggers another profiles-query refresh via the GUI event loop.
+
+#### Prompt Submission & Fork Flow
+
+`submit_input` reads/trim-checks/resets the input, then `submit(content)` (no-op when no session is loaded): when not on the last page, `from_page = Some(page_index)` — the engine thread forks away all pages after the viewed one before prompting; on the last page `from_page = None`. The screen builds a per-request `mpsc` channel for `AgentMessageChunk`s plus a oneshot reply channel (`Result<(), EngineError>`), sets `stream = Some(Stream { prompt, .. })`, dispatches `Command::GamePrompt`, and detaches a reader task that:
+
+- appends `Content` chunks to `stream.text` and flags `stream.activity` on `ToolCallStart`/`ToolCallArgs` (rendered as a pulsating "The DM is taking action ..." line; `Reasoning`/`Done` chunks are ignored);
+- ignores everything if the screen switched sessions meanwhile (the task captures the submit-time session id and bails on mismatch);
+- after the chunk channel closes, awaits the reply: failures are toasted via `Toastable::report_toast(ToastVariant::Error, cx)`; then — regardless of outcome — `stream` is cleared, `EngineQuery<SessionV1>` is refreshed (a fork may have truncated pages), and the CURRENT page is reloaded directly via `PageQuery::load(current, cx)` — bypassing `goto`'s count guard, which also covers fresh sessions whose cached count is still 0.
+
+While `stream` is set, the viewport renders `stream_card` (the prompt box + streamed text, with "Thinking ..." / "The DM is taking action ..." placeholders before text arrives) instead of the fetched page, and navigation/submit are locked.
+
+#### Side Bar
+
+`sidebar_open` (toggled from the top bar) shows a `SIDEBAR_WIDTH` (280px) right panel with a left border and a placeholder text — game state display/manipulation is deferred.
 
 ### Settings Screen (`SettingsScreen`)
 
@@ -377,46 +438,54 @@ A functional editor for the engine's `NovelCraftConfig` (persisted at `{configDi
 
 | Screen field | Type | Editor |
 |--------------|------|--------|
-| `config` | `Option<NovelCraftConfig>` | — (populated by `load()`, kept as the save base) |
+| `config` | `Option<NovelCraftConfig>` | — (kept as the save base) |
 | `max_agent_steps` | `Entity<TextInput>` | single-line, placeholder `"10"` |
 | `system_prompt` | `Entity<TextInput>` | multiline, no placeholder |
-| `models` | `Vec<ModelFields>` | two groups (`const MODEL_GROUPS: [&str; 2] = ["Dungeon Master", "Suggestions"]`) |
+| `models` | `ExhaustiveMap<ModelPurpose, ModelFields>` | one group per `ModelPurpose`, labeled via `purpose.as_str()` |
 
-`ModelFields` holds one `Entity<TextInput>` per `ModelConfig::OpenAi` field — `base_url` (placeholder `DEFAULT_HOST`, i.e. `http://localhost:8888/v1`), `api_key`, and `model`. All inputs are built in a module-private `text_input(cx, multiline, placeholder)` helper; `create(cx)` assembles the screen and immediately calls `load(cx)`.
+`ModelFields` holds one `Entity<TextInput>` per `ModelConfig::OpenAi` field — `base_url` (placeholder `DEFAULT_HOST`, i.e. `http://localhost:8888/v1`), `api_key`, and `model`. All inputs are built via the `create_text_input(cx, multiline, placeholder)` comp helper; `create(cx)` assembles the screen and immediately calls `load(cx)`.
 
-#### Load Flow (Oneshot Request/Response)
+#### Load Flow (Global Config Query)
 
 ```rust
 fn load(&mut self, cx: &mut Context<'_, Self>) {
-  let (tx, rx) = oneshot::channel();
-  cx.global::<CommandBus>().send(Command::LoadConfig(tx));
-  cx.spawn(async move |this, cx| {
-    if let Ok(config) = rx.await
-      && let Ok(()) = this.update(cx, |screen, cx| screen.populate(config, cx))
-    {}
-  })
-  .detach();
+  let config = cx.global::<EngineQuery<NovelCraftConfig>>().curr().value().cloned();
+  if let Some(config) = config {
+    self.populate(config, cx);
+  }
+
+  let mut rx_config = {
+    let q = cx.global::<EngineQuery<NovelCraftConfig>>();
+    q.refresh(cx);
+    q.rx()
+  };
+
+  self.task = cx.spawn(async move |this, cx| {
+    while let Ok(()) = rx_config.changed().await {
+      let config = rx_config.borrow().value().cloned().unwrap_or_default();
+      this.update(cx, move |this, cx| this.populate(config, cx)).ok();
+    }
+  });
 }
 ```
 
-`Command::LoadConfig` is handled on the engine thread (see the command table under [Architecture](#architecture)): it loads `{configDir}/NovelCraft/config.json` via `NovelCraftConfig::load()`, falls back to `NovelCraftConfig::default()` on error (logged as a warning), syncs the config into the engine via `NovelCraftEngine::set_config(config.clone())`, then replies over the oneshot channel. The screen's spawned future awaits the reply and populates the inputs via `this.update(cx, ...)`; the future is detached.
+The config lives in the global `EngineQuery<NovelCraftConfig>` — seeded via `init` at startup and refreshed whenever the engine thread emits `UpdateConfig` (see the command table under [Architecture](#architecture)). `load` populates the inputs immediately from `curr()` when a value already exists, then triggers a `refresh(cx)` and spawns a watcher on the returned receiver: a `changed().await` loop that repopulates on every publish for as long as the screen entity lives (the watcher is stored in `task`). The future is detached.
 
-`populate(config, cx)` fills every input via `TextInput::set_value` (`max_agent_steps` via `to_string()`, model fields destructured from the `ModelConfig::OpenAi` variants), stores the config in `self.config` — preserving `profiles` and `active_profile` for the later save — and calls `cx.notify()`.
+`populate(config, cx)` fills every input via `TextInput::set_value` (`max_agent_steps` via `to_string()`, model fields destructured from the `ModelConfig::OpenAi` variants) and calls `cx.notify()`.
 
 #### Save Flow
 
-`save()` is bound to the Save button via `cx.listener`. It clones `self.config` (`unwrap_or_default()` if the load never completed) and rebuilds the editable parts from the inputs:
+`save()` is bound to the Save button via `cx.listener`. It clones `self.config` (`unwrap_or_default()` if no value was ever populated) and rebuilds the editable parts from the inputs:
 
-- `max_agent_steps` — input text trimmed and parsed as `u8`; falls back to the previous value when unparsable (the input is not restricted to numeric text yet)
+- `max_agent_steps` — input text trimmed and parsed; falls back to the previous value when unparsable (the input is not restricted to numeric text yet)
 - `system_prompt` — raw input text
-- Model groups — each `ModelFields` mapped to `ModelConfig::OpenAi { base_url, api_key, model }` (base URL and model trimmed) via the `model_config()` helper
-- `profiles` / `active_profile` — **not editable**; carried over untouched from the stored config
+- Model groups — each `ModelPurpose` visited via `ModelPurpose::iter_all()`, its `ModelFields` mapped to `ModelConfig::OpenAi { base_url, api_key, model }` (base URL and model trimmed) via the `model_config()` helper
 
-The result is boxed and sent as `Command::SaveConfig(Box<NovelCraftConfig>)`. The engine thread syncs it via `engine.set_config(*config.clone())` and persists it with `config.save().await` (errors logged through `Loggable`).
+The result is dispatched as `Command::SaveConfig(config)`. The engine thread persists it with `config.save().await`, syncs it via `engine.set_config`, and emits `AppEvents::UpdateConfig` — refreshing the global query, which repopulates the inputs through the watcher; on failure it toasts "Failed to save new config". The button handler also dispatches `Toast::success("Settings saved!")` right after `save(cx)` — an optimistic confirmation (see [Toasts](#toasts)).
 
 #### Layout
 
-`screen_root()` with the top bar plus a scrollable content column: `.id("settings-scroll").overflow_y_scroll()` (`flex_grow(1.)`, `min_h(px(0.))`, `w_full`) wrapping an inner column with `max_w(px(640.))`, `gap_4`, `p_4`. Fields are rendered by the `field(label, input, color)` helper (label at 55% text opacity above the input). Each model entry is a `model_group(label, fields, color, border)` bordered box (`border_1`, 25% opacity border, `rounded_sm`, `p_3`) containing Base URL / API Key / Model fields. The Save button is `button("btn-save", text!("Save")).primary(&theme)` — inverted colors (theme text as background, theme bg as text), converted with `.into_element()` to attach `on_click` (see [`button()` — Themed Buttons](#button--themed-buttons)).
+`screen(text!("Settings")).closable()` — the standard `ScreenBase` layout, whose `content()` column is the scrollable wrapper (`overflow_y_scroll`, `max_w(px(640.))`, `gap_4`, `p_4`). Fields are rendered by the `field(theme, label, input)` helper (label above the input). Each model entry is rendered by the module-private `model_group(theme, label, fields)` helper, wrapping `field_group(theme, label)` — a bordered group box with a heading — containing Base URL / API Key / Model fields. The Save button is `button("btn-save", text!("Save")).primary(&theme)` — inverted colors (theme text as background, theme bg as text), converted with `.into_element()` to attach `on_click` (see [`button()` — Themed Buttons](#button--themed-buttons)).
 
 #### Gotcha: `text!` Does Not Format
 
@@ -507,7 +576,7 @@ Inside event handlers (`on_click`, `on_mouse_down`, etc.), always dispatch actio
 
 `App::dispatch_action` is reserved for app-level/global dispatch outside window updates (e.g. from timers or menus).
 
-Navigation actions (`Back`, `ShowSettings`, `CreateStory`, `ShowStory`, `PlayStory`) are handled by app-level global listeners registered once in `main()`. These listeners receive actions in the bubble phase after no element handler consumes them, and run both for actions dispatched through a window (`Window::dispatch_action`) and for global dispatches (`App::dispatch_action`). `AppRoot` is created via `cx.new` before `open_window` and passed into the window as its root view. The generic helper `on_screen_action(cx, root, to)` registers a listener via `App::on_action` that sets `root.screen` to the `Screen` returned by the mapping closure — the four trivial navigation actions each get a one-line registration. `Back` is the exception: its target depends on the current screen, so it gets an explicit `cx.on_action` forwarding to the `&mut self` method `AppRoot::on_back`:
+Navigation actions (`Back`, `ShowSettings`, `CreateStory`, `ShowStory`, `PlayStory`, `PagePrev`, `PageNext`) are handled by app-level global listeners registered once in `main()`. These listeners receive actions in the bubble phase after no element handler consumes them, and run both for actions dispatched through a window (`Window::dispatch_action`) and for global dispatches (`App::dispatch_action`). `AppRoot` is created via `cx.new` before `open_window` and passed into the window as its root view. The generic helper `on_screen_action(cx, root, to)` registers a listener via `App::on_action` that sets `root.screen` to the `Screen` returned by the mapping closure — the trivial navigation actions each get a one-line registration. `Back` is the exception: its target depends on the current screen, so it gets an explicit `cx.on_action` forwarding to the `&mut self` method `AppRoot::on_back`; `PagePrev`/`PageNext` are similarly explicit, forwarding to `AppRoot::gameplay_nav` (a no-op unless the gameplay screen is showing).
 
 ```rust
 let root = cx.new(|cx| AppRoot { /* ... */ });
@@ -526,6 +595,20 @@ on_screen_action(cx, &root, |ev: &actions::ShowStory| {
 });
 on_screen_action(cx, &root, |ev: &actions::PlayStory| {
   Screen::StoryGameplay(ev.0.clone())
+});
+
+// Page navigation — bound globally to alt-left / alt-right (no key context):
+cx.bind_keys([
+  KeyBinding::new("alt-left", actions::PagePrev, None),
+  KeyBinding::new("alt-right", actions::PageNext, None),
+]);
+cx.on_action({
+  let root = root.clone();
+  move |_: &actions::PagePrev, cx| root.update(cx, |root, cx| root.gameplay_nav(-1, cx))
+});
+cx.on_action({
+  let root = root.clone();
+  move |_: &actions::PageNext, cx| root.update(cx, |root, cx| root.gameplay_nav(1, cx))
 });
 
 cx.open_window(WindowOptions::default(), move |_, _| root.clone()).unwrap();
@@ -564,7 +647,7 @@ Inside a view's own `Render` impl, `cx.entity()` hands the entity to a custom el
 
 ```
 gui/src/
-├── main.rs          # Entry point — engine thread, CommandBus global, AppRoot view, action routing
+├── main.rs          # Entry point — engine thread, CommandBus/AppEvents channels, EngineQuery globals, AppRoot view, action routing
 ├── screens/           # Screen enum (mod.rs) + one submodule per screen (create(cx) + Render)
 ├── comp.rs          # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 ├── text_input.rs    # Reusable TextInput component (custom Element, IME, scoped key bindings)

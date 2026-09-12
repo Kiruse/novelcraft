@@ -1,14 +1,13 @@
 use exhaustive_map::{ExhaustiveMap, FiniteExt};
-use gpui::{Div, Entity, Render, Window, div, text};
+use gpui::{Div, Entity, Render, Task, Window, div, text};
 use gpui::prelude::*;
 use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose, NovelCraftConfig};
-use tokio::sync::oneshot;
 
 use super::screen;
-use crate::{Toast, comp::*};
+use crate::{EngineQuery, Toast, comp::*};
 use crate::text_input::TextInput;
 use crate::theme::Theme;
-use crate::{Command, CommandBus};
+use crate::Command;
 
 struct ModelFields {
   base_url: Entity<TextInput>,
@@ -17,6 +16,7 @@ struct ModelFields {
 }
 
 pub(crate) struct SettingsScreen {
+  task: Task<()>,
   config: Option<NovelCraftConfig>,
   max_agent_steps: Entity<TextInput>,
   system_prompt: Entity<TextInput>,
@@ -26,6 +26,7 @@ pub(crate) struct SettingsScreen {
 impl SettingsScreen {
   pub fn create(cx: &mut Context<'_, Self>) -> Self {
     let mut screen = Self {
+      task: Task::ready(()),
       config: None,
       max_agent_steps: create_text_input(cx, false, "10"),
       system_prompt: create_text_input(cx, true, ""),
@@ -40,14 +41,23 @@ impl SettingsScreen {
   }
 
   fn load(&mut self, cx: &mut Context<'_, Self>) {
-    let (tx, rx) = oneshot::channel();
-    cx.global::<CommandBus>().send(Command::LoadConfig(tx));
-    cx.spawn(async move |this, cx| {
-      if let Ok(config) = rx.await
-        && let Ok(()) = this.update(cx, |screen, cx| screen.populate(config, cx))
-      {}
-    })
-    .detach();
+    let config = cx.global::<EngineQuery<NovelCraftConfig>>().curr().value().cloned();
+    if let Some(config) = config {
+      self.populate(config, cx);
+    }
+
+    let mut rx_config = {
+      let q = cx.global::<EngineQuery<NovelCraftConfig>>();
+      q.refresh(cx);
+      q.rx()
+    };
+
+    self.task = cx.spawn(async move |this, cx| {
+      while let Ok(()) = rx_config.changed().await {
+        let config = rx_config.borrow().value().cloned().unwrap_or_default();
+        this.update(cx, move |this, cx| this.populate(config, cx)).ok();
+      }
+    });
   }
 
   fn populate(&mut self, config: NovelCraftConfig, cx: &mut Context<'_, Self>) {
@@ -55,7 +65,7 @@ impl SettingsScreen {
       input.set_value(config.max_agent_steps.to_string(), cx)
     });
     self.system_prompt.update(cx, |input, cx| {
-      input.set_value(config.system_prompt.clone(), cx)
+      input.set_value(config.system_prompt, cx)
     });
 
     let iter = self.models.values_mut().zip(config.models.values());
@@ -69,7 +79,6 @@ impl SettingsScreen {
       fields.api_key.update(cx, |input, cx| input.set_value(api_key, cx));
       fields.model.update(cx, |input, cx| input.set_value(model, cx));
     }
-    self.config = Some(config);
     cx.notify();
   }
 
@@ -88,8 +97,7 @@ impl SettingsScreen {
       config.models[key] = Self::model_config(&self.models[key], cx);
     }
 
-    cx.global::<CommandBus>()
-      .send(Command::SaveConfig(config));
+    Command::SaveConfig(config).dispatch(cx);
   }
 
   fn model_config(fields: &ModelFields, cx: &Context<'_, SettingsScreen>) -> ModelConfig {

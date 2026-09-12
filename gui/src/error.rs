@@ -10,6 +10,9 @@ pub enum GuiError {
 
   #[error("API error: {0}")]
   Api(String),
+
+  #[error("Operation aborted")]
+  Abort,
 }
 
 impl GuiError {

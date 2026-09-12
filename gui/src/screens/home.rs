@@ -1,44 +1,97 @@
 use std::time::Duration;
 
 use gpui::{
-  Action, Animation, AnimationExt, AnyElement, Div, InteractiveElement, Render, Stateful, Window,
-  div, pulsating_between, text,
+  Action, Animation, AnimationExt, AnyElement, Div, InteractiveElement, Render, Stateful, Task, Window, div, pulsating_between, text,
 };
 use gpui::prelude::*;
 use novelcraft_engine::game::session::SessionV1;
-use tokio::sync::oneshot;
 
 use super::screen;
 use crate::actions::{CreateStory, ShowStory};
 use crate::comp::*;
 use crate::theme::Theme;
-use crate::{Command, CommandBus, StoryId};
+use crate::{EngineQuery, StoryId};
 
 pub(crate) struct HomeScreen {
-  sessions: Option<Vec<SessionV1>>,
+  /// Keeps the query watcher alive — cancelled when the screen drops.
+  #[allow(dead_code)]
+  task: Task<()>,
 }
 
 impl HomeScreen {
   pub fn create(cx: &mut Context<'_, Self>) -> Self {
-    let mut screen = Self { sessions: None };
-    screen.load(cx);
-    screen
+    // Marked unchanged — the watcher fires on the refresh triggered below.
+    let mut rx_sessions = cx.global::<EngineQuery<Vec<SessionV1>>>().refresh(cx);
+
+    let task = cx.spawn(async move |this, cx| {
+      while let Ok(()) = rx_sessions.changed().await {
+        cx.update(|cx| {
+          cx.notify(this.entity_id());
+        });
+      }
+    });
+
+    Self { task }
   }
 
-  fn load(&mut self, cx: &mut Context<'_, Self>) {
-    let (tx, rx) = oneshot::channel();
-    cx.global::<CommandBus>().send(Command::ListSessions(tx));
-    cx.spawn(async move |this, cx| {
-      if let Ok(sessions) = rx.await
-        && let Ok(()) = this.update(cx, |screen, cx| screen.populate(sessions, cx))
-      {}
-    })
-    .detach();
-  }
+  /// Renders the sessions list for the current [`EngineQueryResult`] state:
+  /// loading (empty), error, stale (value + error), and fresh values —
+  /// empty or not.
+  fn sessions_ui(&self, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
+    let result = cx.global::<EngineQuery<Vec<SessionV1>>>().curr();
+    let (sessions, error) = (result.value(), result.error());
 
-  fn populate(&mut self, sessions: Vec<SessionV1>, cx: &mut Context<'_, Self>) {
-    self.sessions = Some(sessions);
-    cx.notify();
+    // A value paired with an error is stale — surface that alongside it.
+    let stale_note = result.is_stale().then(|| {
+      div()
+        .text_sm()
+        .text_color(theme.danger_fg)
+        .child(text!("Failed to refresh — showing the last known sessions"))
+        .into_any_element()
+    });
+
+    let list_ui: AnyElement = match (sessions, error) {
+      (None, None) =>
+        div()
+          .child(text!("Loading ..."))
+          .with_animation(
+            "sessions-loading",
+            Animation::new(Duration::from_secs(1))
+              .repeat()
+              .with_easing(pulsating_between(0.2, 1.0)),
+            |loading, delta| loading.opacity(delta),
+          )
+          .into_any_element(),
+      (None, Some(_)) =>
+        div()
+          .text_color(theme.danger_fg)
+          .child(text!("Failed to load sessions"))
+          .into_any_element(),
+      (Some(sessions), _) if sessions.is_empty() =>
+        text!("No sessions yet").into_any_element(),
+      (Some(sessions), _) =>
+        div()
+          .flex()
+          .flex_col()
+          .gap_2()
+          .w_full()
+          .children(sessions.iter().map(|session| {
+            let story_id = StoryId(session.id.clone());
+            session_card(theme, session).on_click(cx.listener(move |_, _, window, cx| {
+              window.dispatch_action(ShowStory(story_id.clone()).boxed_clone(), cx)
+            }))
+          }))
+          .into_any_element(),
+    };
+
+    div()
+      .flex()
+      .flex_col()
+      .gap_2()
+      .w_full()
+      .children(stale_note)
+      .child(list_ui)
+      .into_any_element()
   }
 }
 
@@ -46,38 +99,10 @@ impl Render for HomeScreen {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.global::<Theme>();
 
-    let sessions_ui: AnyElement = match &self.sessions {
-      None => div()
-        .child(text!("Loading ..."))
-        .with_animation(
-          "sessions-loading",
-          Animation::new(Duration::from_secs(1))
-            .repeat()
-            .with_easing(pulsating_between(0.2, 1.0)),
-          |loading, delta| loading.opacity(delta),
-        )
-        .into_any_element(),
-      Some(sessions) if sessions.is_empty() => div()
-        .child(text!("No sessions yet."))
-        .into_any_element(),
-      Some(sessions) => div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .w_full()
-        .children(sessions.iter().map(|session| {
-          let story_id = StoryId(session.id.clone());
-          session_card(theme, session).on_click(cx.listener(move |_, _, window, cx| {
-            window.dispatch_action(ShowStory(story_id.clone()).boxed_clone(), cx)
-          }))
-        }))
-        .into_any_element(),
-    };
-
     screen(text!("NovelCraft"))
       .child(create_vignette(theme))
       .child(subtitle(text!("Sessions")))
-      .child(sessions_ui)
+      .child(self.sessions_ui(&theme, cx))
   }
 }
 
