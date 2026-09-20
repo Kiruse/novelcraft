@@ -34,6 +34,10 @@ impl HomeScreen {
     Self { task }
   }
 
+  pub fn enter(&mut self, cx: &mut Context<'_, Self>) {
+    cx.global::<EngineQuery<Vec<SessionV1>>>().refresh(cx);
+  }
+
   /// Renders the sessions list for the current [`EngineQueryResult`] state:
   /// loading (empty), error, stale (value + error), and fresh values —
   /// empty or not.

@@ -115,6 +115,9 @@ impl NovelCraftEngine {
   /// left untouched. Sessions with unreadable metadata are skipped.
   pub async fn list_sessions() -> Result<Vec<SessionV1>, EngineError> {
     let path = SessionV1::root()?;
+    if !path.exists() {
+      tokio::fs::create_dir_all(&path).await?;
+    }
     let mut dir_iter = tokio::fs::read_dir(&path).await?;
     let mut result = Vec::new();
     while let Some(entry) = dir_iter.next_entry().await? {

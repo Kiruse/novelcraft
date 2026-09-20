@@ -61,6 +61,8 @@ impl AppRoot {
     self.screen = new_screen;
 
     match &self.screen {
+      Screen::Home =>
+        self.screen_home.update(cx, HomeScreen::enter),
       Screen::CreateStory =>
         self.screen_create_story.update(cx, CreateStoryScreen::enter),
       Screen::StoryGameplay(id) => {
@@ -163,7 +165,7 @@ pub(crate) struct CommandBus(mpsc::Sender<Command>);
 impl CommandBus {
   #[inline]
   pub fn send(&self, cmd: Command) {
-    self.0.blocking_send(cmd).warn();
+    let _ = self.0.blocking_send(cmd).warn();
   }
 }
 
@@ -187,10 +189,6 @@ fn main() -> anyhow::Result<()> {
   let gui_config = load_config()?;
   let engine_config = NovelCraftConfig::load_sync()?;
   let engine_config2 = engine_config.clone();
-  let profiles = Profiles {
-    profiles: engine_config.profiles.clone(),
-    active_profile: engine_config.active_profile.clone(),
-  };
 
   let h_engine = std::thread::spawn(move || {
     let tx_events = tx_events;
@@ -212,14 +210,13 @@ fn main() -> anyhow::Result<()> {
             }
           }
           Command::SaveConfig(config) => {
-            Toast::error("Test error").send(&tx_events);
             match config.save().await.error() {
               Ok(_) => {
                 engine.set_config(config);
                 AppEvents::UpdateConfig.send(&tx_events);
               }
               Err(_) => {
-                Toast::error("Failed to save new config").send(&tx_events);
+                Toast::error("Failed to save new config").send(&tx_events).await;
               }
             }
           }
@@ -232,7 +229,7 @@ fn main() -> anyhow::Result<()> {
               Err(err) => {
                 engine.set_session(None);
                 error!("Error creating session: {err}");
-                Toast::error("Session creation failed").send(&tx_events);
+                Toast::error("Session creation failed").send(&tx_events).await;
               }
             }
           }
@@ -245,7 +242,7 @@ fn main() -> anyhow::Result<()> {
               Err(err) => {
                 engine.set_session(None);
                 error!("Error loading session: {err}");
-                Toast::error("Failed to load session").send(&tx_events);
+                Toast::error("Failed to load session").send(&tx_events).await;
               }
             }
             let _ = tx_events.send(AppEvents::SwitchSession);
@@ -274,7 +271,7 @@ fn main() -> anyhow::Result<()> {
     ]);
     cx.set_global(gui_config.theme);
     cx.set_global(CommandBus(tx_cmds));
-    register_queries(cx, engine_config2, profiles);
+    register_queries(cx, engine_config2);
 
     let root = cx.new(|cx| AppRoot {
       screen: Screen::Home,
@@ -336,7 +333,12 @@ fn load_config() -> anyhow::Result<Config> {
   }
 }
 
-fn register_queries(cx: &mut App, config: NovelCraftConfig, profiles: Profiles) {
+fn register_queries(cx: &mut App, config: NovelCraftConfig) {
+  let profiles = Profiles {
+    profiles: config.profiles.clone(),
+    active_profile: config.active_profile.clone(),
+  };
+
   let mut q = EngineQuery::<NovelCraftConfig>::new(async |engine| {
     Ok(engine.config().clone())
   });
@@ -353,9 +355,13 @@ fn register_queries(cx: &mut App, config: NovelCraftConfig, profiles: Profiles) 
   q.init(profiles);
   cx.set_global(q);
 
-  cx.set_global(EngineQuery::<Vec<SessionV1>>::new(async |_engine| {
+  // Immediately load list of sessions
+  let q = EngineQuery::<Vec<SessionV1>>::new(async |_engine| {
     Ok(NovelCraftEngine::list_sessions().await?)
-  }));
+  });
+  q.refresh(cx);
+  cx.set_global(q);
+
   cx.set_global(EngineQuery::<SessionV1>::new(async |engine| {
     Ok(engine.session()?.clone())
   }));
@@ -565,7 +571,10 @@ impl<T: Send + Sync + 'static> EngineQuery<T> {
   pub fn refresh_with_bus(&self, command_bus: &CommandBus) -> watch::Receiver<EngineQueryResult<T>> {
     let counter = self.round.clone();
     let tx = self.tx.clone();
-    let round = counter.fetch_add(1, AtomicOrdering::AcqRel);
+    // `fetch_add` yields the pre-increment value; this refresh's round is
+    // the post-increment counter — matching `is_in_flight`'s expectation
+    // that a published result's round equals the current counter.
+    let round = counter.fetch_add(1, AtomicOrdering::AcqRel) + 1;
     let querier = self.querier.clone();
     command_bus.send(Command::QueryEngine(Box::new(
       move |engine: &NovelCraftEngine| {
@@ -579,6 +588,7 @@ impl<T: Send + Sync + 'static> EngineQuery<T> {
                 let _ = tx.send(EngineQueryResult::Recent { value, round });
               }
               Err(error) => {
+                error!("EngineQuery<{}> error during refresh: {}", std::any::type_name::<T>(), error);
                 tx.send_modify(|result| {
                   let prev = std::mem::replace(result, EngineQueryResult::Empty { round });
                   match prev {
@@ -662,6 +672,7 @@ impl<T: Send + Sync + 'static> EngineQueryResult<T> {
   }
 
   #[inline]
+  #[allow(unused)]
   pub fn is_empty(&self) -> bool {
     matches!(self, EngineQueryResult::Empty { .. })
   }

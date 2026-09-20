@@ -170,12 +170,14 @@ impl HslaExt for Hsla {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct Loader<T: Send> {
   round: Arc<AtomicUsize>,
   value: Entity<Option<T>>,
   task: Option<Task<()>>,
 }
 
+#[allow(unused)]
 impl<T: Send + 'static> Loader<T> {
   #[inline(always)]
   pub fn new(cx: &mut App) -> Self {
@@ -214,14 +216,14 @@ impl<T: Send + 'static> Loader<T> {
       match res {
         Ok(value) if stored_round == this_round => {
           handle.update(cx, |v, _| *v = Some(value));
-          tx.send(LoaderResult::Success);
+          let _ = tx.send(LoaderResult::Success);
         }
         Err(err) => {
           handle.update(cx, |v, _| *v = None);
-          tx.send(LoaderResult::Failure(err));
+          let _ = tx.send(LoaderResult::Failure(err));
         }
         _ => {
-          tx.send(LoaderResult::Stale);
+          let _ = tx.send(LoaderResult::Stale);
         }
       }
     }));
@@ -258,6 +260,7 @@ impl<T: Send + 'static> Loader<T> {
 }
 
 #[derive(Debug, Default)]
+#[allow(unused)]
 pub enum LoaderResult {
   /// Emitted when the retrieval was successful & the value was updated.
   Success,
@@ -269,6 +272,7 @@ pub enum LoaderResult {
   Failure(anyhow::Error),
 }
 
+#[allow(unused)]
 impl LoaderResult {
   pub fn is_success(&self) -> bool {
     matches!(self, Self::Success)
