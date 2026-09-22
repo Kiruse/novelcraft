@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::future::LocalBoxFuture;
 use gpui::{
-  Action, App, AsyncApp, Div, ElementId, Entity, Global, KeyBinding, Rgba, Stateful, Window, WindowOptions, div, prelude::*, px, relative, text,
+  Action, App, AsyncApp, Div, ElementId, Entity, FocusHandle, Global, KeyBinding, Rgba, Stateful, Window, WindowOptions, div, prelude::*, px, relative, text,
 };
 use gpui_platform::application;
 use log::*;
@@ -34,6 +34,7 @@ mod util;
 #[derive(Debug)]
 struct AppRoot {
   screen: Screen,
+  focus_handle: FocusHandle,
   screen_home: Entity<HomeScreen>,
   screen_settings: Entity<SettingsScreen>,
   screen_create_story: Entity<CreateStoryScreen>,
@@ -80,6 +81,14 @@ impl AppRoot {
     }
   }
 
+  fn on_tab(&mut self, _: &actions::Tab, window: &mut Window, cx: &mut Context<Self>) {
+    window.focus_next(cx);
+  }
+
+  fn on_tab_prev(&mut self, _: &actions::TabPrev, window: &mut Window, cx: &mut Context<Self>) {
+    window.focus_prev(cx);
+  }
+
   fn spawn_toast(&mut self, toast: Toast, cx: &mut Context<Self>) {
     let id = self.next_toast_id;
     self.next_toast_id += 1;
@@ -105,7 +114,10 @@ impl AppRoot {
 impl Render for AppRoot {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme: &Theme = cx.global();
-    let mut res = root(&theme);
+    let mut res = root(&theme)
+      .track_focus(&self.focus_handle)
+      .on_action(cx.listener(Self::on_tab))
+      .on_action(cx.listener(Self::on_tab_prev));
     match &self.screen {
       Screen::Home => res = res.child(self.screen_home.clone()),
       Screen::Settings => res = res.child(self.screen_settings.clone()),
@@ -268,6 +280,8 @@ fn main() -> anyhow::Result<()> {
     cx.bind_keys([
       KeyBinding::new("alt-left", actions::PagePrev, None),
       KeyBinding::new("alt-right", actions::PageNext, None),
+      KeyBinding::new("tab", actions::Tab, None),
+      KeyBinding::new("shift-tab", actions::TabPrev, None),
     ]);
     cx.set_global(gui_config.theme);
     cx.set_global(CommandBus(tx_cmds));
@@ -275,6 +289,7 @@ fn main() -> anyhow::Result<()> {
 
     let root = cx.new(|cx| AppRoot {
       screen: Screen::Home,
+      focus_handle: cx.focus_handle(),
       toasts: Vec::new(),
       next_toast_id: 0,
       screen_home: cx.new(|cx| HomeScreen::create(cx)),
@@ -305,11 +320,13 @@ fn main() -> anyhow::Result<()> {
       }
     }).detach();
 
-    cx.open_window(WindowOptions::default(), {
+    let window = cx.open_window(WindowOptions::default(), {
       let root = root.clone();
       move |_, _| root.clone()
-    })
-    .unwrap();
+    }).unwrap();
+    window.update(cx, |root, window, cx| {
+      window.focus(&root.focus_handle, cx);
+    }).unwrap();
     cx.activate(true);
   });
 
@@ -950,7 +967,7 @@ pub(crate) mod actions {
 
   use crate::{StoryId, Toast};
 
-  actions!(nav, [Back, ShowSettings, CreateStory, PagePrev, PageNext]);
+  actions!(nav, [Back, ShowSettings, CreateStory, PagePrev, PageNext, Tab, TabPrev]);
 
   #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema, Action)]
   #[action(namespace = nav)]

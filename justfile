@@ -4,6 +4,8 @@ set dotenv-load
 
 dev:
   cargo run --bin novelcraft
+llama:
+  llama serve --port 8888 -hf ggml-org/gemma-4-26B-A4B-it-GGUF:Q4_0
 
 # ── Build ────────────────────────────────────────────────────
 

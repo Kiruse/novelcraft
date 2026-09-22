@@ -63,10 +63,15 @@ screen(text!("Settings")).closable()   // close button instead of gear
 `AppRoot` (`gui/src/main.rs`) is the sole top-level gpui `View`. It holds:
 
 - `screen: Screen` — current screen variant
+- `focus_handle: FocusHandle` — the root's own focus handle, `.track_focus`ed by the rendered root div so it can receive the Tab actions when nothing else is focused; focused after `open_window` (see [Tab Focus Traversal](#tab-focus-traversal))
 - `screen_home` / `screen_settings` / `screen_create_story` / `screen_story_overview` / `screen_story_gameplay` — `Entity<...Screen>` for each screen, created once via `cx.new(|cx| ...Screen::create(cx))`
 - `toasts: Vec<(usize, Toast)>` + `next_toast_id` — active toast queue (see [Toasts](#toasts))
 
-The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed.
+The `Render` impl matches on `self.screen` and attaches the matching screen entity as a child. For `StoryOverview`/`StoryGameplay` it first syncs the `StoryId` into the screen entity via `cx.update_entity`. Navigation is performed by mutating `self.screen` (global action listeners do this via `root.update(cx, ...)`); gpui re-renders automatically since the entities are observed. The root div also carries `on_action` listeners for the Tab actions (see [Tab Focus Traversal](#tab-focus-traversal)).
+
+#### Tab Focus Traversal
+
+Tab-key focus traversal is app-wide and built on gpui's built-in `TabStopMap`. Global `"tab"` / `"shift-tab"` keybindings (no key context) dispatch the `nav::Tab` / `nav::TabPrev` actions; `AppRoot`'s rendered root div is `.track_focus`ed and carries `on_action` listeners for both, calling `window.focus_next(cx)` / `window.focus_prev(cx)`. The `"TextInput"` key context defines no tab binding, so the keystroke bubbles up from a focused input to `AppRoot`. Every div with `.track_focus(...)` self-registers as a tab stop at paint time — each `TextInput` additionally marks its focus handle with `tab_stop(true)` in `create` — and traversal order is paint (declaration) order, with wrap-around and the nothing-focused start handled by gpui. Only the active screen's inputs participate, since only they are rendered. After `cx.open_window`, `main()` focuses the root handle via `window.update(...)` so Tab works from cold start with nothing focused.
 
 Engine communication uses two `mpsc` channels. GUI → engine: a `CommandBus(mpsc::Sender<Command>)` (both `pub(crate)`) is registered as a gpui `Global`; a dedicated engine thread runs a tokio runtime and consumes the receiving end. Engine → GUI: an `AppEvents` channel (`Toast(Toast)`, `UpdateConfig`, `SwitchSession`, `SwitchProfile`) — the engine thread reports command failures as toasts and signals state changes, and a task spawned in `main()` consumes the events, dispatching toasts and refreshing the matching global `EngineQuery` (`UpdateConfig` → config query, `SwitchProfile` → profiles query, `SwitchSession` → active-session query). `Command` is a `pub(crate)` enum with six variants:
 
@@ -215,7 +220,7 @@ impl TextInput {
 }
 ```
 
-`on_submit` receives the current content; the callback decides whether to clear the field afterwards (via `set_value`/`reset`) — the component never clears on its own.
+`on_submit` receives the current content; the callback decides whether to clear the field afterwards (via `set_value`/`reset`) — the component never clears on its own. `create` marks the input's focus handle as a tab stop (`cx.focus_handle().tab_stop(true)`), so every `TextInput` is reachable via Tab (see [Tab Focus Traversal](#tab-focus-traversal)).
 
 **Usage:**
 
@@ -241,7 +246,7 @@ input.update(cx, |input, cx| input.reset(cx));
 
 ### Key Bindings
 
-`text_input::init(cx)` is called once as the first statement inside `application().run(...)` in `main.rs`. It registers all bindings via `cx.bind_keys`, **every one scoped to the `"TextInput"` key context** — so they only fire while a `TextInput` is focused. Modifier combos that differ per platform (`ctrl-a/v/c/x`) are bound in both `ctrl-*` and `cmd-*` variants for portability.
+`text_input::init(cx)` is called once as the first statement inside `application().run(...)` in `main.rs`. It registers all bindings via `cx.bind_keys`, **every one scoped to the `"TextInput"` key context** — so they only fire while a `TextInput` is focused. Modifier combos that differ per platform (`ctrl-a/v/c/x`) are bound in both `ctrl-*` and `cmd-*` variants for portability. No `tab` binding is defined here — the global `"tab"`/`"shift-tab"` bindings are deliberately left unshadowed so the keystroke bubbles from a focused input up to `AppRoot` for focus traversal (see [Tab Focus Traversal](#tab-focus-traversal)).
 
 | Keys | Action |
 |------|--------|
@@ -278,7 +283,8 @@ Multiline mode currently has no scrolling or max-height — the field grows vert
 The `Render` impl returns a container `div()` with:
 
 - `.key_context("TextInput")` — scopes the key bindings above
-- `.track_focus(&self.focus_handle(cx))` and a `Focusable` impl
+- `.track_focus(&self.focus_handle)` and a `Focusable` impl
+- An always-on 1px border on the outer div — `border_1()` with a `transparent_black()` color — plus `.focus(|s| s.border_color(theme.text.opacity(0.6)))`, so the focused input (keyboard or mouse focus alike) shows a highlighted border with no layout shift
 - `.cursor(CursorStyle::IBeam)` over the whole field
 - An `.on_action(cx.listener(Self::...))` handler per action — 19 total (bubble phase)
 - Mouse listeners: `on_mouse_down`, `on_mouse_up`, `on_mouse_up_out`, `on_mouse_move` (click-to-position, drag selection in both modes)
@@ -576,7 +582,7 @@ Inside event handlers (`on_click`, `on_mouse_down`, etc.), always dispatch actio
 
 `App::dispatch_action` is reserved for app-level/global dispatch outside window updates (e.g. from timers or menus).
 
-Navigation actions (`Back`, `ShowSettings`, `CreateStory`, `ShowStory`, `PlayStory`, `PagePrev`, `PageNext`) are handled by app-level global listeners registered once in `main()`. These listeners receive actions in the bubble phase after no element handler consumes them, and run both for actions dispatched through a window (`Window::dispatch_action`) and for global dispatches (`App::dispatch_action`). `AppRoot` is created via `cx.new` before `open_window` and passed into the window as its root view. The generic helper `on_screen_action(cx, root, to)` registers a listener via `App::on_action` that sets `root.screen` to the `Screen` returned by the mapping closure — the trivial navigation actions each get a one-line registration. `Back` is the exception: its target depends on the current screen, so it gets an explicit `cx.on_action` forwarding to the `&mut self` method `AppRoot::on_back`; `PagePrev`/`PageNext` are similarly explicit, forwarding to `AppRoot::gameplay_nav` (a no-op unless the gameplay screen is showing).
+Navigation actions (`Back`, `ShowSettings`, `CreateStory`, `ShowStory`, `PlayStory`, `PagePrev`, `PageNext`) are handled by app-level global listeners registered once in `main()`. These listeners receive actions in the bubble phase after no element handler consumes them, and run both for actions dispatched through a window (`Window::dispatch_action`) and for global dispatches (`App::dispatch_action`). `AppRoot` is created via `cx.new` before `open_window` and passed into the window as its root view. The generic helper `on_screen_action(cx, root, to)` registers a listener via `App::on_action` that sets `root.screen` to the `Screen` returned by the mapping closure — the trivial navigation actions each get a one-line registration. `Back` is the exception: its target depends on the current screen, so it gets an explicit `cx.on_action` forwarding to the `&mut self` method `AppRoot::on_back`; `PagePrev`/`PageNext` are similarly explicit, forwarding to `AppRoot::gameplay_nav` (a no-op unless the gameplay screen is showing). `Tab`/`TabPrev` are not registered in `main()` at all — their `on_action` listeners live on `AppRoot`'s root div (see [Tab Focus Traversal](#tab-focus-traversal)).
 
 ```rust
 let root = cx.new(|cx| AppRoot { /* ... */ });
@@ -597,10 +603,12 @@ on_screen_action(cx, &root, |ev: &actions::PlayStory| {
   Screen::StoryGameplay(ev.0.clone())
 });
 
-// Page navigation — bound globally to alt-left / alt-right (no key context):
+// Page navigation + tab traversal — bound globally (no key context):
 cx.bind_keys([
   KeyBinding::new("alt-left", actions::PagePrev, None),
   KeyBinding::new("alt-right", actions::PageNext, None),
+  KeyBinding::new("tab", actions::Tab, None),
+  KeyBinding::new("shift-tab", actions::TabPrev, None),
 ]);
 cx.on_action({
   let root = root.clone();
@@ -647,10 +655,10 @@ Inside a view's own `Render` impl, `cx.entity()` hands the entity to a custom el
 
 ```
 gui/src/
-├── main.rs          # Entry point — engine thread, CommandBus/AppEvents channels, EngineQuery globals, AppRoot view, action routing
+├── main.rs          # Entry point — engine thread, CommandBus/AppEvents channels, EngineQuery globals, AppRoot view (incl. toast overlay, tab focus traversal), action routing
 ├── screens/           # Screen enum (mod.rs) + one submodule per screen (create(cx) + Render)
 ├── comp.rs          # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
-├── text_input.rs    # Reusable TextInput component (custom Element, IME, scoped key bindings)
+├── text_input.rs    # Reusable TextInput component (custom Element, IME, scoped key bindings, tab stop + focus border)
 ├── theme.rs         # Theme/ThemeKind (bg, text colors), Global impl, serde as theme name
 └── util.rs          # Loggable trait, LogLevel
 ```

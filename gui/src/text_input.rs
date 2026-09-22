@@ -8,7 +8,7 @@ use gpui::{
   InspectorElementId, InteractiveElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
   MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
   SharedString, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
-  WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
+  WrappedLine, actions, div, fill, point, prelude::*, px, relative, size, transparent_black,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -96,7 +96,7 @@ impl TextInput {
       multiline,
       placeholder: "".into(),
       on_submit: None,
-      focus_handle: cx.focus_handle(),
+      focus_handle: cx.focus_handle().tab_stop(true),
       content: "".into(),
       selected_range: 0..0,
       selection_reversed: false,
@@ -1081,9 +1081,12 @@ impl Render for TextInput {
     let theme = cx.global::<Theme>();
     div()
       .key_context("TextInput")
-      .track_focus(&self.focus_handle(cx))
+      .track_focus(&self.focus_handle)
       .cursor(CursorStyle::IBeam)
       .w_full()
+      .border_1()
+      .border_color(transparent_black())
+      .focus(|s| s.border_color(theme.text.opacity(0.6)))
       .on_action(cx.listener(Self::backspace))
       .on_action(cx.listener(Self::delete))
       .on_action(cx.listener(Self::left))
