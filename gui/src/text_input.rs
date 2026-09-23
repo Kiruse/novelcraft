@@ -23,10 +23,14 @@ actions!(
     Right,
     Up,
     Down,
+    WordLeft,
+    WordRight,
     SelectLeft,
     SelectRight,
     SelectUp,
     SelectDown,
+    SelectWordLeft,
+    SelectWordRight,
     SelectAll,
     Home,
     End,
@@ -47,10 +51,14 @@ pub(crate) fn init(cx: &mut App) {
     KeyBinding::new("right", Right, Some("TextInput")),
     KeyBinding::new("up", Up, Some("TextInput")),
     KeyBinding::new("down", Down, Some("TextInput")),
+    KeyBinding::new("ctrl-left", WordLeft, Some("TextInput")),
+    KeyBinding::new("ctrl-right", WordRight, Some("TextInput")),
     KeyBinding::new("shift-left", SelectLeft, Some("TextInput")),
     KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
     KeyBinding::new("shift-up", SelectUp, Some("TextInput")),
     KeyBinding::new("shift-down", SelectDown, Some("TextInput")),
+    KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some("TextInput")),
+    KeyBinding::new("ctrl-shift-right", SelectWordRight, Some("TextInput")),
     KeyBinding::new("ctrl-a", SelectAll, Some("TextInput")),
     KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
     KeyBinding::new("home", Home, Some("TextInput")),
@@ -157,6 +165,22 @@ impl TextInput {
     }
   }
 
+  fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+    if self.selected_range.is_empty() {
+      self.move_to(self.previous_word_start(self.cursor_offset()), cx);
+    } else {
+      self.move_to(self.selected_range.start, cx)
+    }
+  }
+
+  fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+    if self.selected_range.is_empty() {
+      self.move_to(self.next_word_end(self.cursor_offset()), cx);
+    } else {
+      self.move_to(self.selected_range.end, cx)
+    }
+  }
+
   fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
     self.move_vertically(-1, false, window, cx);
   }
@@ -245,7 +269,15 @@ impl TextInput {
   }
 
   fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-    self.select_to(self.next_boundary(self.selected_range.end), cx);
+    self.select_to(self.next_boundary(self.cursor_offset()), cx);
+  }
+
+  fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+    self.select_to(self.previous_word_start(self.cursor_offset()), cx);
+  }
+
+  fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+    self.select_to(self.next_word_end(self.cursor_offset()), cx);
   }
 
   fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -499,6 +531,20 @@ impl TextInput {
       .grapheme_indices(true)
       .find_map(|(idx, _)| (idx > offset).then_some(idx))
       .unwrap_or(self.content.len())
+  }
+
+  /// Start of the word left of `offset` — the cursor position itself if it
+  /// sits mid-word, the previous word's start otherwise. Whitespace is
+  /// never stopped on.
+  fn previous_word_start(&self, offset: usize) -> usize {
+    previous_word_start(&self.content, offset)
+  }
+
+  /// End of the word right of `offset` — the end of the word under the
+  /// cursor, or of the next word after any whitespace. Whitespace is
+  /// never stopped on.
+  fn next_word_end(&self, offset: usize) -> usize {
+    next_word_end(&self.content, offset)
   }
 
   fn filtered_text(&self, text: &str) -> String {
@@ -1015,6 +1061,89 @@ fn ime_runs(
   }
 }
 
+/// Start of the word left of `offset` in `text` — the offset itself if it
+/// sits mid-word, the previous word's start otherwise. Whitespace is never
+/// stopped on.
+fn previous_word_start(text: &str, offset: usize) -> usize {
+  let mut result = 0;
+  for (idx, segment) in text.split_word_bound_indices() {
+    if idx >= offset {
+      break;
+    }
+    if !segment.chars().all(char::is_whitespace) {
+      result = idx;
+    }
+  }
+  result
+}
+
+/// End of the word right of `offset` in `text` — the end of the word under
+/// the offset, or of the next word after any whitespace. Whitespace is
+/// never stopped on.
+fn next_word_end(text: &str, offset: usize) -> usize {
+  for (idx, segment) in text.split_word_bound_indices() {
+    if idx + segment.len() > offset && !segment.chars().all(char::is_whitespace) {
+      return idx + segment.len();
+    }
+  }
+  text.len()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn previous_word_start_jumps_over_whitespace_to_word_starts() {
+    let text = "foo bar baz";
+    assert_eq!(previous_word_start(text, 0), 0); // at start -> stays
+    assert_eq!(previous_word_start(text, 2), 0); // mid "foo" -> start of "foo"
+    assert_eq!(previous_word_start(text, 4), 0); // at start of "bar" -> start of "foo"
+    assert_eq!(previous_word_start(text, 5), 4); // mid "bar" -> start of "bar"
+    assert_eq!(previous_word_start(text, 7), 4); // at end of "bar" -> start of "bar"
+    assert_eq!(previous_word_start(text, 8), 4); // in whitespace -> start of "bar"
+  }
+
+  #[test]
+  fn next_word_end_jumps_over_whitespace_to_word_ends() {
+    let text = "foo bar baz";
+    assert_eq!(next_word_end(text, 0), 3); // at start of "foo" -> end of "foo"
+    assert_eq!(next_word_end(text, 2), 3); // mid "foo" -> end of "foo"
+    assert_eq!(next_word_end(text, 3), 7); // at end of "foo" -> end of "bar"
+    assert_eq!(next_word_end(text, 5), 7); // mid "bar" -> end of "bar"
+    assert_eq!(next_word_end(text, 11), 11); // at end -> stays
+  }
+
+  #[test]
+  fn punctuation_counts_as_its_own_word() {
+    let text = "hello, world";
+    assert_eq!(next_word_end(text, 0), 5); // at start of "hello" -> end of "hello"
+    assert_eq!(next_word_end(text, 5), 6); // at "," -> end of ","
+    assert_eq!(previous_word_start(text, 6), 5); // after "," -> start of ","
+    assert_eq!(previous_word_start(text, 8), 7); // mid "world" -> start of "world"
+
+    // UAX#29 keeps letter-surrounded "." / "'" sequences together as one word
+    let text = "foo.bar";
+    assert_eq!(next_word_end(text, 0), 7);
+    assert_eq!(previous_word_start(text, 4), 0);
+  }
+
+  #[test]
+  fn word_boundaries_are_byte_offsets_into_multibyte_text() {
+    let text = "grüße welt";
+    // "grüße" spans bytes 0..7 (ü and ß are two bytes each)
+    assert_eq!(next_word_end(text, 2), 7); // mid "grüße" -> its end
+    assert_eq!(previous_word_start(text, 9), 8); // mid "welt" -> its start
+    assert_eq!(previous_word_start(text, 8), 0); // at start of "welt" -> start of "grüße"
+  }
+
+  #[test]
+  fn empty_text_stays_at_zero() {
+    assert_eq!(previous_word_start("", 0), 0);
+    assert_eq!(next_word_end("", 0), 0);
+  }
+}
+
 fn line_entry_index_for_offset(lines: &[MultilineLine], offset: usize) -> Option<(usize, usize)> {
   if lines.is_empty() {
     return None;
@@ -1093,10 +1222,14 @@ impl Render for TextInput {
       .on_action(cx.listener(Self::right))
       .on_action(cx.listener(Self::up))
       .on_action(cx.listener(Self::down))
+      .on_action(cx.listener(Self::word_left))
+      .on_action(cx.listener(Self::word_right))
       .on_action(cx.listener(Self::select_left))
       .on_action(cx.listener(Self::select_right))
       .on_action(cx.listener(Self::select_up))
       .on_action(cx.listener(Self::select_down))
+      .on_action(cx.listener(Self::select_word_left))
+      .on_action(cx.listener(Self::select_word_right))
       .on_action(cx.listener(Self::select_all))
       .on_action(cx.listener(Self::home))
       .on_action(cx.listener(Self::end))

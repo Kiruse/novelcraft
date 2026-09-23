@@ -252,8 +252,10 @@ input.update(cx, |input, cx| input.reset(cx));
 |------|--------|
 | `backspace`, `delete` | Delete backwards / forwards (grapheme-aware) |
 | `left`, `right` | Move cursor (grapheme-aware) |
+| `ctrl-left`, `ctrl-right` | Move cursor by word (UAX#29 word boundaries; whitespace is never stopped on — cursor lands at word starts moving left, word ends moving right) |
 | `up`, `down` | Move cursor by visual row (multiline only) |
 | `shift-left/right/up/down` | Extend selection |
+| `ctrl-shift-left/right` | Extend selection by word |
 | `ctrl-a` / `cmd-a` | Select all |
 | `home`, `end` | See behavior table below |
 | `ctrl-v` / `cmd-v`, `ctrl-c` / `cmd-c`, `ctrl-x` / `cmd-x` | Paste / copy / cut |
@@ -261,7 +263,11 @@ input.update(cx, |input, cx| input.reset(cx));
 | `ctrl-enter` | Submit (both modes) |
 | `ctrl-cmd-space` | Show character palette |
 
-The actions themselves are declared with `actions!(text_input, [Backspace, Delete, Left, Right, Up, Down, SelectLeft, SelectRight, SelectUp, SelectDown, SelectAll, Home, End, ShowCharacterPalette, Paste, Cut, Copy, Enter, Submit])`.
+The actions themselves are declared with `actions!(text_input, [Backspace, Delete, Left, Right, Up, Down, WordLeft, WordRight, SelectLeft, SelectRight, SelectUp, SelectDown, SelectWordLeft, SelectWordRight, SelectAll, Home, End, ShowCharacterPalette, Paste, Cut, Copy, Enter, Submit])`.
+
+Selection is modeled as a normalized `selected_range` plus a `selection_reversed` flag marking which end is the cursor. `select_to(offset)` moves the cursor end of the range and swaps the flag when the cursor crosses the anchor — so extending a selection one way and then pressing shift in the opposite direction shrinks it past the anchor before growing the other way. `left`/`right`/`select_right` all move relative to `cursor_offset()` (the flagged end), not a fixed range side — using `selected_range.end` there made reversed selections jump past the anchor instead of shrinking (fixed bug: selecting left then shift-right unselected everything).
+
+The word motions are backed by `previous_word_start`/`next_word_end` free functions (unit-tested in `text_input.rs`) built on `unicode_segmentation`'s UAX#29 word boundaries: letter-punctuated sequences like `foo.bar` or `don't` count as one word, while standalone punctuation (`,`) is its own stop.
 
 ### Single-Line vs Multiline Behavior
 
