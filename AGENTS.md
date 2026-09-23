@@ -58,9 +58,10 @@ novelcraft/
 │   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
 │   └── src/
 │       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view (incl. toast overlay, tab focus traversal), action routing
+│       ├── api.rs              # Inspiration REST client (API_BASE_URL, shared http_runtime, get_json)
 │       ├── screens/            # Screen enum + ScreenBase/screen(title) helper (mod.rs) + one submodule per screen (create(cx) + Render)
 │       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close, button, chip, loading_text, ...)
-│       ├── error.rs            # GuiError (thiserror): Engine/Io/Api variants
+│       ├── error.rs            # GuiError (thiserror): Engine/Api variants
 │       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings, tab stop + focus border)
 │       ├── theme.rs            # Theme/ThemeKind (bg, text, label, border, danger/success/warn colors), Global impl, serde as theme name
 │       └── util.rs             # Loggable/ExpectLoggable, Toastable (Result -> toast), Loadable (Pending/Done), HslaExt, LogLevel
@@ -432,6 +433,7 @@ All build and development commands are in the root `justfile`.
 | `novelcraft-engine` (path) | Business logic library |
 | `gpui` (git, Zed main) | UI framework — views, elements, styling |
 | `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |
+| `reqwest` (version 0.12, json feature) | Inspiration REST client (streaming not used; json feature) |
 | `log` | Logging facade (used by `util.rs` `Loggable` trait) |
 | `chrono` | Local-time formatting of session timestamps (used by `screens/home.rs`) |
 | `unicode-segmentation` | Grapheme-boundary cursor movement (used by `text_input.rs`) |

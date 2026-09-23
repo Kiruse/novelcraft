@@ -45,9 +45,10 @@ novelcraft/
 │           ├── api.rs                # OpenAI API types (request/response structs for SSE)
 │           └── internal.rs           # Command-level types (ModelConfig, LlmMessage, LlmTool, etc.)
 ├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft)
-│   ├── Cargo.toml                    # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
+│   ├── Cargo.toml                    # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log, reqwest)
 │   └── src/
 │       ├── main.rs                   # Entry point — gpui app initialization, AppRoot view
+│       ├── api.rs                    # Inspiration REST client (API_BASE_URL, shared http_runtime, get_json)
 │       ├── util.rs                   # Loggable trait, LogLevel enum, Result<T,E> blanket impl
 │       ├── theme.rs                  # Theme struct (bg, text colors)
 │       ├── comp.rs                   # Reusable components (root(), SettingsGear)
@@ -74,7 +75,7 @@ Pure Rust library with all business logic. No UI framework coupling.
 
 **`engine/src/`**
 - `lib.rs` — Crate root, re-exports modules
-- `util.rs` — SSE stream parsing (`StreamEvent` enum, `process_stream()`), file I/O helpers (`serialize`, `deserialize`, `ensure_dir`)
+- `util.rs` — SSE stream parsing (`StreamEvent` enum, `process_stream()`), file I/O helpers (`serialize`, `deserialize`, `deserialize_sync`, `ensure_dir`)
 - `config.rs` — `NovelCraftConfig` struct (holds `max_agent_steps: u8`, default 10). Loaded from `{configDir}/config.json`. Held in `AppState.config: Mutex<NovelCraftConfig>`.
 - `error.rs` — Error types using `thiserror`
 - `commands/` — Engine command functions (plain `pub async fn`)
@@ -104,7 +105,7 @@ Native GUI using gpui (from the Zed editor repo). Depends on `novelcraft-engine`
 
 **`gui/src/`**
 - `main.rs` — Binary entry point — engine thread, `CommandBus`/`AppEvents` channels, `EngineQuery`/`PageQuery` globals, `AppRoot` view, action routing
-- `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`), `Io`, `Api` variants
+- `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
 - `util.rs` — `Loggable`/`ExpectLoggable`/`Toastable` traits (logging & `Result`→toast ergonomics), `Loader`/`LoaderResult`, `HslaExt`, `LogLevel`
 - `theme.rs` — `Theme` struct (bg/text colors, `dark()` constructor)
 - `comp.rs` — Stateless UI builders (`root`, `screen_root`, `top_bar`, `field`, `button`, `chip`, `loading_text`, ...)

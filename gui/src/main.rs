@@ -24,6 +24,7 @@ use crate::screens::*;
 use crate::theme::{Theme, deserialize_theme_name, serialize_theme_name};
 use crate::util::Loggable;
 
+mod api;
 mod comp;
 mod error;
 mod screens;

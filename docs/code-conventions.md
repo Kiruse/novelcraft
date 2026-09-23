@@ -94,6 +94,26 @@ let results = lore::lore_query(&app, id, "search").await?;
 
 **No transactions**: Each function call is independent. Consumers drive sequential operations.
 
+### Inspiration REST Client
+
+The Create Story screen's "Get Inspired" data is fetched from a REST inspiration service — GUI-only, with the HTTP plumbing in the reusable `gui/src/api.rs` module (the engine is not involved):
+
+- `gui/src/api.rs`:
+  - `const API_BASE_URL: &str = "http://localhost:8000"` — hardcoded base URL (TODO: replace once the service gets a proper domain)
+  - `http_runtime()` — a static `OnceLock<tokio::runtime::Runtime>` holding a dedicated tokio runtime for HTTP requests; needed because gpui executor futures have no tokio context of their own (tokio only exists on the GUI's engine thread). Reusable by any screen that needs HTTP.
+  - `get_json<T: DeserializeOwned + Send + 'static>(path, query)` — spawns a `reqwest` GET of `{API_BASE_URL}{path}` with the `query` params (comma-joined values are the caller's choice) on `http_runtime()`, awaits the `JoinHandle` from the gpui executor, applies `error_for_status()`, and decodes the JSON; every failure maps to `GuiError::Api(String)`
+- `gui/src/screens/create_story.rs`:
+  - `Inspiration { title, premise, tags }` — screen-local serde type (`tags` holds tag strings)
+  - `GET /inspirations/tags` → `Vec<String>` (plain tags; rendered as-is for now — formatting/localization is the GUI's concern, not implemented yet) and `GET /inspirations?tags=a,b` → `Vec<Inspiration>`
+  - `fetch_tags()` / `fetch_inspirations(selected)` — wrappers over `api::get_json`; `fetch_inspirations` passes the selected tags comma-joined as the `tags` query param — the service OR-filters server-side (an empty selection omits the param, matching everything)
+
+`reqwest = { version = "0.12", features = ["json"] }` is a GUI dependency for this client (streaming is not used).
+
+```rust
+let tags = fetch_tags().await?;
+let inspirations = fetch_inspirations(&selected).await?;
+```
+
 ## Logging
 
 The `log` crate is a workspace dependency used by both the engine and GUI crates.

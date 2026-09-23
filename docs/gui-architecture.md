@@ -40,7 +40,7 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 |--------|--------|-------|
 | Home | `HomeScreen` | `task: Task<()>` — owns the `EngineQuery<Vec<SessionV1>>` watcher (see [Home Screen](#home-screen-homescreen)) |
 | Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `task: Task<()>` (config watcher) + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
-| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>`; Get Inspired: `categories` / `inspirations`: `Option<Result<_, GuiError>>`, `selected: BTreeSet<String>` + `inspirations_gen` generation guard (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
+| Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>`; Get Inspired: `tags` / `inspirations`: `Option<Result<_, GuiError>>`, `selected: BTreeSet<String>` + `inspirations_gen` generation guard (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
 | Story Overview | `StoryOverviewScreen` | `id: StoryId` |
 | Story Gameplay | `StoryGameplayScreen` | `id: StoryId`; `watch_task: Task<()>` — owns the single query watcher, `stream: Option<Stream>`, `input: Entity<TextInput>`, `popover_open`, `sidebar_open`, swipe accumulators `swipe_x` / `swipe_last` — no duplicated domain state, all data is read from the global query caches (see [Story Gameplay Screen](#story-gameplay-screen-storygameplayscreen)) |
 
@@ -168,13 +168,13 @@ button("btn-save", text!("Save"))
 Hover follows the button conventions: the toggled-on chip dims its background (`text` @ 85% alpha, like `primary`); the toggled-off chip tints its background with `theme.text` @ 10% alpha and raises its border to `theme.label`. Unlike `Button` there are no pressed or disabled states. The `Chip` renders a content-sized pill — `px_2 py_0p5 text_sm rounded_full border_1` with `cursor_pointer`; as with `Button`, the 1px border is always present in the element and "no border" means a transparent border color. No click handler is built in — convert first, then attach `on_click` yourself:
 
 ```rust
-chip(format!("chip-category-{id}"), text!(label))
-  .select(&theme, self.selected.contains(&id))
+chip(format!("chip-tag-{tag}"), text!(tag))
+  .select(&theme, self.selected.contains(&tag))
   .into_element()                // -> Stateful<Div>
-  .on_click(cx.listener(move |this, _, _, cx| this.toggle_category(&id, cx)))
+  .on_click(cx.listener(move |this, _, _, cx| this.toggle_tag(&tag, cx)))
 ```
 
-First consumer: the Create Story screen's category filter row (see [Get Inspired](#get-inspired-local-mock-data)).
+First consumer: the Create Story screen's tag filter row (see [Get Inspired](#get-inspired-inspiration-service)).
 
 ### `settings_gear()` and `btn_icon_close()`
 
@@ -354,9 +354,9 @@ The vignette creation form, reached from the Home screen's "Create new Vignette"
 |--------------|------|--------|
 | `title` | `Entity<TextInput>` | single-line, placeholder `"Title"` |
 | `premise` | `Entity<TextInput>` | multiline, placeholder `"Describe the premise of your story ..."` |
-| `categories` | `Option<Result<Vec<InspirationCategory>, GuiError>>` | — (chip filter row, populated by `load_categories()`) |
+| `tags` | `Option<Result<Vec<String>, GuiError>>` | — (chip filter row, populated by `load_tags()`) |
 | `inspirations` | `Option<Result<Vec<Inspiration>, GuiError>>` | — (inspiration cards, populated by the debounced fetch) |
-| `selected` | `BTreeSet<String>` | ids of the toggled-on category chips |
+| `selected` | `BTreeSet<String>` | the toggled-on tags |
 | `inspirations_gen` | `usize` | fetch generation counter (stale-response guard) |
 
 Both inputs are created with the `create_text_input(cx, multiline, placeholder)` comp helper and rendered via `field(theme, label, input)`. The Create button is a `button("btn-create", text!("Create")).primary(&theme).disable(!valid)` — `valid` (both inputs non-empty when trimmed) is recomputed on every render via `cx.read_entity`, so the button renders muted with no hover/press states until the form is filled; otherwise it is identical to the Settings save button (see [`button()` — Themed Buttons](#button--themed-buttons)).
@@ -367,26 +367,29 @@ Both inputs are created with the `create_text_input(cx, multiline, placeholder)`
 
 #### Enter/Exit Lifecycle
 
-`AppRoot::switch_screen` invokes `CreateStoryScreen::exit` when navigating away and `enter` when navigating back. `exit` resets both text inputs (`TextInput::reset`) and tears down the Get Inspired state: both lists return to `None`, `selected` is cleared, and `inspirations_gen` is bumped so any in-flight fetch is invalidated and cannot repopulate stale data into the hidden screen. `enter` re-kicks off `load_categories`/`fetch_inspirations` for anything still `None`, so every visit reloads the section.
+`AppRoot::switch_screen` invokes `CreateStoryScreen::exit` when navigating away and `enter` when navigating back. `exit` resets both text inputs (`TextInput::reset`) and tears down the Get Inspired state: both lists return to `None`, `selected` is cleared, and `inspirations_gen` is bumped so any in-flight fetch is invalidated and cannot repopulate stale data into the hidden screen. `enter` re-kicks off `load_tags`/`fetch_inspirations` for anything still `None`, so every visit reloads the section.
 
-#### Get Inspired (Local Mock Data)
+#### Get Inspired (Inspiration Service)
 
-Below the Create button, a `subtitle(text!("Get Inspired"))` section offers a category filter row plus a list of inspiration cards. **Everything is local to `create_story.rs`** — the engine is not involved. The data comes from module-private async mocks marked with a TODO to be replaced with REST calls once the inspiration service exists:
+Below the Create button, a `subtitle(text!("Get Inspired"))` section offers a tag filter row plus a list of inspiration cards. The data is fetched from a REST inspiration service via the shared `crate::api` module (`gui/src/api.rs`); the screen-local parts live in `create_story.rs` (the engine is not involved):
 
-- `InspirationCategory { id, label }` and `Inspiration { title, premise, categories }` (`categories` holds category ids) — module-private types
+- `Inspiration { title, premise, tags }` (`tags` holds tag strings) — screen-local serde type in `create_story.rs`
+- `GET /inspirations/tags` → `Vec<String>` (plain tags; the GUI renders them as-is — formatting/localization is the GUI's concern, not implemented yet) and `GET /inspirations?tags=a,b` → `Vec<Inspiration>`
+- `crate::api::API_BASE_URL` (`"http://localhost:8000"`) — the service's base URL, hardcoded until the service gets a proper domain (TODO in the source)
+- `crate::api::http_runtime()` — a static `OnceLock<tokio::runtime::Runtime>`: a dedicated tokio runtime for HTTP requests, since gpui executor futures have no tokio context of their own; reusable by other screens
+- `crate::api::get_json<T: DeserializeOwned + Send + 'static>(path, query)` — generic helper: spawns a `reqwest` GET of `{API_BASE_URL}{path}` with the `query` params on `http_runtime()`, awaits the `JoinHandle` from the gpui executor, applies `error_for_status()`, and decodes the JSON — any transport, status, or decode failure maps to `GuiError::Api(String)`
+- `fetch_tags()` / `fetch_inspirations(selected: &[String])` — wrappers over `api::get_json`; `fetch_inspirations` passes the selected tags comma-joined as the `tags` query param and the service OR-filters server-side (an empty selection omits the param, matching everything)
 - both lists are typed `Option<Result<Vec<_>, GuiError>>` — `None` means "still loading"; the fetched `Result` is kept as-is and only interpreted at render time
-- `GuiError` (`gui/src/error.rs`, via `thiserror`) — the GUI-side error type: `Engine(EngineError)` (via `#[from]`), plus `Io`/`Api` string-carrying variants (with `io()`/`api()` constructors) reserved for IO and the future REST calls
-- `fetch_categories()` — returns the mock category list
-- `fetch_inspirations(selected: &[String])` — returns the mock inspirations OR-filtered by the selected category ids (an empty selection matches everything), mirroring where the future server-side filter will live
+- `GuiError` (`gui/src/error.rs`, via `thiserror`) — the GUI-side error type: `Engine(#[from] EngineError)` and `Api(String)`; the Get Inspired fetches surface their failures through the `Api` variant
 
-`create(cx)` kicks off `load_categories(cx)` and an initial, non-debounced `fetch_inspirations(cx)`; `enter(cx)` re-triggers them for anything still `None` (see the lifecycle above).
+`create(cx)` kicks off `load_tags(cx)` and an initial, non-debounced `fetch_inspirations(cx)`; `enter(cx)` re-triggers them for anything still `None` (see the lifecycle above).
 
-**Filter flow — debounce + generation guard:** `toggle_category(id)` (bound to each chip's `on_click`) flips the id in `selected`, bumps `inspirations_gen`, and spawns a task that awaits `cx.background_executor().timer(INSPIRATIONS_DEBOUNCE)` (300ms) and bails if the generation went stale, then fetches with the captured selection and populates only after a second generation check — rapid chip clicks coalesce into one fetch, and superseded responses are discarded. (The captured counter local is named `generation` because `gen` is a reserved keyword in Rust edition 2024.) On completion the raw `Result` is stored as `Some(...)` via `Toastable::error_toast(cx)`, which dispatches an error toast on failure (see [Toasts](#toasts)).
+**Filter flow — debounce + generation guard:** `toggle_tag(tag)` (bound to each chip's `on_click`) flips the tag in `selected`, bumps `inspirations_gen`, and spawns a task that awaits `cx.background_executor().timer(INSPIRATIONS_DEBOUNCE)` (300ms) and bails if the generation went stale, then fetches with the captured selection and populates only after a second generation check — rapid chip clicks coalesce into one fetch, and superseded responses are discarded. (The captured counter local is named `generation` because `gen` is a reserved keyword in Rust edition 2024.) On completion the raw `Result` is stored as `Some(...)` via `Toastable::error_toast(cx)`, which dispatches an error toast on failure (see [Toasts](#toasts)).
 
 **Render:** the two lists render through state-matched helpers:
 
-- `categories_ui(...)` — a wrapping chip row (`flex_wrap`, `gap_2`); each chip id is `chip-category-{id}` and its `on_click` routes to `toggle_category` via `cx.listener` (see [`chip()` — Toggle Chips](#chip--toggle-chips))
-- `inspirations_ui(...)` — a column of static `inspiration_card(theme, inspiration, labels)` cards: bordered `rounded_sm` boxes with the title at `text_lg`, the premise, and small pill-shaped category labels (`theme.label` text, `theme.border` border) resolved through the `category_labels()` id→label map (unknown ids render raw). An empty result renders "No inspirations found"
+- `tags_ui(...)` — a wrapping chip row (`flex_wrap`, `gap_2`); each chip id is `chip-tag-{tag}` and its `on_click` routes to `toggle_tag` via `cx.listener` (see [`chip()` — Toggle Chips](#chip--toggle-chips))
+- `inspirations_ui(...)` — a column of static `inspiration_card(theme, inspiration)` cards: bordered `rounded_sm` boxes with the title at `text_lg`, the premise, and small pill-shaped tag pills (`theme.label` text, `theme.border` border) rendered as-is. An empty result renders "No inspirations found"
 
 Both helpers use a `let Some(res) = ... else` guard: while `None` they return `loading_text(anim_id, "Loading ...")` (the shared comp helper, see the component table); an `Err` renders plain theme-colored inline text ("Failed to query inspirations" / "Failed to load inspirations") — the details were already reported via toast by the fetch task.
 
@@ -656,6 +659,7 @@ Inside a view's own `Render` impl, `cx.entity()` hands the entity to a custom el
 ```
 gui/src/
 ├── main.rs          # Entry point — engine thread, CommandBus/AppEvents channels, EngineQuery globals, AppRoot view (incl. toast overlay, tab focus traversal), action routing
+├── api.rs           # Inspiration REST client (API_BASE_URL, shared http_runtime, get_json)
 ├── screens/           # Screen enum (mod.rs) + one submodule per screen (create(cx) + Render)
 ├── comp.rs          # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close)
 ├── text_input.rs    # Reusable TextInput component (custom Element, IME, scoped key bindings, tab stop + focus border)
