@@ -67,6 +67,10 @@ impl AppRoot {
         self.screen_home.update(cx, HomeScreen::enter),
       Screen::CreateStory =>
         self.screen_create_story.update(cx, CreateStoryScreen::enter),
+      Screen::StoryOverview(id) => {
+        let id = id.clone();
+        self.screen_story_overview.update(cx, |screen, cx| screen.enter(id, cx));
+      }
       Screen::StoryGameplay(id) => {
         let id = id.clone();
         self.screen_story_gameplay.update(cx, |screen, cx| screen.enter(id, cx));

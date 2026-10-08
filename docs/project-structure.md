@@ -115,7 +115,7 @@ Native GUI using gpui (from the Zed editor repo). Depends on `novelcraft-engine`
   - `home.rs` — Home screen (session launcher)
   - `settings.rs` — Settings screen (config editor)
   - `create_story.rs` — Vignette creation form + Get Inspired section
-  - `story_overview.rs` — Story overview (placeholder)
+  - `story_overview.rs` — Story overview (banner placeholder, title/premise, Play button)
   - `story_gameplay.rs` — Gameplay screen (page viewport, chat bar, side bar)
 
 **Note:** `gui/src/` also contains vestigial Vue 3 frontend files (`package.json`, `src/App.vue`, etc.) from the previous Tauri architecture. These are no longer used and should not be modified.

@@ -41,10 +41,10 @@ Each screen is a gpui view struct with a `create(cx)` constructor and a `Render`
 | Home | `HomeScreen` | `task: Task<()>` — owns the `EngineQuery<Vec<SessionV1>>` watcher (see [Home Screen](#home-screen-homescreen)) |
 | Settings | `SettingsScreen` | `config: Option<NovelCraftConfig>` + `task: Task<()>` (config watcher) + `Entity<TextInput>` per editable field (see [Settings Screen](#settings-screen-settingsscreen)) |
 | Create Story | `CreateStoryScreen` | `title` / `premise`: `Entity<TextInput>`; Get Inspired: `tags` / `inspirations`: `Option<Result<_, GuiError>>`, `selected: BTreeSet<String>` + `inspirations_gen` generation guard (see [Create Story Screen](#create-story-screen-createstoryscreen)) |
-| Story Overview | `StoryOverviewScreen` | `id: StoryId` |
+| Story Overview | `StoryOverviewScreen` | `id: StoryId` + `task: Task<()>` — owns the `EngineQuery<Vec<SessionV1>>` watcher (see [Story Overview Screen](#story-overview-screen-storyoverviewscreen)) |
 | Story Gameplay | `StoryGameplayScreen` | `id: StoryId`; `watch_task: Task<()>` — owns the single query watcher, `stream: Option<Stream>`, `input: Entity<TextInput>`, `popover_open`, `sidebar_open`, swipe accumulators `swipe_x` / `swipe_last` — no duplicated domain state, all data is read from the global query caches (see [Story Gameplay Screen](#story-gameplay-screen-storygameplayscreen)) |
 
-Each screen lives in its own submodule under `gui/src/screens/` (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); `mod.rs` declares the submodules, defines the `Screen` enum, and re-exports the screen structs. `StoryOverviewScreen` is currently a placeholder (`render` returns an empty `div()`).
+Each screen lives in its own submodule under `gui/src/screens/` (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); `mod.rs` declares the submodules, defines the `Screen` enum, and re-exports the screen structs.
 
 Screens share a common layout through `ScreenBase` (`gui/src/screens/mod.rs`). A screen's `render` starts with the `screen(title)` helper, attaches content via `.child(...)` (`ScreenBase` implements `ParentElement`), and returns it directly (`ScreenBase` implements `IntoElement`). By default the top bar shows the settings gear; call `.closable()` to show the close (`Back`) button instead. The helper composes the `comp.rs` builders (`screen_root`, `top_bar`, `title`, `content`) so individual screens don't repeat that boilerplate:
 
@@ -399,9 +399,23 @@ Below the Create button, a `subtitle(text!("Get Inspired"))` section offers a ta
 
 Both helpers use a `let Some(res) = ... else` guard: while `None` they return `loading_text(anim_id, "Loading ...")` (the shared comp helper, see the component table); an `Err` renders plain theme-colored inline text ("Failed to query inspirations" / "Failed to load inspirations") — the details were already reported via toast by the fetch task.
 
+### Story Overview Screen (`StoryOverviewScreen`)
+
+The story's landing view, reached via `nav::ShowStory(StoryId)` (from the Home session cards or after creating a session); the Play button dispatches `nav::PlayStory(StoryId)` to enter the gameplay screen (see [Story Gameplay Screen](#story-gameplay-screen-storygameplayscreen)).
+
+`create(cx)` spawns a watcher task over `EngineQuery<Vec<SessionV1>>::rx()` (same pattern as HomeScreen) that calls `cx.notify` on every publish. `AppRoot::switch_screen` calls `enter(id, cx)` when the screen becomes visible: it stores the `StoryId` and refreshes the sessions list query — the list cache may not yet know a freshly created session, since `AppEvents::SwitchSession` only refreshes the active-session query.
+
+**Render:** a `screen(text!("Story Overview")).closable()` column with, top to bottom:
+
+- `banner_placeholder(theme)` — a full-width, 220px-tall bordered `rounded_md` box (subtle `theme.text.alpha(0.05)` fill, `theme.label` centered "No cover image" text) standing in for a future cover image/banner
+- the session's title (`text_2xl`) and exposition, resolved by looking up `self.id` in the sessions list cache — while the query has no value (or the id is not found, e.g. during the in-flight refresh) the section renders `loading_text("session-loading", "Loading ...")`
+- the primary `button("btn-play", text!("Play"))` whose `on_click` dispatches `PlayStory(self.id.clone())` via `window.dispatch_action` (session loading itself is the gameplay screen's `enter` responsibility — the overview never touches the engine's active session)
+
+A "recent events" recap section is planned between the details and the Play button.
+
 ### Story Gameplay Screen (`StoryGameplayScreen`)
 
-The play view, reached from the (future) story overview via `nav::PlayStory(StoryId)`; `Back` returns to `Screen::StoryOverview` (see `AppRoot::on_back`). Unlike the other screens it does not use the `screen(title)` helper — it is a fixed three-region layout (page / chat bar / side bar), not a scrolling content column. The screen keeps only pure UI state: all domain data (session, page, profiles) is read from the global query caches (`EngineQuery<SessionV1>`, `PageQuery`, `EngineQuery<Profiles>`), so it stays in sync across the app.
+The play view, reached from the story overview via `nav::PlayStory(StoryId)`; `Back` returns to `Screen::StoryOverview` (see `AppRoot::on_back`). Unlike the other screens it does not use the `screen(title)` helper — it is a fixed three-region layout (page / chat bar / side bar), not a scrolling content column. The screen keeps only pure UI state: all domain data (session, page, profiles) is read from the global query caches (`EngineQuery<SessionV1>`, `PageQuery`, `EngineQuery<Profiles>`), so it stays in sync across the app.
 
 #### Lifecycle
 
