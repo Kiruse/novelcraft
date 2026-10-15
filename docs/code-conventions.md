@@ -100,8 +100,7 @@ The Create Story screen's "Get Inspired" data is fetched from a REST inspiration
 
 - `gui/src/api.rs`:
   - `const API_BASE_URL: &str = "http://localhost:8000"` — hardcoded base URL (TODO: replace once the service gets a proper domain)
-  - `http_runtime()` — a static `OnceLock<tokio::runtime::Runtime>` holding a dedicated tokio runtime for HTTP requests; needed because gpui executor futures have no tokio context of their own (tokio only exists on the GUI's engine thread). Reusable by any screen that needs HTTP.
-  - `get_json<T: DeserializeOwned + Send + 'static>(path, query)` — spawns a `reqwest` GET of `{API_BASE_URL}{path}` with the `query` params (comma-joined values are the caller's choice) on `http_runtime()`, awaits the `JoinHandle` from the gpui executor, applies `error_for_status()`, and decodes the JSON; every failure maps to `GuiError::Api(String)`
+  - `get_json<T: DeserializeOwned>(path, query)` — awaits a `reqwest` GET of `{API_BASE_URL}{path}` with the `query` params (comma-joined values are the caller's choice), applies `error_for_status()`, and decodes the JSON; every failure maps to `GuiError::Api(String)`. Must be called from within an async (tokio) context — the Dioxus runtime provides one
 - `gui/src/screens/create_story.rs`:
   - `Inspiration { title, premise, tags }` — screen-local serde type (`tags` holds tag strings)
   - `GET /inspirations/tags` → `Vec<String>` (plain tags; rendered as-is for now — formatting/localization is the GUI's concern, not implemented yet) and `GET /inspirations?tags=a,b` → `Vec<Inspiration>`
@@ -116,64 +115,69 @@ let inspirations = fetch_inspirations(&selected).await?;
 
 ## Logging
 
-The `log` crate is a workspace dependency used by both the engine and GUI crates.
+The `log` crate is a workspace dependency used by both the engine and GUI crates. The GUI logs via `log::error!`/`log::warn!` (import them explicitly — `use log::error;` — a glob `use log::*` collides with the Dioxus prelude); user-facing failures are surfaced with `push_toast(Toast::error(...))` instead.
 
-### GUI Logging Utilities (`gui/src/util.rs`)
+## Dioxus Conventions
 
-`gui/src/util.rs` defines a `Loggable` trait and a `LogLevel` enum for ergonomic logging in the GUI layer.
+### Routing & Navigation
 
-**`LogLevel` enum** — mirrors `log::Level` with variants: `Trace`, `Debug`, `Info`, `Warn`, `Error`. Converts to `log::Level` via `From<LogLevel> for log::Level`.
-
-**`Loggable` trait** — required method `log(&self, level: LogLevel)`, with default convenience methods `trace()`, `debug()`, `info()`, `warn()`, `error()` that delegate to `log()` with the corresponding level.
-
-**Blanket `impl<T, E: Display> Loggable for Result<T, E>`** — logs `"Ok"` or `"Err: {e}"` at the specified level. Useful for ad-hoc result inspection:
+Navigation is a typed route enum (`gui/src/screens/mod.rs`) handled by the Dioxus Router:
 
 ```rust
-use crate::util::Loggable;
-
-some_operation().info();     // logs "Ok" at Info level
-fallible_op().error();      // logs "Err: timeout" at Error level
-```
-
-## GPUI Conventions
-
-### Screen-Based Navigation
-
-Navigation uses an enum-based state machine in the root view (`AppRoot`). Screens are stateless rendering functions returning `Div` elements.
-
-```rust
-pub enum Screen {
-  Gameplay,
-  Home(home::HomeData),
-  Settings(Theme),
-  Story,
+#[derive(Clone, Routable, Debug, PartialEq)]
+pub enum Route {
+  #[route("/")]
+  Home {},
+  // ...
+  #[route("/story/:id")]
+  StoryOverview { id: String },
 }
 ```
 
+Navigate with `navigator().push(Route::...)`. Back navigation goes through `go_back(from: Route)` — gameplay returns to the story overview, everything else home. Always terminate `push(...)` inside event handlers with a semicolon: non-unit returns are interpreted as async spawns and fail to compile.
+
+### State
+
+- Component-local state: `use_signal` (needs `let mut` when mutated). Mount-once side effects: `use_hook(|| ...)` + `spawn`.
+- Cross-screen state: `GlobalSignal`s in `gui/src/state.rs`, wrapped in `Query<T>` (Empty/Error/Stale/Recent). Never touch global signals from `main()` — signal access requires the Dioxus runtime.
+- Clone values out of `.read()` guards before capturing them in `'static` event closures.
+
 ### Styling
 
-All styling uses gpui's `Styled` trait (Tailwind-like API):
+Styling is Tailwind CSS v4, written as `class` strings directly in `rsx!`:
 
 ```rust
-.cursor_pointer()
-.hover(|style| style.opacity(0.7))
-.relative().top_4().right_4()
+button {
+  class: "w-full p-3 flex flex-col gap-1 border rounded-sm border-nc-border cursor-pointer hover:border-nc-label",
+  onclick: move |_| { ... },
+  "label"
+}
 ```
+
+Theme colors are `@theme` tokens in `gui/input.css` (`nc-bg`, `nc-text`, `nc-label`, `nc-border`, `nc-danger`, `nc-dangerfg`, `nc-success`, `nc-warn`), compiled into utilities like `bg-nc-bg` / `text-nc-label` by the Tailwind CLI (`just css`; keep the watcher running under `just dev`).
 
 ### Event Handlers
 
 ```rust
-// On InteractiveElement (no id required)
-.on_mouse_down(MouseButton::Left, |ev, window, cx| { ... })
+// Plain handler
+onclick: move |_| { nav.push(Route::CreateStory {}); }
 
-// On StatefulInteractiveElement (requires .id() first)
-.on_click(|ev: &ClickEvent, window, cx| { ... })
+// With a Signal captured (Copy — no clone needed)
+onclick: move |_| selected.write().insert(tag.clone()),
 
-// With view state capture
-let on_close = cx.listener(move |this: &mut AppRoot, _ev: &ClickEvent, _window, cx| {
-    this.screen = Screen::Home(Default::default());
-    cx.notify();
-});
+// Keyboard events expose .data (key, modifiers) and prevent_default
+onkeydown: move |ev: KeyboardEvent| {
+  if ev.data.modifiers().contains(Modifiers::ALT) && ev.data.key() == Key::ArrowLeft {
+    ev.prevent_default();
+  }
+},
+
+// Controlled text input
+input {
+  class: INPUT_CLASS,
+  value: "{title}",
+  oninput: move |ev: FormEvent| title.set(ev.value()),
+}
 ```
 
 ## Related Documentation
@@ -181,4 +185,4 @@ let on_close = cx.listener(move |this: &mut AppRoot, _ev: &ClickEvent, _window, 
 - [Project Structure](./project-structure.md) - File organization and directory layout
 - [Data Storage](./database-schema.md) - JSON file formats and storage layout
 - [Engine API](./api-routes.md) - Engine command function reference
-- [GUI Architecture](./gui-architecture.md) - gpui components, screens, styling conventions
+- [GUI Architecture](./gui-architecture.md) - Dioxus components, screens, styling conventions

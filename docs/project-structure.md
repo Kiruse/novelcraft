@@ -2,7 +2,7 @@
 
 This document outlines the complete folder organization and directory layout for NovelCraft.
 
-NovelCraft is a Rust/Cargo workspace split into two crates: **novelcraft-engine** (pure Rust library) and **novelcraft-gui** (GPUI-based binary). Licensed under GPL-3.0. Offline-first, single-user, no server, no database.
+NovelCraft is a Rust/Cargo workspace split into two crates: **novelcraft-engine** (pure Rust library) and **novelcraft-gui** (Dioxus-based binary). Licensed under GPL-3.0. Offline-first, single-user, no server, no database.
 
 ## Directory Tree
 
@@ -10,7 +10,7 @@ NovelCraft is a Rust/Cargo workspace split into two crates: **novelcraft-engine*
 novelcraft/
 ├── justfile                          # Build orchestration (just commands)
 ├── Cargo.toml                        # Workspace root (members = ["engine", "gui"], resolver = "2")
-├── rust-toolchain.toml               # Pins Rust 1.97.1
+├── rust-toolchain.toml               # Pins the stable Rust toolchain
 ├── AGENTS.md                         # High-level overview for AI agents
 ├── README.md                         # Project overview, prerequisites, build instructions
 ├── engine/                           # Rust library crate (novelcraft-engine)
@@ -45,25 +45,32 @@ novelcraft/
 │           ├── api.rs                # OpenAI API types (request/response structs for SSE)
 │           └── internal.rs           # Command-level types (ModelConfig, LlmMessage, LlmTool, etc.)
 ├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft)
-│   ├── Cargo.toml                    # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log, reqwest)
+│   ├── Cargo.toml                    # GUI dependencies (dioxus, novelcraft-engine, reqwest, chrono, log, tokio)
+│   ├── Dioxus.toml                   # dx config (app name, bundle identifier)
+│   ├── package.json                  # Tailwind toolchain (@tailwindcss/cli, tailwindcss) — bun
+│   ├── input.css                     # Tailwind source: @theme tokens, base rules
+│   ├── assets/tailwind.css           # Compiled stylesheet (build artifact, do not edit)
 │   └── src/
-│       ├── main.rs                   # Entry point — gpui app initialization, AppRoot view
-│       ├── api.rs                    # Inspiration REST client (API_BASE_URL, shared http_runtime, get_json)
-│       ├── util.rs                   # Loggable trait, LogLevel enum, Result<T,E> blanket impl
-│       ├── theme.rs                  # Theme struct (bg, text colors)
-│       ├── comp.rs                   # Reusable components (root(), SettingsGear)
+│       ├── main.rs                   # Entry point — engine init, BOOT_CONFIG, launch, App
+│       ├── engine.rs                 # Engine bridge — all engine access & query refreshes
+│       ├── state.rs                  # Global reactive state — Query<T>, GlobalSignals
+│       ├── toast.rs                  # Toast notifications (global signal + overlay component)
+│       ├── comps.rs                  # Shared components (Screen, Button, Chip, Field, ...)
+│       ├── api.rs                    # Inspiration REST client (API_BASE_URL, get_json)
+│       ├── error.rs                  # GuiError (Engine/Api variants)
 │       └── screens/
-│           ├── mod.rs                # Screen enum, Default impl
-│           ├── home.rs               # Home screen render function
-│           ├── settings.rs           # Settings screen render function
-│           ├── gameplay.rs           # Gameplay screen (placeholder)
-│           └── story.rs              # Story screen (placeholder)
+│           ├── mod.rs                # Route enum (Routable) + go_back()
+│           ├── home.rs               # Session list
+│           ├── settings.rs           # Engine config editor
+│           ├── create_story.rs       # New vignette + inspiration browser
+│           ├── story_overview.rs     # Story detail + Play button
+│           └── story_gameplay.rs     # Game view — pages, streaming, chat bar
 └── docs/                             # Project documentation
     ├── project-structure.md          # This file
     ├── code-conventions.md           # Code styling and conventions
     ├── database-schema.md            # JSON file formats and storage layout
     ├── api-routes.md                 # Engine command function reference
-    ├── gui-architecture.md           # gpui GUI components, screens, styling conventions
+    ├── gui-architecture.md           # Dioxus GUI components, screens, styling conventions
     └── frontend-architecture.md      # [vestigial] Vue/Tauri frontend (no longer used)
 ```
 
@@ -101,24 +108,29 @@ Pure Rust library with all business logic. No UI framework coupling.
 
 ### `gui/` — Rust Binary Crate (`novelcraft-gui`, binary name: `novelcraft`)
 
-Native GUI using gpui (from the Zed editor repo). Depends on `novelcraft-engine` as a library.
+Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind CSS v4. Depends on `novelcraft-engine` as a library. Desktop is the primary target; Android/iOS are supported compile targets.
 
 **`gui/src/`**
-- `main.rs` — Binary entry point — engine thread, `CommandBus`/`AppEvents` channels, `EngineQuery`/`PageQuery` globals, `AppRoot` view, action routing
+- `main.rs` — Binary entry point — engine construction, `BOOT_CONFIG` stash, `dioxus::LaunchBuilder` + window config, `App` component (stylesheet link, toast overlay, router)
+- `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `prompt` streaming), generation-guarded query refreshes, page navigation helpers
+- `state.rs` — Global reactive state — `Query<T>` (Empty/Error/Stale/Recent), `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `PAGE`/`PAGE_INDEX`, `STREAM`), `Profiles`/`StreamState` types
+- `toast.rs` — `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay component
+- `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` constant
+- `api.rs` — Inspiration REST client (`API_BASE_URL`, `get_json`)
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
-- `util.rs` — `Loggable`/`ExpectLoggable`/`Toastable` traits (logging & `Result`→toast ergonomics), `Loader`/`LoaderResult`, `HslaExt`, `LogLevel`
-- `theme.rs` — `Theme` struct (bg/text colors, `dark()` constructor)
-- `comp.rs` — Stateless UI builders (`root`, `screen_root`, `top_bar`, `field`, `button`, `chip`, `loading_text`, ...)
-- `text_input.rs` — Reusable `TextInput` component (custom Element, IME, scoped key bindings)
-- `screens/` — `Screen` enum (`mod.rs`) + one submodule per screen (`create(cx)` + `Render`)
-  - `mod.rs` — `Screen` enum, `ScreenBase`/`screen(title)` layout helper
+- `screens/` — `Route` enum (`mod.rs`, Dioxus Router) + one component module per screen
+  - `mod.rs` — `Route` enum, `go_back()`
   - `home.rs` — Home screen (session launcher)
   - `settings.rs` — Settings screen (config editor)
-  - `create_story.rs` — Vignette creation form + Get Inspired section
+  - `create_story.rs` — Vignette creation form + Get Inspired section (debounced tag-filtered fetches)
   - `story_overview.rs` — Story overview (banner placeholder, title/premise, Play button)
-  - `story_gameplay.rs` — Gameplay screen (page viewport, chat bar, side bar)
+  - `story_gameplay.rs` — Gameplay screen (page viewport with swipe, streaming cards, chat bar, profile popover, sidebar placeholder)
 
-**Note:** `gui/src/` also contains vestigial Vue 3 frontend files (`package.json`, `src/App.vue`, etc.) from the previous Tauri architecture. These are no longer used and should not be modified.
+**`gui/` (non-Rust)**
+- `Dioxus.toml` — dx app config (name, bundle identifier)
+- `input.css` — Tailwind v4 source (`@import "tailwindcss"`, `@theme` design tokens)
+- `assets/tailwind.css` — compiled stylesheet (build artifact; regenerate with `just css`)
+- `package.json` / `bun.lock` — Tailwind CLI toolchain (`@tailwindcss/cli`, `tailwindcss`)
 
 ### `docs/` — Documentation
 
@@ -130,8 +142,9 @@ The root `justfile` is the single source of truth for all build commands.
 
 | Recipe | Purpose |
 |--------|----------|
-| `just dev` | Run the app (`cargo run --bin novelcraft`) |
-| `just build` | Build entire workspace (`cargo build`) |
+| `just dev` | Run the app with hot-reload (Tailwind watcher + `dx serve --platform desktop`) |
+| `just css` | Compile the Tailwind stylesheet once (minified) |
+| `just build` | Bundle the app for the current platform (`just css` + `dx bundle --platform desktop`) |
 | `just check` | Cargo check (entire workspace) |
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |
 | `just check-gui` | Cargo check (`novelcraft-gui` only) |
@@ -153,4 +166,4 @@ The root `justfile` is the single source of truth for all build commands.
 - [Code Conventions](./code-conventions.md) - Styling guidelines and import patterns
 - [Data Storage](./database-schema.md) - JSON file formats and storage layout
 - [Engine API](./api-routes.md) - Engine command function reference
-- [GUI Architecture](./gui-architecture.md) - gpui screens, components, and styling conventions
+- [GUI Architecture](./gui-architecture.md) - Dioxus screens, components, and styling conventions

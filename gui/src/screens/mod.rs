@@ -1,69 +1,41 @@
-mod create_story;
-mod home;
-mod settings;
-mod story_gameplay;
-mod story_overview;
+pub mod create_story;
+pub mod home;
+pub mod settings;
+pub mod story_gameplay;
+pub mod story_overview;
 
-pub(crate) use create_story::CreateStoryScreen;
-use gpui::{AnyElement, Div, IntoElement, ParentElement, Text};
-pub(crate) use home::HomeScreen;
-pub(crate) use settings::SettingsScreen;
-pub(crate) use story_gameplay::StoryGameplayScreen;
-pub(crate) use story_overview::StoryOverviewScreen;
+use dioxus::prelude::*;
 
-use crate::{StoryId, comp::{btn_icon_close, content, screen_root, settings_gear, title, top_bar}};
+use crate::screens::create_story::CreateStory;
+use crate::screens::home::Home;
+use crate::screens::settings::Settings;
+use crate::screens::story_gameplay::StoryGameplay;
+use crate::screens::story_overview::StoryOverview;
 
-#[derive(Debug, Clone, Default)]
-pub enum Screen {
-  #[default]
-  Home,
-  Settings,
-  CreateStory,
-  StoryOverview(StoryId),
-  StoryGameplay(StoryId),
+#[derive(Clone, Routable, Debug, PartialEq)]
+pub enum Route {
+  #[route("/")]
+  Home {},
+  #[route("/settings")]
+  Settings {},
+  #[route("/create")]
+  CreateStory {},
+  #[route("/story/:id")]
+  StoryOverview { id: String },
+  #[route("/play/:id")]
+  StoryGameplay { id: String },
 }
 
-pub(crate) struct ScreenBase {
-  closable: bool,
-  title: Text,
-  content: Vec<AnyElement>,
-}
-
-impl ScreenBase {
-  #[inline(always)]
-  pub fn closable(self) -> Self {
-    Self {
-      closable: true,
-      ..self
+/// Navigate back: gameplay returns to its story's overview, everything
+/// else returns home.
+pub fn go_back(from: Route) {
+  let nav = navigator();
+  match from {
+    Route::StoryGameplay { id } => {
+      nav.push(Route::StoryOverview { id });
     }
-  }
-}
-
-impl IntoElement for ScreenBase {
-  type Element = Div;
-  fn into_element(self) -> Self::Element {
-    screen_root()
-      .child(top_bar()
-        .child(title(self.title))
-        .child(if self.closable {
-          btn_icon_close().into_any_element()
-        } else {
-          settings_gear().into_any_element()
-        }))
-      .child(content().children(self.content))
-  }
-}
-
-impl ParentElement for ScreenBase {
-  fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-    self.content.extend(elements);
-  }
-}
-
-pub(crate) fn screen(title: Text) -> ScreenBase {
-  ScreenBase {
-    closable: false,
-    title,
-    content: vec![],
+    _ => {
+      nav.push(Route::Home {});
+    }
   }
 }

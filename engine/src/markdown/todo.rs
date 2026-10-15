@@ -33,7 +33,6 @@ impl TodoItem {
     })
   }
 
-  pub fn to_string(&self) -> String { format!("{self}") }
 }
 
 impl Display for TodoItem {
@@ -56,7 +55,6 @@ impl TodoList {
     Ok(Self(src.lines().map(TodoItem::parse).collect::<Result<_, _>>()?))
   }
 
-  pub fn to_string(&self) -> String { format!("{self}") }
 
   pub fn diff(&self, other: &Self) -> Vec<TodoListDiff> {
     let mut result = vec![];

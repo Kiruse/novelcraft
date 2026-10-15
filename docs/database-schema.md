@@ -270,4 +270,4 @@ let results = lore::lore_query(&app, id, "search term").await?;
 - [Code Conventions](./code-conventions.md) - Import patterns and async functions
 - [Project Structure](./project-structure.md) - File organization for persistence commands
 - [Engine API](./api-routes.md) - Engine command function reference
-- [GUI Architecture](./gui-architecture.md) - gpui GUI components and screens
+- [GUI Architecture](./gui-architecture.md) - Dioxus GUI components and screens

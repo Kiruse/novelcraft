@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-> **Deprecated:** This document describes the vestigial Vue 3 / Tauri frontend that is no longer used. The project now uses a native Rust GPUI GUI (`novelcraft-gui`). See [GUI Architecture](./gui-architecture.md) for the current UI documentation.
+> **Deprecated:** This document describes the vestigial Vue 3 / Tauri frontend that is no longer used. The project now uses a Dioxus GUI (`novelcraft-gui`). See [GUI Architecture](./gui-architecture.md) for the current UI documentation.
 
 ---
 

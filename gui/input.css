@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@source "./src/**/*.rs";
+
+@theme {
+  --color-nc-bg: #202833;
+  --color-nc-text: #b1c5db;
+  --color-nc-label: #E87813;
+  --color-nc-border: #66666640;
+  --color-nc-danger: #642C2C;
+  --color-nc-dangerfg: #E88C8C;
+  --color-nc-success: #5FA867;
+  --color-nc-warn: #E8B813;
+}
+
+html,
+body,
+#main {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-nc-bg);
+  color: var(--color-nc-text);
+  overflow: hidden;
+}
+
+/* Themed scrollbars — thin, dark, unobtrusive */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(177, 197, 219, 0.18);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(177, 197, 219, 0.35);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

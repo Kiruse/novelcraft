@@ -589,4 +589,4 @@ let result = my_module::my_command(&app, "hello".to_string()).await?;
 - [Code Conventions](./code-conventions.md) - Import patterns and async functions
 - [Data Storage](./database-schema.md) - JSON file formats and storage layout
 - [Project Structure](./project-structure.md) - File organization for commands
-- [GUI Architecture](./gui-architecture.md) - gpui GUI components and screens
+- [GUI Architecture](./gui-architecture.md) - Dioxus GUI components and screens

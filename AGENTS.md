@@ -4,21 +4,21 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 **IMPORTANT:** Whenever you make changes, assert validity by running `just check`, then summarize & document the changes with the `@docs-writer` subagent.
 
-**NEVER run `cargo fmt`, `just fmt`, or `just fmt-check` in this project.** rustfmt is not well suited for formatting gpui components & element chains — it mangles the builder-call layout. Keep formatting manual.
+**NEVER run `cargo fmt`, `just fmt`, or `just fmt-check` in this project.** rustfmt is not well suited for formatting this codebase's UI code (rsx blocks & long attribute chains) — keep formatting manual.
 
 ## Architecture Overview
 
-NovelCraft is a **Rust/Cargo workspace desktop app** using gpui for rendering — fully offline-first, single-user, no server.
+NovelCraft is a **Rust/Cargo workspace desktop app** built with **Dioxus** (rendered in the system WebView) — fully offline-first, single-user, no server.
 
 - **Engine** (`engine/`, crate `novelcraft-engine`) — pure Rust library crate with all business logic. Handles LLM proxy (HTTP streaming via `reqwest`, SSE parsing via `util.rs`), file operations (export/import, file dialogs), data persistence (sessions, profiles, stories, lore as JSON files), and game agent loop. No UI framework coupling.
-- **GUI** (`gui/`, crate `novelcraft-gui`, binary `novelcraft`) — Rust binary crate using **gpui** and **gpui_platform** (from the Zed repo) for native rendering. Depends on `novelcraft-engine` as a library. Entry point is `gui/src/main.rs`.
+- **GUI** (`gui/`, crate `novelcraft-gui`, binary `novelcraft`) — **Dioxus 0.7** app rendered in the platform's system WebView (via `wry`; desktop is primary, Android/iOS are supported compile targets). Components are rsx functions, state is signals, styling is Tailwind CSS v4. Depends on `novelcraft-engine` as a library. Entry point is `gui/src/main.rs`.
 - **Filesystem persistence** — all data (stories, sessions, pages, state snapshots, lore entries, profiles) stored as JSON files under the platform data directory (resolved via `dirs::data_dir()`). Path resolution is centralized in `engine/src/commands/paths.rs`.
 - **No server, no auth, no database** — single-user desktop application with loose JSON files
 - **LLM calls** go through engine functions — `commands::llm::prompt()` takes a request struct and streams responses via callback closures (`on_text`, `on_reasoning`, `on_tool_call`, `on_done`, `on_error`). The game agent loop (`commands::game`) uses a generic `on_event: F` callback.
 - **Story sharing** is file-based — export/import JSON files via native file dialogs
-- **Build orchestration** is via a root `justfile` — single Cargo workspace, no top-level `package.json`
+- **Build orchestration** is via a root `justfile` — single Cargo workspace (the GUI's `package.json` covers only its Tailwind toolchain)
 - **AppState** uses `Arc<Mutex<T>>` pattern — constructed via `AppState::init()`, shared across engine functions by reference (`&AppState`). No framework-managed state.
-- **Rust toolchain** pinned to 1.97.1 via `rust-toolchain.toml` (required by gpui)
+- **Rust toolchain** pinned to `stable` via `rust-toolchain.toml`
 
 ## Quick Reference
 
@@ -28,7 +28,7 @@ NovelCraft is a **Rust/Cargo workspace desktop app** using gpui for rendering �
 novelcraft/
 ├── justfile                    # Build orchestration (just commands)
 ├── Cargo.toml                  # Workspace root (members = ["engine", "gui"], resolver = "2")
-├── rust-toolchain.toml         # Pins Rust 1.97.1
+├── rust-toolchain.toml         # Pins the stable Rust toolchain
 ├── engine/                     # Rust library crate (novelcraft-engine)
 │   ├── Cargo.toml              # Engine dependencies
 │   └── src/
@@ -55,21 +55,29 @@ novelcraft/
 │           ├── api.rs          # OpenAI API types (request/response structs for SSE)
 │           └── internal.rs     # Command-level types (ModelConfig, LlmMessage, LlmTool, LlmPromptRequest, etc.)
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
-│   ├── Cargo.toml              # GUI dependencies (novelcraft-engine, gpui, gpui_platform, chrono, log)
+│   ├── Cargo.toml              # GUI dependencies (dioxus, novelcraft-engine, reqwest, chrono, log, tokio)
+│   ├── Dioxus.toml             # dx config (app name, bundle identifier)
+│   ├── package.json            # Tailwind toolchain (@tailwindcss/cli, tailwindcss) — bun
+│   ├── input.css               # Tailwind source: @theme tokens, base rules
+│   ├── assets/tailwind.css     # Compiled stylesheet (build artifact, do not edit)
 │   └── src/
-│       ├── main.rs             # Entry point — engine thread, CommandBus global (Command: SwitchProfile, Prompt, LoadConfig, SaveConfig, ListSessions, CreateSession), AppRoot view (incl. toast overlay, tab focus traversal), action routing
-│       ├── api.rs              # Inspiration REST client (API_BASE_URL, shared http_runtime, get_json)
-│       ├── screens/            # Screen enum + ScreenBase/screen(title) helper (mod.rs) + one submodule per screen (create(cx) + Render)
-│       ├── comp.rs             # Stateless UI builders (root, screen_root, top_bar, settings_gear, btn_icon_close, button, chip, loading_text, ...)
+│       ├── main.rs             # Entry point — engine construction, BOOT_CONFIG stash, launch, App (stylesheet, toasts, router)
+│       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded query refreshes, page navigation
+│       ├── state.rs            # Global reactive state — Query<T> (Empty/Error/Stale/Recent), GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, PAGE/PAGE_INDEX, STREAM)
+│       ├── toast.rs            # Toast notifications (global signal + fixed overlay component)
+│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, Loading, SettingsGear, CloseButton)
+│       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
+│       ├── api.rs              # Inspiration REST client (API_BASE_URL, get_json)
 │       ├── error.rs            # GuiError (thiserror): Engine/Api variants
-│       ├── text_input.rs       # Reusable TextInput component (custom Element, IME, scoped key bindings, tab stop + focus border)
-│       ├── theme.rs            # Theme/ThemeKind (bg, text, label, border, danger/success/warn colors), Global impl, serde as theme name
-│       └── util.rs             # Loggable/ExpectLoggable, Toastable (Result -> toast), Loadable (Pending/Done), HslaExt, LogLevel
+│       └── screens/            # Route enum (Routable, mod.rs) + one component module per screen
+│           ├── mod.rs          # Route enum + go_back()
+│           ├── home.rs         # Session list
+│           ├── settings.rs     # Engine config editor
+│           ├── create_story.rs # New vignette + inspiration browser (debounced tag-filtered fetches)
+│           ├── story_overview.rs # Story detail + Play button
+│           └── story_gameplay.rs # Game view — pages, streaming, chat bar, profile popover, swipe
 └── docs/                       # Comprehensive documentation
-    ├── gui-architecture.md # gpui GUI components, screens, styling conventions
-```
-
-**Note:** The `gui/` directory also contains vestigial Vue 3 frontend files (`package.json`, `src/App.vue`, etc.) from the previous Tauri architecture. These are no longer used and should not be modified.
+    ├── gui-architecture.md # Dioxus GUI components, screens, styling conventions
 
 ---
 
@@ -84,12 +92,14 @@ novelcraft/
 | Markdown Utilities | `engine/src/markdown/` | `todo.rs` (`TodoItem`, `TodoList`, `TodoListDiff`, `TodoList::diff` — parsing & diffing with unit tests) |
 | Engine Types | `engine/src/infer/` | `api.rs` (OpenAI API types), `internal.rs` (command-level types) |
 | Game Engine | `engine/src/game/` | Game agent types (`GameEngine`, `SessionV1`) |
-| GUI Entry | `gui/src/main.rs` | Engine thread, `CommandBus` global, `AppRoot` view, action routing |
-| GUI Screens | `gui/src/screens/` | `Screen` enum + `ScreenBase`/`screen(title)` layout helper (`mod.rs`) + one submodule per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) with `create(cx)` + `Render` |
-| GUI Components | `gui/src/comp.rs` | Stateless UI builder functions (`root`, `screen_root`, `top_bar`, `settings_gear`, `btn_icon_close`) |
-| GUI Text Input | `gui/src/text_input.rs` | Reusable `TextInput` component — custom `Element`, `EntityInputHandler` (IME), `init(cx)` key bindings scoped to the `"TextInput"` key context |
-| GUI Theme | `gui/src/theme.rs` | `Theme`/`ThemeKind` (bg, text colors), gpui `Global` impl, serde (de)serialization as theme name |
-| GUI Utilities | `gui/src/util.rs` | `Loggable` trait, `LogLevel` enum, blanket `impl Loggable for Result<T, E>` |
+| GUI Entry | `gui/src/main.rs` | Engine construction, `BOOT_CONFIG` stash, launch config, `App` component (stylesheet link, toast overlay, router) |
+| GUI Engine Bridge | `gui/src/engine.rs` | `OnceLock<Arc<Mutex<NovelCraftEngine>>>` — the single seam to the engine; async ops + generation-guarded query refreshes |
+| GUI State | `gui/src/state.rs` | `Query<T>` (Empty/Error/Stale/Recent) + `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `PAGE`/`PAGE_INDEX`, `STREAM`), `Profiles`, `StreamState` |
+| GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) |
+| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` |
+| GUI Toasts | `gui/src/toast.rs` | `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay |
+| GUI Styling | `gui/input.css` + `gui/assets/tailwind.css` | Tailwind v4: `@theme` design tokens (`nc-*` colors) → compiled stylesheet (build artifact; `just css` / `just dev`) |
+| GUI Text Input | (none — WebView native) | Native `<input>`/`<textarea>`; the platform WebView provides IME, selection & clipboard handling |
 | Path Resolution | `engine/src/commands/paths.rs` | `data_dir()`, `config_dir()` — single source of truth for filesystem paths |
 
 ### Import Patterns
@@ -97,17 +107,19 @@ novelcraft/
 - **Within engine**: Standard Rust `mod`/`use` paths. No special aliases.
 - **GUI depends on engine**: `use novelcraft_engine::commands::...` (or re-exports from `novelcraft_engine::*`).
 
-### gpui Action Dispatch
+### Dioxus Navigation & Signals
 
-Inside event handlers (`on_click`, etc.), always dispatch actions via `window.dispatch_action(Box<dyn Action>, cx)` — never `cx.dispatch_action` (fails with "window not found" during event handling, since the window is mid-update). `App::dispatch_action` is for app-level/global dispatch outside window updates (timers, menus). See [GUI Architecture](./docs/gui-architecture.md) for details.
+There is no action system. Navigation goes through the Dioxus Router: `navigator().push(Route::...)`; back is `go_back(from: Route)` (`gui/src/screens/mod.rs`). Always terminate `push(...)` inside event handlers with `;` — non-unit handler returns are interpreted as async spawns and fail to compile. Global signals (`gui/src/state.rs`) must never be touched from `main()` or outside the Dioxus runtime; read with `.read()` (clone out of the guard for `'static` closures), write globals via `*X.write() = ...` and locals via `x.set(...)`/`x.write()` (locals need `let mut`). See [GUI Architecture](./docs/gui-architecture.md) for details.
 
 ### AI / Model Configuration
 
-Models are configured in Rust, persisted to disk as JSON, and held in `AppState`.
+Models are configured in Rust, persisted to disk as JSON, and held in the engine config.
 
-- **Engine side**: `AppState` holds `models: Mutex<Models>`, initialized via `Models::load()` in `AppState::init()`. The `Models` struct (defined in `engine/src/commands/llm.rs`) has fields `storyteller: ModelConfig` and `suggestions: ModelConfig`, plus instance methods `get_config(usage)`, `all_configs()`, `load()`, `save()`.
-- Each model entry maps a **usage role** (e.g. `"storyteller"`, `"suggestions"`) to `{ model_id, base_url, api_key? }`, where `model_id` is the actual LLM API model identifier (e.g. `"zai-org/glm-4.6v-flash"`)
-- Default models point to `http://localhost:1234/v1` (local LLM server)
+- **Engine side**: `NovelCraftConfig` (defined in `engine/src/config.rs`, persisted at `{configDir}/config.json`) holds `models: Models` — an `exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>` keyed by `ModelPurpose::DungeonMaster` / `ModelPurpose::Suggestions`, plus `max_agent_steps`, `system_prompt`, `profiles`, and `active_profile`.
+- Each `ModelConfig` (re-exported from `kiruklaw-agent-loop`) is `ModelConfig::OpenAi { base_url, api_key, model }`, where `model` is the actual LLM API model identifier.
+- `NovelCraftConfig::contribute()` pushes `max_agent_steps`, `system_prompt`, and the Dungeon Master model into the `AgentLoop`.
+- Default host is `http://localhost:8888/v1` (`DEFAULT_HOST` — local llama.cpp/LM Studio server); the default system prompt is the Dungeon Master persona in `config.rs`.
+- The GUI's Settings screen edits this config and persists it via `engine::save_config`.
 
 ### Agent / LLM Integration
 
@@ -201,11 +213,14 @@ The game agent loop (`commands::game`) iterates LLM calls until a final text res
 All commands are managed by the root `justfile`. Run `just` with no arguments to list available recipes.
 
 ```bash
-# Run the app (cargo run --bin novelcraft)
+# Run the app with hot-reload (Tailwind watcher + dx serve --platform desktop)
 just dev
 
-# Build
+# Bundle the app for the current platform
 just build
+
+# Compile the Tailwind stylesheet once
+just css
 
 # Check (cargo check)
 just check
@@ -373,13 +388,13 @@ let results = lore::lore_query(&app, id, "search").await?;
 
 ### When to Add a GUI Component
 
-- Reusable UI patterns (gpui views/elements)
-- Complex rendering that should be isolated into its own view struct
+- Reusable UI patterns (rsx components)
+- Complex rendering that should be isolated into its own `#[component]`
 
 **Process:**
-1. Create a new struct implementing `Render` in `gui/src/`
-2. Use gpui's element system (`div()`, `child()`, etc.)
-3. Register with the gpui context as needed
+1. Create a new `#[component] fn ... -> Element` in `gui/src/comps.rs` (shared) or the relevant screen module
+2. Compose the tree with `rsx!` and style with Tailwind classes (`@theme` tokens for colors — add new tokens to `gui/input.css` if needed)
+3. For new data access, add the operation to `gui/src/engine.rs` and a `Query` signal to `gui/src/state.rs` — never reach into the engine from screens
 
 ### When to Add a Game Module
 
@@ -399,8 +414,9 @@ All build and development commands are in the root `justfile`.
 
 | Recipe | Purpose |
 |--------|---------|
-| `just dev` | Run the app (`cargo run --bin novelcraft`) |
-| `just build` | Build entire workspace (`cargo build`) |
+| `just dev` | Run the app with hot-reload (Tailwind watcher + `dx serve --platform desktop`) |
+| `just css` | Compile the Tailwind stylesheet once (minified) |
+| `just build` | Bundle the app for the current platform (`just css` + `dx bundle --platform desktop`) |
 | `just check` | Cargo check (entire workspace) |
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |
 | `just check-gui` | Cargo check (`novelcraft-gui` only) |
@@ -431,9 +447,8 @@ All build and development commands are in the root `justfile`.
 | Crate | Purpose |
 |-------|---------|
 | `novelcraft-engine` (path) | Business logic library |
-| `gpui` (git, Zed main) | UI framework — views, elements, styling |
-| `gpui_platform` (git, Zed main, features: font-kit, wayland, x11) | Platform integration — window management, app lifecycle |
+| `dioxus` (features: desktop, router) | UI framework — rsx components, signals, router; renders in the system WebView via `wry` |
+| `@tailwindcss/cli` + `tailwindcss` (npm, via bun — see `gui/package.json`) | Tailwind CSS v4 toolchain; compiles `gui/input.css` → `gui/assets/tailwind.css` |
 | `reqwest` (version 0.12, json feature) | Inspiration REST client (streaming not used; json feature) |
-| `log` | Logging facade (used by `util.rs` `Loggable` trait) |
+| `log` | Logging facade (explicit imports — a glob `use log::*` collides with the Dioxus prelude) |
 | `chrono` | Local-time formatting of session timestamps (used by `screens/home.rs`) |
-| `unicode-segmentation` | Grapheme-boundary cursor movement (used by `text_input.rs`) |

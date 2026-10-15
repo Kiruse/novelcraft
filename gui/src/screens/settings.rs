@@ -1,145 +1,152 @@
-use exhaustive_map::{ExhaustiveMap, FiniteExt};
-use gpui::{Div, Entity, Render, Task, Window, div, text};
-use gpui::prelude::*;
-use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose, NovelCraftConfig};
+use dioxus::prelude::*;
+use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose};
 
-use super::screen;
-use crate::{EngineQuery, Toast, comp::*};
-use crate::text_input::TextInput;
-use crate::theme::Theme;
-use crate::Command;
+use crate::comps::{Button, BtnVariant, Field, FieldGroup, Screen, INPUT_CLASS};
+use crate::engine;
+use crate::state::{Query, CONFIG};
+use crate::toast::{push_toast, Toast};
 
+/// Editable fields of a single model config.
+#[derive(Debug, Clone, Default, PartialEq)]
 struct ModelFields {
-  base_url: Entity<TextInput>,
-  api_key: Entity<TextInput>,
-  model: Entity<TextInput>,
+  base_url: String,
+  api_key: String,
+  model: String,
 }
 
-pub(crate) struct SettingsScreen {
-  task: Task<()>,
-  config: Option<NovelCraftConfig>,
-  max_agent_steps: Entity<TextInput>,
-  system_prompt: Entity<TextInput>,
-  models: ExhaustiveMap<ModelPurpose, ModelFields>,
+impl ModelFields {
+  fn from_config(config: &ModelConfig) -> Self {
+    let ModelConfig::OpenAi {
+      base_url,
+      api_key,
+      model,
+    } = config;
+    Self {
+      base_url: base_url.clone(),
+      api_key: api_key.clone(),
+      model: model.clone(),
+    }
+  }
+
+  fn into_config(self) -> ModelConfig {
+    ModelConfig::OpenAi {
+      base_url: self.base_url.trim().to_string(),
+      api_key: self.api_key.clone(),
+      model: self.model.trim().to_string(),
+    }
+  }
 }
 
-impl SettingsScreen {
-  pub fn create(cx: &mut Context<'_, Self>) -> Self {
-    let mut screen = Self {
-      task: Task::ready(()),
-      config: None,
-      max_agent_steps: create_text_input(cx, false, "10"),
-      system_prompt: create_text_input(cx, true, ""),
-      models: ExhaustiveMap::from_fn(|_| ModelFields {
-        base_url: create_text_input(cx, false, DEFAULT_HOST),
-        api_key: create_text_input(cx, false, ""),
-        model: create_text_input(cx, false, ""),
-      }),
-    };
-    screen.load(cx);
-    screen
-  }
+#[component]
+pub fn Settings() -> Element {
+  let mut steps = use_signal(String::new);
+  let mut system_prompt = use_signal(String::new);
+  let mut dm = use_signal(ModelFields::default);
+  let mut suggestions = use_signal(ModelFields::default);
 
-  fn load(&mut self, cx: &mut Context<'_, Self>) {
-    let config = cx.global::<EngineQuery<NovelCraftConfig>>().curr().value().cloned();
-    if let Some(config) = config {
-      self.populate(config, cx);
-    }
+  // Populate the fields from the config query as soon as (and whenever)
+  // it publishes a value.
+  use_effect(move || {
+    let Query::Recent(config) = &*CONFIG.read() else { return };
+    steps.set(config.max_agent_steps.to_string());
+    system_prompt.set(config.system_prompt.clone());
+    dm.set(ModelFields::from_config(&config.models[ModelPurpose::DungeonMaster]));
+    suggestions.set(ModelFields::from_config(&config.models[ModelPurpose::Suggestions]));
+  });
 
-    let mut rx_config = {
-      let q = cx.global::<EngineQuery<NovelCraftConfig>>();
-      q.refresh(cx);
-      q.rx()
-    };
-
-    self.task = cx.spawn(async move |this, cx| {
-      while let Ok(()) = rx_config.changed().await {
-        let config = rx_config.borrow().value().cloned().unwrap_or_default();
-        this.update(cx, move |this, cx| this.populate(config, cx)).ok();
-      }
-    });
-  }
-
-  fn populate(&mut self, config: NovelCraftConfig, cx: &mut Context<'_, Self>) {
-    self.max_agent_steps.update(cx, |input, cx| {
-      input.set_value(config.max_agent_steps.to_string(), cx)
-    });
-    self.system_prompt.update(cx, |input, cx| {
-      input.set_value(config.system_prompt, cx)
-    });
-
-    let iter = self.models.values_mut().zip(config.models.values());
-    for (fields, model_config) in iter {
-      let ModelConfig::OpenAi {
-        base_url,
-        api_key,
-        model,
-      } = model_config;
-      fields.base_url.update(cx, |input, cx| input.set_value(base_url, cx));
-      fields.api_key.update(cx, |input, cx| input.set_value(api_key, cx));
-      fields.model.update(cx, |input, cx| input.set_value(model, cx));
-    }
-    cx.notify();
-  }
-
-  fn save(&mut self, cx: &mut Context<'_, Self>) {
-    let mut config = self.config.clone().unwrap_or_default();
-    config.max_agent_steps = self
-      .max_agent_steps
-      .read(cx)
-      .value()
+  let save = move |_| {
+    let mut config = CONFIG.read().value().cloned().unwrap_or_default();
+    config.max_agent_steps = steps
+      .read()
       .trim()
       .parse()
       .unwrap_or(config.max_agent_steps);
-    config.system_prompt = self.system_prompt.read(cx).value().to_string();
+    config.system_prompt = system_prompt.read().clone();
+    config.models[ModelPurpose::DungeonMaster] = dm.read().clone().into_config();
+    config.models[ModelPurpose::Suggestions] = suggestions.read().clone().into_config();
 
-    for key in ModelPurpose::iter_all() {
-      config.models[key] = Self::model_config(&self.models[key], cx);
-    }
+    spawn(async move {
+      match engine::save_config(config).await {
+        Ok(()) => push_toast(Toast::success("Settings saved!")),
+        Err(err) => {
+          error!("Failed to save settings: {err}");
+          push_toast(Toast::error("Failed to save new config"));
+        }
+      }
+    });
+  };
 
-    Command::SaveConfig(config).dispatch(cx);
-  }
-
-  fn model_config(fields: &ModelFields, cx: &Context<'_, SettingsScreen>) -> ModelConfig {
-    ModelConfig::OpenAi {
-      base_url: fields.base_url.read(cx).value().trim().to_string(),
-      api_key: fields.api_key.read(cx).value().to_string(),
-      model: fields.model.read(cx).value().trim().to_string(),
+  rsx! {
+    Screen { title: "Settings", closable: true,
+      Field { label: "Max Agent Steps",
+        input {
+          class: INPUT_CLASS,
+          value: "{steps}",
+          oninput: move |ev: FormEvent| steps.set(ev.value()),
+        }
+      }
+      Field { label: "System Prompt",
+        textarea {
+          class: INPUT_CLASS,
+          rows: 4,
+          value: "{system_prompt}",
+          oninput: move |ev: FormEvent| system_prompt.set(ev.value()),
+        }
+      }
+      div { class: "flex flex-col gap-2 w-full",
+        div { class: "text-xl", "Models" }
+        ModelGroup { label: ModelPurpose::DungeonMaster.as_str(), fields: dm }
+        ModelGroup { label: ModelPurpose::Suggestions.as_str(), fields: suggestions }
+      }
+      Button { label: "Save", variant: BtnVariant::Primary, on_click: save }
     }
   }
 }
 
-impl Render for SettingsScreen {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.global::<Theme>();
-
-    screen(text!("Settings")).closable()
-      .child(field(&theme, "Max Agent Steps", &self.max_agent_steps))
-      .child(field(&theme, "System Prompt", &self.system_prompt))
-      .child(div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .w_full()
-        .child(div().text_xl().child(text!("Models")))
-        .children(
-          self
-            .models
-            .iter()
-            .map(|(purpose, fields)| model_group(&theme, purpose.as_str(), fields))))
-      .child(button("btn-save", text!("Save"))
-        .primary(&theme)
-        .into_element()
-        .on_click(cx.listener(|this, _, _, cx| {
-          this.save(cx);
-          Toast::success("Settings saved!").dispatch(cx);
-        })))
-  }
+#[derive(Props, Clone, PartialEq)]
+struct ModelGroupProps {
+  label: String,
+  fields: Signal<ModelFields>,
 }
 
-fn model_group(theme: &Theme, label: &str, fields: &ModelFields) -> Div {
-  field_group(theme, label)
-    .child(field(theme, "Base URL", &fields.base_url))
-    .child(field(theme, "API Key", &fields.api_key))
-    .child(field(theme, "Model", &fields.model))
+#[component]
+fn ModelGroup(props: ModelGroupProps) -> Element {
+  let mut fields = props.fields;
+
+  let set_base_url = move |ev: FormEvent| {
+    fields.write().base_url = ev.value();
+  };
+  let set_api_key = move |ev: FormEvent| {
+    fields.write().api_key = ev.value();
+  };
+  let set_model = move |ev: FormEvent| {
+    fields.write().model = ev.value();
+  };
+
+  rsx! {
+    FieldGroup { label: props.label,
+      Field { label: "Base URL",
+        input {
+          class: INPUT_CLASS,
+          placeholder: DEFAULT_HOST,
+          value: "{fields.read().base_url}",
+          oninput: set_base_url,
+        }
+      }
+      Field { label: "API Key",
+        input {
+          class: INPUT_CLASS,
+          value: "{fields.read().api_key}",
+          oninput: set_api_key,
+        }
+      }
+      Field { label: "Model",
+        input {
+          class: INPUT_CLASS,
+          value: "{fields.read().model}",
+          oninput: set_model,
+        }
+      }
+    }
+  }
 }

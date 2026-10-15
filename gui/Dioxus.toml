@@ -1,0 +1,9 @@
+[application]
+# Display name of the app (window title & bundle name).
+name = "NovelCraft"
+# App identifier for bundling.
+identifier = "dev.novelcraft.app"
+
+[bundle]
+publisher = "NovelCraft"
+category = "Game"

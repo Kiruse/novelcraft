@@ -1,6 +1,9 @@
 # Cargo
 target/
 
+# Node (gui Tailwind toolchain)
+node_modules/
+
 # Logs
 logs/
 *.log
