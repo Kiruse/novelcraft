@@ -12,7 +12,7 @@ Text input (including IME) is handled natively by the WebView — the GUI ships 
 
 - **dioxus** 0.7 (features: `desktop`, `router`) — UI framework: components, signals, router
 - **Tailwind CSS v4** — styling; compiled via `@tailwindcss/cli` (see [Styling](#styling))
-- **novelcraft-engine** (path) — Business logic library for data persistence, LLM proxy, game loop
+- **novelcraft-engine** (path) — Business logic library: memory-managed sessions, game agent loop, config/profile persistence
 - **reqwest** — REST client for the inspiration service
 - **chrono** — Local-time formatting of session timestamps (Home screen session cards)
 - **dx** (dioxus-cli) — dev server (`dx serve`), bundler (`dx bundle`), hot-reload
@@ -38,10 +38,10 @@ gui/
     └── screens/             # One module per screen + Route enum (mod.rs)
         ├── mod.rs           # Route enum (Routable) + go_back()
         ├── home.rs          # Session list
-        ├── settings.rs      # Engine config editor
+        ├── settings.rs      # Engine config editor (models, system prompt, summary threshold)
         ├── create_story.rs  # New vignette + inspiration browser
-        ├── story_overview.rs# Story detail + Play button
-        └── story_gameplay.rs# Game view — pages, streaming, chat bar
+        ├── story_overview.rs# Session detail + Play/Delete (with confirm dialog) buttons
+        └── story_gameplay.rs# Game view — turns, streaming, chat bar, memory sidebar
 ```
 
 ## Architecture
@@ -89,16 +89,16 @@ pub enum Query<T> {
 |--------|------|---------|
 | `CONFIG` | `Query<NovelCraftConfig>` | Engine config (seeds from `BOOT_CONFIG`) |
 | `PROFILES` | `Query<Profiles>` | Profiles snapshot + active profile ID |
-| `SESSIONS` | `Query<Vec<SessionV1>>` | Session list |
-| `SESSION` | `Query<SessionV1>` | Active session |
-| `PAGE_INDEX` / `PAGE` | `usize` / `Query<PageV1>` | Current gameplay page |
+| `SESSIONS` | `Query<Vec<SessionV2>>` | Session list (metadata only) |
+| `SESSION` | `Query<SessionV2>` | Active session |
+| `TURN_INDEX` / `TURN` | `usize` / `Query<TurnV2>` | Current gameplay turn (window-relative index into the retained history) |
 | `STREAM` | `Option<StreamState>` | In-flight prompt generation (prompt, text, activity) |
 
 Conventions:
 
 - **Read** with `X.read()` inside components (subscribes to changes). Clone the value out (`X.read().clone()`) when handing data into `rsx!` loops that capture it in event closures — event handlers must be `'static`.
 - **Write** with `*X.write() = …` for globals (there is no `.set()` on statics) and `x.set(…)` / `x.write()` for local `use_signal`s, which need `let mut` bindings.
-- **Stale-guard**: refreshes that can race (sessions, page loads) use per-query `AtomicUsize` generation counters — only the newest invocation publishes its result.
+- **Stale-guard**: refreshes that can race (sessions, turn loads) use per-query `AtomicUsize` generation counters (`SESSIONS_GEN`, `TURN_GEN` in `gui/src/engine.rs`) — only the newest invocation publishes its result.
 
 ### Engine Bridge
 
@@ -117,25 +117,31 @@ Engine operations are `pub async fn`s that lock the engine, call it, publish res
 engine::refresh_sessions();
 
 // awaited operations, called from spawned tasks in components
-engine::play_session(id).await;
+engine::play_session(id).await;   // loads the session + opens its last retained turn
 let session = engine::create_session(title, exposition).await?;
 engine::switch_profile(id).await;
 engine::save_config(config).await;
 
-// page navigation (clamp/guard helpers over load_page)
-engine::navigate(delta); engine::jump_to_end(); engine::goto(index);
+// turn navigation — indices are relative to the session's retained history
+engine::load_turn(index); engine::goto(index);
+engine::navigate(delta); engine::jump_to_end();
+
+// long-term memory read model (rolling summary, chapters)
+let memory = engine::memory_async().await?;
 ```
 
 ### Streaming Prompts
 
-`engine::prompt(content, from_page)` drives the agent loop:
+`engine::prompt(content, from_turn)` drives the agent loop:
 
-1. Sets `STREAM` to a fresh `StreamState` (UI swaps the page card for the stream card).
-2. Spawns a worker task that locks the engine, optionally forks (`from_page`), and calls `NovelCraftEngine::prompt(content, tx)` with an mpsc sender.
+1. Sets `STREAM` to a fresh `StreamState` (UI swaps the turn card for the stream card).
+2. Spawns a worker task that locks the engine, optionally forks first (`from_turn = Some(index)` truncates the history at that turn — the gameplay screen does this whenever the user sends from any turn other than the last), and calls `NovelCraftEngine::prompt(content, tx)` with an mpsc sender.
 3. A sibling task drains the chunk channel, absorbing `AgentMessageChunk`s into `STREAM` (`Content` appends text; `ToolCall*` sets the activity flag).
-4. When the worker finishes (sender dropped → drain loop ends), `STREAM` is cleared, the session query is refreshed, and the current page is reloaded — mirroring the pre-migration behavior (the reading position does not auto-advance; "Jump to end" navigates to the fresh page).
+4. When the worker finishes (sender dropped → drain loop ends), `STREAM` is cleared, the session query is refreshed, and the current turn is reloaded — a fork may have truncated turns, and the current turn gained the fresh response either way (the reading position does not auto-advance; "Jump to end" navigates to the last retained turn).
 
-While `STREAM` is `Some`, page navigation and sending are blocked and the status row hides its indicators.
+While `STREAM` is `Some`, turn navigation and sending are blocked and the status row hides its indicators.
+
+All turn indices (`load_turn`/`goto`/`navigate`/`jump_to_end`, `TURN_INDEX`) are **window-relative**: they index into the session's *retained* history (the last `2 × summary_threshold` turns), not the absolute conversation — older turns are compressed away into the rolling story summary by the engine (see `SessionV2::compress_memory`).
 
 ### Window Chrome
 
@@ -213,9 +219,10 @@ Notes:
 
 ## Conventions
 
-- Screens use the shared `Screen` wrapper; gameplay uses a custom root layout (top bar with ☰ sidebar toggle, page viewport + optional sidebar, status row, chat bar).
+- Screens use the shared `Screen` wrapper; gameplay uses a custom root layout (top bar with ☰ sidebar toggle, turn viewport + optional sidebar, status row, chat bar).
+- The gameplay sidebar (280px, toggled by the ☰ button) renders the session's **story memory** — the premise (from the session's exposition), rolling summary ("Story so far"), and chapters with their bullet notes — fetched via `engine::memory_async()` each time it opens (the `Sidebar` component is only mounted while open).
 - Event handlers must not return values — end `nav.push(…)` and friends with `;` (Dioxus interprets non-unit returns as async spawns and fails to compile).
 - Never touch global signals from `main()` or from plain helper functions outside components/tasks — signal access requires the Dioxus runtime.
 - Engine access goes exclusively through `engine.rs`; screens never import `NovelCraftEngine` directly.
-- Keyboard: the gameplay screen handles `alt+arrow-left/right` for page navigation on its root `onkeydown` (with `prevent_default`, so the webview doesn't treat it as history navigation). Enter submits the chat bar; shift+enter inserts a newline.
-- Swipes: the page viewport tracks pointer down/move/up — a ≥60px horizontal drag flips pages.
+- Keyboard: the gameplay screen handles `alt+arrow-left/right` for turn navigation on its root `onkeydown` (with `prevent_default`, so the webview doesn't treat it as history navigation). Enter submits the chat bar; shift+enter inserts a newline.
+- Swipes: the turn viewport tracks pointer down/move/up — a ≥60px horizontal drag flips turns.

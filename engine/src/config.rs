@@ -20,12 +20,20 @@ Your objective is to guide the player through the story, managing your memory
 of events, updating the state of the player & NPCs, planning & tracking the
 timeline, and assuming the roles of NPCs in dialogs and interactions.
 
+Maintain your long-term memory with the memory tools: note down important
+events of the current chapter as concise bullet points as they happen, and
+whenever the story reaches a significant shift in plot, location or cast,
+close the current chapter under a fitting title and begin a new one.
+
 NEVER speak for the player.
 NEVER perform actions for the player.
 ALWAYS keep your responses short.
 ALWAYS use tool calls to interact with the game engine's deterministic state and
 to retrieve necessary knowledge.
 "#;
+
+/// Default number of turns between memory compressions.
+pub const DEFAULT_SUMMARY_THRESHOLD: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NovelCraftConfig {
@@ -35,6 +43,11 @@ pub struct NovelCraftConfig {
   pub system_prompt: String,
   /// Configured models by usage.
   pub models: Models,
+  /// Rolling-summary compression threshold in turns. Once the retained
+  /// short-term history exceeds twice this value, the oldest
+  /// `summary_threshold` turns are compressed into the rolling summary.
+  #[serde(default = "NovelCraftConfig::default_summary_threshold")]
+  pub summary_threshold: usize,
   /// User profiles.
   pub profiles: Vec<ProfileV1>,
   /// Active user profile ID.
@@ -42,6 +55,9 @@ pub struct NovelCraftConfig {
 }
 
 impl NovelCraftConfig {
+  fn default_summary_threshold() -> usize {
+    DEFAULT_SUMMARY_THRESHOLD
+  }
   pub async fn load() -> Result<NovelCraftConfig, EngineError> {
     deserialize(&Self::default_path()?).await
   }
@@ -73,6 +89,7 @@ impl Default for NovelCraftConfig {
       max_agent_steps: 10,
       system_prompt: DEFAULT_SYSTEM_PROMPT.trim().to_string(),
       models: Models::default(),
+      summary_threshold: Self::default_summary_threshold(),
       profiles: vec![],
       active_profile: None,
     }
@@ -84,6 +101,7 @@ impl Default for NovelCraftConfig {
 pub enum ModelPurpose {
   DungeonMaster,
   Suggestions,
+  Summarizer,
 }
 
 impl ModelPurpose {
@@ -91,6 +109,7 @@ impl ModelPurpose {
     match self {
       Self::DungeonMaster => "Dungeon Master",
       Self::Suggestions   => "Suggestions",
+      Self::Summarizer    => "Summarizer",
     }
   }
 }

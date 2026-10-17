@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use novelcraft_engine::game::session::SessionV1;
+use novelcraft_engine::game::session::SessionV2;
 
 use super::Route;
 
@@ -24,7 +24,7 @@ pub fn Home() -> Element {
 
 /// Renders the sessions list for the current query state: loading (empty),
 /// error, stale (value + error), and fresh values — empty or not.
-fn sessions_ui(q: &Query<Vec<SessionV1>>) -> Element {
+fn sessions_ui(q: &Query<Vec<SessionV2>>) -> Element {
   rsx! {
     div { class: "flex flex-col gap-2 w-full",
       { q.is_stale().then(|| {

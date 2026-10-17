@@ -1,23 +1,29 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use kiruklaw_agent_loop::Conversation;
+use kiruklaw_agent_loop::{Conversation, ConversationMessage, ModelConfig, prompt as llm_prompt};
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::error::EngineError;
 use crate::game::module::GameplayModule;
-use crate::game::pages::{PageBatchV1, PageV1};
+use crate::game::module::memory::{MemoryModule, SUMMARIZER_PERSONA};
 use crate::game::profile::ProfileV1;
 use crate::game::state::GameState;
-use crate::util::{deserialize, deserialize_timestamp, serialize, serialize_timestamp};
+use crate::game::state::Snapshot;
+use crate::game::turns::TurnV2;
+use crate::util::{deserialize, deserialize_timestamp, discard_channel, serialize, serialize_timestamp};
+use crate::util::prompting::{PromptFormatter, PromptifyResult};
 
+/// The complete persisted state of a session, stored as a single file
+/// (`{sessionsDir}/{id}.json`): session metadata, the gamestate snapshot
+/// anchoring the retained history, and the retained short-term turns.
+/// One file is the single source of truth for restoring a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionV1 {
-  #[serde(deserialize_with = "SessionV1::deserialize_version")]
+pub struct SessionV2 {
+  #[serde(deserialize_with = "SessionV2::deserialize_version")]
   pub version: u8,
   pub id: String,
   pub title: String,
@@ -34,22 +40,24 @@ pub struct SessionV1 {
   /// Optional profile ID that was last used for this session.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub profile: Option<String>,
-  #[serde(skip_deserializing)]
-  pub page_count: usize,
-  /// Total number of page batches in this session
-  #[serde(skip)]
-  pub batch_count: usize,
-  /// Last 2 batches of pages in the session. In a fresh session,
-  /// the second batch may be default.
-  #[serde(skip)]
-  tail_batches: (PageBatchV1, PageBatchV1),
+  /// Total number of turns ever pushed, including turns that were since
+  /// compressed away into the rolling summary.
+  pub total_turns: u64,
+  /// Gamestate as it was just before the first retained turn. Re-anchored
+  /// whenever turns are compressed away.
+  pub snapshot: Snapshot,
+  /// Retained short-term memory: the last N turns of the conversation.
+  pub turns: Vec<TurnV2>,
   #[serde(skip)]
   pub(crate) gamestate: GameState,
 }
 
-impl Default for SessionV1 {
+impl Default for SessionV2 {
   fn default() -> Self {
     let id = Uuid::new_v4().to_string();
+    let modules = GameplayModule::default_set();
+    let gamestate = GameState::new(Default::default(), modules.keys().cloned(), None)
+      .expect("fresh module states are always valid");
     Self {
       version: Self::VERSION,
       id: id.clone(),
@@ -57,18 +65,18 @@ impl Default for SessionV1 {
       exposition: String::new(),
       created_at: Utc::now(),
       updated_at: Utc::now(),
-      modules: Default::default(),
+      modules,
       profile: None,
-      page_count: 0,
-      batch_count: 0,
-      tail_batches: (PageBatchV1::new(id.clone(), 0), PageBatchV1::default()),
-      gamestate: GameState::default(),
+      total_turns: 0,
+      snapshot: Snapshot::default(),
+      turns: vec![],
+      gamestate,
     }
   }
 }
 
-impl SessionV1 {
-  pub const VERSION: u8 = 1u8;
+impl SessionV2 {
+  pub const VERSION: u8 = 2u8;
 
   #[inline(always)]
   pub fn set_profile(&mut self, profile: Option<Arc<ProfileV1>>) {
@@ -82,165 +90,64 @@ impl SessionV1 {
   }
 
   #[inline(always)]
-  pub fn dir(id: &str) -> Result<PathBuf, EngineError> {
-    Ok(Self::root()?.join(id))
+  pub fn path(id: &str) -> Result<PathBuf, EngineError> {
+    Ok(Self::root()?.join(format!("{id}.json")))
   }
 
-  #[inline(always)]
-  pub fn meta_path(id: &str) -> Result<PathBuf, EngineError> {
-    Ok(Self::join_meta_path(&Self::dir(id)?))
-  }
-
-  #[inline(always)]
-  fn join_meta_path(dir: &Path) -> PathBuf {
-    dir.join("meta.json")
-  }
-
-  /// Restore the given session by `id` from the local filesystem.
-  pub async fn load(id: impl Into<String>, profiles: &[ProfileV1]) -> Result<SessionV1, EngineError> {
-    let id = id.into();
-    let path = Self::meta_path(&id)?;
-    let mut res: SessionV1 = deserialize(&path).await?;
-
-    let batch_count = Self::count_batches(&id).await?;
-    res.page_count = Self::count_pages(id.clone()).await?;
-    res.batch_count = batch_count;
-
-    let (b0, b1) = tokio::join!(
-      PageBatchV1::load(id.clone(), batch_count.saturating_sub(2)),
-      PageBatchV1::load(id.clone(), batch_count.saturating_sub(1)),
-    );
-
-    let batch = match batch_count {
-      0 => {
-        res.tail_batches = (PageBatchV1::default(), PageBatchV1::default());
-        &res.tail_batches.0
-      }
-      1 => {
-        res.tail_batches = (b1?, PageBatchV1::default());
-        &res.tail_batches.0
-      }
-      _ => {
-        res.tail_batches = (b0?, b1?);
-        &res.tail_batches.1
-      }
-    };
-    let profile_id = res.profile.clone().unwrap_or_default();
-
-    res.gamestate = GameState::new(
-      batch.snapshot.clone(),
-      profiles.iter()
-        .find(|p| p.id == *profile_id)
-        .map(|p| Arc::new(p.clone())),
-    )?;
-    res.gamestate.replay(&res.modules, &batch.pages).await?;
-
+  /// Restore the given session by `id` from the local filesystem,
+  /// rebuilding the gamestate from the snapshot + replay of the retained
+  /// turns. Sessions with an unexpected file version are rejected.
+  pub async fn load(id: impl Into<String>, profiles: &[ProfileV1]) -> Result<SessionV2, EngineError> {
+    let path = Self::path(&id.into())?;
+    let mut res: SessionV2 = deserialize(&path).await?;
+    res.rebuild_gamestate(profiles).await?;
     Ok(res)
   }
 
-  /// Save this session to disk, including its last 2 associated page batches
-  /// (which are considered working memory).
+  /// Rebuild the in-memory gamestate from the session snapshot + replay of
+  /// the retained turns.
+  pub(crate) async fn rebuild_gamestate(&mut self, profiles: &[ProfileV1]) -> Result<(), EngineError> {
+    let profile_id = self.profile.clone().unwrap_or_default();
+    let profile = profiles.iter()
+      .find(|p| p.id == profile_id)
+      .map(|p| Arc::new(p.clone()));
+    self.gamestate = GameState::new(self.snapshot.clone(), self.modules.keys().cloned(), profile)?;
+    self.gamestate.replay(&self.modules, &self.turns).await?;
+    Ok(())
+  }
+
+  /// Save this session to disk as a single file.
   pub async fn save(&self) -> Result<(), EngineError> {
-    let (r_self, r_b1, r_b2) = tokio::join!(
-      self.save_metadata(),
-      self.save_batch(&self.tail_batches.0),
-      self.save_batch(&self.tail_batches.1),
-    );
-    r_self?;
-    r_b1?;
-    r_b2?;
-    Ok(())
+    serialize(&Self::path(&self.id)?, self).await
   }
 
-  /// Save the given page batch unless it's initial or empty.
-  async fn save_batch(&self, batch: &PageBatchV1) -> Result<(), EngineError> {
-    if !batch.session_id.is_empty() && !batch.pages.is_empty() {
-      batch.save().await
-    } else {
-      Ok(())
-    }
-  }
-
-  /// Save only this session's metadata, not its [SessionV1::tail_batches].
-  pub(crate) async fn save_metadata(&self) -> Result<(), EngineError> {
-    let path = Self::meta_path(&self.id)?;
-    serialize(&path, self).await?;
-    Ok(())
-  }
-
-  /// Load only this session's metadata from disk, without its page batches
-  /// or game state.
-  pub async fn load_metadata(id: impl Into<String>) -> Result<SessionV1, EngineError> {
-    let path = Self::meta_path(&id.into())?;
+  /// Load a session file without rebuilding its game state. The returned
+  /// session only carries persisted data (metadata, snapshot, turns).
+  pub async fn load_metadata(id: impl Into<String>) -> Result<SessionV2, EngineError> {
+    let path = Self::path(&id.into())?;
     deserialize(&path).await
   }
 
-  /// Enumerate all saved sessions on the local filesystem
-  pub async fn list(profiles: &[ProfileV1]) -> Result<Vec<SessionV1>, EngineError> {
-    let dir = Self::root()?;
-    let mut entry_iter = tokio::fs::read_dir(&dir).await?;
-    let mut res: Vec<SessionV1> = Vec::new();
-    while let Some(entry) = entry_iter.next_entry().await? {
-      if !entry.file_type().await.map(|ty| ty.is_dir()).unwrap_or(false) {
-        continue;
-      }
-
-      let sid = entry.file_name().to_string_lossy().to_string();
-      res.push(SessionV1::load(&sid, profiles).await?);
+  /// Delete the session file with the given `id` from the local filesystem.
+  /// Deleting a nonexistent session is a no-op.
+  pub async fn delete(id: &str) -> Result<(), EngineError> {
+    let path = Self::path(id)?;
+    if !path.exists() {
+      return Ok(());
     }
-
-    Ok(res)
+    tokio::fs::remove_file(&path).await?;
+    Ok(())
   }
 
-  /// Enumerate batches of this session on the local filesystem
-  pub async fn batches(session_id: &str) -> Result<Vec<OsString>, EngineError> {
-    let dir = Self::dir(session_id)?;
-    let mut dir_iter = tokio::fs::read_dir(&dir).await?;
-    let mut result = Vec::new();
-    while let Some(entry) = dir_iter.next_entry().await? {
-      let filename = entry.file_name();
-      let filename = filename.to_string_lossy();
-      if filename.starts_with("pages.") && filename.ends_with(".json") {
-        result.push(entry.file_name());
-      }
-    }
-    Ok(result)
+  /// Number of turns in the retained short-term history.
+  #[inline(always)]
+  pub fn turn_count(&self) -> usize {
+    self.turns.len()
   }
 
-  #[inline]
-  fn active_batch(&self) -> &PageBatchV1 {
-    if !self.tail_batches.0.is_full() {
-      &self.tail_batches.0
-    } else {
-      &self.tail_batches.1
-    }
-  }
-
-  #[inline]
-  fn active_batch_mut(&mut self) -> &mut PageBatchV1 {
-    if !self.tail_batches.0.is_full() {
-      &mut self.tail_batches.0
-    } else {
-      &mut self.tail_batches.1
-    }
-  }
-
-  /// Counts the number of batches in this session. Assumes the local filesystem is not corrupted.
-  pub async fn count_batches(session_id: &str) -> Result<usize, EngineError> {
-    let last_batch_idx = Self::batches(session_id)
-      .await?
-      .iter()
-      .map(|b| PageBatchV1::parse_batch_idx(b.to_string_lossy()).unwrap_or_default())
-      .max()
-      .unwrap_or_default();
-    Ok(last_batch_idx)
-  }
-
-  /// Count the pages in this session. Assumes each batch until the last is at max capacity.
-  pub async fn count_pages(session_id: String) -> Result<usize, EngineError> {
-    let last_batch_idx = Self::count_batches(&session_id).await?;
-    let last_batch = PageBatchV1::load(session_id, last_batch_idx).await?;
-    Ok(last_batch_idx * PageBatchV1::MAX_PAGES_PER_BATCH + last_batch.pages.len())
+  /// Get a retained turn by its window-relative index, if any.
+  pub fn try_turn(&self, index: usize) -> Option<&TurnV2> {
+    self.turns.get(index)
   }
 
   /// Get an iterator over the module IDs of this session
@@ -253,74 +160,96 @@ impl SessionV1 {
     self.modules.get(module)
   }
 
-  /// Get a page from the in-memory tail batches if the page's batch is
-  /// one of the two most recent batches. Returns `None` otherwise.
-  pub fn try_page(&self, page_index: usize) -> Option<&PageV1> {
-    let batch_num = PageBatchV1::batch_of(page_index);
-    let local_index = PageBatchV1::page_offset(page_index);
-    if self.tail_batches.0.batch_num == batch_num {
-      self.tail_batches.0.pages.get(local_index)
-    } else if self.tail_batches.1.batch_num == batch_num {
-      self.tail_batches.1.pages.get(local_index)
-    } else {
-      None
-    }
-  }
-
-  /// Push a new page to the end of the session.
-  pub async fn push_page(&mut self, page: PageV1) -> Result<(), EngineError> {
-    // active batch will never be full if we only have 1 batch
-    if self.active_batch().is_full() {
-      self.tail_batches.0.save().await?;
-      std::mem::swap(&mut self.tail_batches.0, &mut self.tail_batches.1);
-      self.tail_batches.1 = PageBatchV1::new(
-        self.id.clone(),
-        self.batch_count,
-      );
-      self.batch_count += 1;
-    }
-
-    // when inserting first page, also save gamestate snapshot
-    if self.active_batch().is_empty() {
-      self.active_batch_mut().snapshot = self.gamestate.snapshot().await;
-    }
-
-    self.active_batch_mut().pages.push(page);
-    self.page_count += 1;
-
-    self.save().await
-  }
-
-  /// Update the last page of the session.
-  pub async fn update_page(&mut self, cb: impl FnOnce(PageV1) -> Result<PageV1, EngineError>) -> Result<(), EngineError> {
-    let batch = self.active_batch_mut();
-    let page = batch.pages.pop().ok_or(EngineError::state("fresh session"))?;
-    batch.pages.push(cb(page)?);
-    self.save().await
-  }
-
-  /// Replace the last page of the session with the given page.
-  pub async fn replace_page(&mut self, page: PageV1) -> Result<(), EngineError> {
-    let batch = self.active_batch_mut();
-    batch.pages.pop();
-    batch.pages.push(page);
-    self.save().await
-  }
-
-  /// Drop the last page of the session.
-  pub async fn pop_page(&mut self) -> Result<Option<PageV1>, EngineError> {
+  /// Push a new turn to the end of the session's history.
+  pub async fn push_turn(&mut self, turn: TurnV2) -> Result<(), EngineError> {
     self.updated_at = Utc::now();
-    self.save_metadata().await?;
+    self.turns.push(turn);
+    self.total_turns += 1;
+    self.save().await
+  }
 
-    if let Some(p) = self.tail_batches.1.pages.pop() {
-      self.tail_batches.1.save().await?;
-      Ok(Some(p))
-    } else if let Some(p) = self.tail_batches.0.pages.pop() {
-      self.tail_batches.0.save().await?;
-      Ok(Some(p))
-    } else {
-      Ok(None)
+  /// Update the last turn of the session.
+  pub async fn update_turn(&mut self, cb: impl FnOnce(TurnV2) -> Result<TurnV2, EngineError>) -> Result<(), EngineError> {
+    let Some(turn) = self.turns.pop() else {
+      return Err(EngineError::state("fresh session"));
+    };
+    self.turns.push(cb(turn)?);
+    self.save().await
+  }
+
+  /// Replace the last turn of the session with the given turn.
+  pub async fn replace_turn(&mut self, turn: TurnV2) -> Result<(), EngineError> {
+    self.turns.pop();
+    self.turns.push(turn);
+    self.save().await
+  }
+
+  /// Drop the last turn of the session.
+  pub async fn pop_turn(&mut self) -> Result<Option<TurnV2>, EngineError> {
+    self.updated_at = Utc::now();
+    let turn = self.turns.pop();
+    self.save().await?;
+    Ok(turn)
+  }
+
+  /// Fork this session from the given retained turn index, deleting all
+  /// later turns. The gamestate is rebuilt from the session snapshot plus a
+  /// replay of the retained turns. Only turns within the retained window can
+  /// be forked from.
+  pub async fn fork(&mut self, turn_index: usize, profiles: &[ProfileV1]) -> Result<(), EngineError> {
+    if turn_index >= self.turn_count() {
+      return Err(EngineError::illegal(format!(
+        "cannot fork at turn {turn_index}: outside the retained history of {} turns",
+        self.turn_count()
+      )));
     }
+
+    self.updated_at = Utc::now();
+    self.turns.truncate(turn_index + 1);
+    self.rebuild_gamestate(profiles).await?;
+    self.save().await
+  }
+
+  /// Whether the retained history exceeds `2 * threshold` turns and should
+  /// be compressed.
+  #[inline(always)]
+  pub fn should_compress(&self, threshold: usize) -> bool {
+    threshold > 0 && self.turns.len() > threshold * 2
+  }
+
+  /// Compress the oldest `threshold` turns into the rolling story summary
+  /// once the retained history exceeds `2 * threshold` turns. The gamestate
+  /// snapshot is re-anchored to the new first retained turn, so rolling back
+  /// remains possible for everything within the retained window.
+  ///
+  /// Returns whether a compression happened. If the summarizer model fails,
+  /// nothing is mutated and the compression is simply retried on a later
+  /// trigger.
+  pub async fn compress_memory(&mut self, threshold: usize, model: &ModelConfig) -> Result<bool, EngineError> {
+    if !self.should_compress(threshold) {
+      return Ok(false);
+    }
+
+    let previous = MemoryModule::read(&self.gamestate).await?.summary;
+    let transcript = {
+      let mut f = PromptFormatter::new();
+      f.indented(|f| render_transcript(f, &self.turns[..threshold], &previous))?;
+      f.finish()
+    };
+
+    // Summarize BEFORE mutating anything, so a failed LLM call leaves the
+    // session untouched.
+    let summary = summarize(model, &transcript).await?;
+
+    self.turns.drain(..threshold);
+    MemoryModule::write_summary(&self.gamestate, summary).await?;
+    self.snapshot = self.gamestate.snapshot().await;
+    self.save().await?;
+    Ok(true)
+  }
+
+  pub(crate) fn conversation(&self) -> Conversation {
+    TurnV2::to_conversation(&self.turns)
   }
 
   fn deserialize_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
@@ -330,10 +259,223 @@ impl SessionV1 {
     }
     Ok(version)
   }
+}
 
-  pub(crate) fn conversation(&self) -> Conversation {
-    let mut conv = self.tail_batches.0.to_conversation();
-    conv.extend(self.tail_batches.1.to_conversation());
-    conv
+/// Render the given turns into a text transcript for the summarizer model,
+/// prefixed by the previous rolling summary, if any.
+fn render_transcript(f: &mut PromptFormatter, turns: &[TurnV2], prev: &str) -> PromptifyResult {
+  if !prev.is_empty() {
+    f.write("Previous summary: ")?;
+    f.writeline(prev)?;
+    f.newline()?;
+  }
+
+  for turn in turns.iter() {
+    if let Some(prompt) = &turn.prompt {
+      f.write("Player: ")?;
+      f.writeline(prompt)?;
+      f.newline()?;
+    }
+    for response in &turn.responses {
+      if let Some(content) = &response.content {
+        f.write("DM: ")?;
+        f.writeline(content)?;
+        f.newline()?;
+      }
+      if !response.tool_calls.is_empty() {
+        f.write("DM actions: ")?;
+        for (i, tc) in response.tool_calls.iter().enumerate() {
+          f.write(&tc.name)?;
+          if i < response.tool_calls.len() - 1 {
+            f.write(", ")?;
+          }
+        }
+        f.newline()?;
+        f.newline()?;
+      }
+    }
+  }
+  Ok(())
+}
+
+/// One-shot summarizer call merging a turn transcript (including the
+/// previous rolling summary) into the new rolling story summary.
+async fn summarize(model: &ModelConfig, transcript: &str) -> Result<String, EngineError> {
+  let (msg, _) = llm_prompt(
+    model,
+    &[],
+    vec![
+      ConversationMessage::system(SUMMARIZER_PERSONA.to_string()).into(),
+      ConversationMessage::user(transcript.to_string()).into(),
+    ],
+    discard_channel(),
+  ).await?;
+
+  let ConversationMessage::Assistant { content, .. } = msg else { unreachable!() };
+  Ok(content.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn fresh_session_seeds_module_state() {
+    let session = SessionV2::default();
+    for modid in session.modules.keys() {
+      assert!(session.gamestate.get(modid).is_some(), "module {modid} not seeded");
+    }
+    assert_eq!(session.turn_count(), 0);
+    assert_eq!(session.total_turns, 0);
+    assert!(!session.should_compress(50));
+  }
+
+  #[test]
+  fn session_file_roundtrip() {
+    let mut session = SessionV2::default();
+    session.title = "The Test".to_string();
+    session.exposition = "A premise.".to_string();
+    session.total_turns = 7;
+    session.snapshot.insert("memory".to_string(), serde_json::json!({"summary": "so far"}));
+    session.turns = vec![TurnV2 {
+      prompt: Some("look around".to_string()),
+      ..Default::default()
+    }];
+
+    let json = serde_json::to_string(&session).unwrap();
+    let restored: SessionV2 = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.version, SessionV2::VERSION);
+    assert_eq!(restored.id, session.id);
+    assert_eq!(restored.title, "The Test");
+    assert_eq!(restored.exposition, "A premise.");
+    assert_eq!(restored.total_turns, 7);
+    assert_eq!(restored.snapshot, session.snapshot);
+    // TurnV2 contains ToolCalls, which carry no PartialEq — compare serialized.
+    assert_eq!(
+      serde_json::to_string(&restored.turns).unwrap(),
+      serde_json::to_string(&session.turns).unwrap(),
+    );
+  }
+
+  #[test]
+  fn session_rejects_wrong_version() {
+    let json = r#"{"version": 1, "id": "x"}"#;
+    assert!(serde_json::from_str::<SessionV2>(json).is_err());
+  }
+
+  #[test]
+  fn compression_trigger_thresholds() {
+    let mut session = SessionV2::default();
+    session.turns = vec![TurnV2::default(); 100];
+    assert!(!session.should_compress(0));
+    assert!(!session.should_compress(50)); // exactly 2x — not over
+    session.turns.push(TurnV2::default());
+    assert!(session.should_compress(50)); // 101 > 100
+    session.turns.truncate(99);
+    assert!(session.should_compress(49));
+  }
+
+  #[tokio::test]
+  async fn fork_truncates_and_keeps_anchor() {
+    let mut session = SessionV2::default();
+    session.turns = (0..10).map(|_| TurnV2::default()).collect();
+    session.total_turns = 10;
+    session.snapshot = gamestate_snapshot(&session).await;
+
+    session.fork(4, &[]).await.unwrap();
+    assert_eq!(session.turn_count(), 5);
+    assert_eq!(session.total_turns, 10);
+  }
+
+  #[tokio::test]
+  async fn fork_rejects_out_of_window_index() {
+    let mut session = SessionV2::default();
+    session.turns = vec![TurnV2::default(); 3];
+    assert!(session.fork(3, &[]).await.is_err());
+    assert!(session.fork(100, &[]).await.is_err());
+    assert_eq!(session.turn_count(), 3);
+  }
+
+  #[tokio::test]
+  async fn fork_rebuilds_gamestate_from_replay() {
+    let mut session = SessionV2::default();
+    session.snapshot = gamestate_snapshot(&session).await;
+    // A tool call recorded on turn 0 must be re-applied on rebuild.
+    session.turns = vec![TurnV2 {
+      prompt: Some("begin".to_string()),
+      responses: vec![super::super::turns::AgentResponse {
+        tool_calls: vec![kiruklaw_agent_loop::ToolCall {
+          id: "tc1".to_string(),
+          name: "memory::begin_chapter".to_string(),
+          arguments: r#"{"title":"Exodus"}"#.to_string(),
+        }],
+        tool_responses: vec![("tc1".to_string(), "Began a new chapter.".to_string())],
+        ..Default::default()
+      }],
+      ..Default::default()
+    }];
+    session.total_turns = 1;
+
+    session.rebuild_gamestate(&[]).await.unwrap();
+    let memory = MemoryModule::read(&session.gamestate).await.unwrap();
+    // The replayed call titled the bootstrapped first chapter and opened a
+    // fresh stub.
+    assert_eq!(memory.chapters.len(), 2);
+    assert_eq!(memory.chapters[0].title, "Exodus");
+    assert!(memory.chapters[1].title.is_empty());
+  }
+
+  #[test]
+  fn conversation_from_turns() {
+    let mut session = SessionV2::default();
+    session.turns = vec![TurnV2 {
+      prompt: Some("hello".to_string()),
+      responses: vec![super::super::turns::AgentResponse {
+        content: Some("hi there".to_string()),
+        ..Default::default()
+      }],
+      ..Default::default()
+    }];
+
+    let conv = session.conversation();
+    assert_eq!(conv.messages.len(), 2);
+    assert!(matches!(&conv.messages[0], ConversationMessage::User { content } if content == "hello"));
+    assert!(matches!(&conv.messages[1], ConversationMessage::Assistant { content, .. } if content == "hi there"));
+  }
+
+  #[test]
+  fn transcript_renders_prev_summary_and_parts() {
+    let turns = vec![
+      TurnV2 {
+        prompt: Some("hello".to_string()),
+        responses: vec![super::super::turns::AgentResponse {
+          content: Some("hi there".to_string()),
+          tool_calls: vec![kiruklaw_agent_loop::ToolCall {
+            id: "t".to_string(),
+            name: "memory::note_events".to_string(),
+            arguments: "{}".to_string(),
+          }],
+          ..Default::default()
+        }],
+        ..Default::default()
+      },
+    ];
+    let mut f = PromptFormatter::new();
+    render_transcript(&mut f, &turns, "Once upon a time.").unwrap();
+    let text = f.finish();
+    assert!(text.contains("Previous summary: Once upon a time."));
+    assert!(text.contains("Player: hello"));
+    assert!(text.contains("DM: hi there"));
+    assert!(text.contains("memory::note_events"));
+
+    // An empty previous summary is omitted entirely.
+    let mut f = PromptFormatter::new();
+    render_transcript(&mut f, &turns, &String::new()).unwrap();
+    assert!(!f.finish().contains("Previous summary"));
+  }
+
+  async fn gamestate_snapshot(session: &SessionV2) -> Snapshot {
+    session.gamestate.snapshot().await
   }
 }

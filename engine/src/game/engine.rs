@@ -2,30 +2,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use kiruklaw_agent_loop::{AgentLoop, AgentMessageChunk, ContextProvider, Conversation, ConversationMessage};
-use log::warn;
-use moka::future::Cache;
+use log::{info, warn};
 use tokio::sync::mpsc::Sender;
 
-use crate::config::NovelCraftConfig;
+use crate::config::{ModelPurpose, NovelCraftConfig};
 use crate::error::EngineError;
-use crate::game::module::{self, GameplayModule};
-use crate::game::pages::{PageBatchV1, PageV1};
+use crate::game::module::memory::{MemoryModule, MemoryState};
 use crate::game::profile::ProfileV1;
-use crate::game::session::SessionV1;
+use crate::game::session::SessionV2;
 use crate::game::state::{GameState, GameStateView};
+use crate::game::turns::TurnV2;
 use crate::util::prompting::{PromptFormatter, Promptify};
 
 pub struct NovelCraftEngine {
   /// NovelCraft game engine config
   config: NovelCraftConfig,
   /// Active user session
-  session: Option<SessionV1>,
+  session: Option<SessionV2>,
   /// Cache of module context prompt component strings.
   module_context_cache: HashMap<String, String>,
   /// Cached AgentLoop config
   agent_loop: Option<AgentLoop<GameStateView>>,
-  /// LRU cache of page batches, keyed by `(session_id, batch_num)`.
-  page_cache: Cache<(String, usize), Arc<PageBatchV1>>,
 }
 
 impl NovelCraftEngine {
@@ -35,9 +32,6 @@ impl NovelCraftEngine {
       session: None,
       module_context_cache: HashMap::new(),
       agent_loop: None,
-      page_cache: Cache::builder()
-        .max_capacity(8)
-        .build(),
     }
   }
 
@@ -70,9 +64,9 @@ impl NovelCraftEngine {
     &self.config
   }
 
-  /// Number of pages in the active session, if any.
-  pub fn page_count(&self) -> Option<usize> {
-    Some(self.session.as_ref()?.page_count)
+  /// Number of turns in the active session's retained history, if any.
+  pub fn turn_count(&self) -> Option<usize> {
+    Some(self.session.as_ref()?.turn_count())
   }
 
   pub async fn save(&self) -> Result<(), EngineError> {
@@ -83,7 +77,7 @@ impl NovelCraftEngine {
     Ok(())
   }
 
-  pub fn set_session(&mut self, session: Option<SessionV1>) {
+  pub fn set_session(&mut self, session: Option<SessionV2>) {
     self.session = session;
     self.agent_loop = build_agent_loop(
       std::mem::take(&mut self.agent_loop),
@@ -93,16 +87,12 @@ impl NovelCraftEngine {
   }
 
   #[inline(always)]
-  pub fn session(&self) -> Result<&SessionV1, EngineError> {
+  pub fn session(&self) -> Result<&SessionV2, EngineError> {
     self.session.as_ref().ok_or(EngineError::state("no active session"))
   }
   #[inline(always)]
-  fn session_mut(&mut self) -> Result<&mut SessionV1, EngineError> {
+  fn session_mut(&mut self) -> Result<&mut SessionV2, EngineError> {
     self.session.as_mut().ok_or(EngineError::state("no active session"))
-  }
-  #[inline(always)]
-  fn session_id(&self) -> Result<&String, EngineError> {
-    Ok(&self.session()?.id)
   }
 
   #[inline(always)]
@@ -111,21 +101,25 @@ impl NovelCraftEngine {
   }
 
   /// Enumerate all saved sessions on the local filesystem, newest first.
-  /// Only session metadata is loaded; page batches and game states are
-  /// left untouched. Sessions with unreadable metadata are skipped.
-  pub async fn list_sessions() -> Result<Vec<SessionV1>, EngineError> {
-    let path = SessionV1::root()?;
+  /// Only persisted session data is read; game states are left untouched.
+  /// Sessions with an unexpected file version (including legacy multi-file
+  /// session directories) are skipped.
+  pub async fn list_sessions() -> Result<Vec<SessionV2>, EngineError> {
+    let path = SessionV2::root()?;
     if !path.exists() {
       tokio::fs::create_dir_all(&path).await?;
     }
     let mut dir_iter = tokio::fs::read_dir(&path).await?;
     let mut result = Vec::new();
     while let Some(entry) = dir_iter.next_entry().await? {
-      if !entry.file_type().await.map(|ty| ty.is_dir()).unwrap_or(false) {
+      let ty = entry.file_type().await?;
+      let name = entry.file_name().to_string_lossy().to_string();
+      if ty.is_dir() {
+        warn!("Ignoring legacy session directory {name:?}");
         continue;
       }
-      let sid = entry.file_name().to_string_lossy().to_string();
-      match SessionV1::load_metadata(&sid).await {
+      let Some(sid) = name.strip_suffix(".json") else { continue };
+      match SessionV2::load_metadata(sid).await {
         Ok(session) => result.push(session),
         Err(err) => warn!("Skipping session {sid}: {err}"),
       }
@@ -136,28 +130,20 @@ impl NovelCraftEngine {
 
   /// Create and persist a new session with the given title & exposition.
   /// The session is set up with fresh instances of all existing gameplay
-  /// modules, and records the engine's active profile (if any).
+  /// modules and records the engine's active profile (if any).
   pub async fn create_session(
     &mut self,
     title: String,
     exposition: String,
-  ) -> Result<SessionV1, EngineError> {
-    let mut session = SessionV1::default();
-    session.title = title;
-    session.exposition = exposition;
-    session.modules = Self::default_modules();
-    session.profile = self.profile().map(|p| p.id.clone());
+  ) -> Result<SessionV2, EngineError> {
+    let mut session = SessionV2 {
+      title,
+      exposition,
+      ..Default::default()
+    };
+    session.set_profile(self.profile().map(|p| Arc::new(p.clone())));
     session.save().await?;
     Ok(session)
-  }
-
-  /// Fresh instances of all existing gameplay modules, keyed by module ID.
-  fn default_modules() -> HashMap<String, GameplayModule> {
-    HashMap::from([
-      (module::story::StoryModule::ID.to_string(), GameplayModule::Story(Default::default())),
-      (module::npcs::NpcsModule::ID.to_string(), GameplayModule::Npcs(Default::default())),
-      (module::player::PlayerModule::ID.to_string(), GameplayModule::Player(Default::default())),
-    ])
   }
 
   fn conversation(&self, modids: &[String]) -> Result<Conversation, EngineError> {
@@ -167,22 +153,14 @@ impl NovelCraftEngine {
     Ok(conv)
   }
 
-  pub async fn page(&self, page_index: usize) -> Option<PageV1> {
-    let session = self.session.as_ref()?;
-    if let Some(page) = session.try_page(page_index) {
-      return Some(page.clone());
-    }
-    let batch_num = PageBatchV1::batch_of(page_index);
-    let local_index = PageBatchV1::page_offset(page_index);
-    let key = (session.id.clone(), batch_num);
-    let sid = session.id.clone();
-    let batch = self
-      .page_cache
-      .optionally_get_with(key, async move {
-        PageBatchV1::load(sid, batch_num).await.ok().map(Arc::new)
-      })
-      .await;
-    batch.and_then(|b| b.pages.get(local_index).cloned())
+  /// Get a retained turn by its window-relative index, if any.
+  pub fn turn(&self, index: usize) -> Option<TurnV2> {
+    self.session.as_ref()?.try_turn(index).cloned()
+  }
+
+  /// Read the active session's long-term memory state.
+  pub async fn memory(&self) -> Result<MemoryState, EngineError> {
+    MemoryModule::read(&self.session()?.gamestate).await
   }
 
   /// Get the active profile. Resolves the [NovelCraftConfig::active_profile]
@@ -203,7 +181,7 @@ impl NovelCraftEngine {
 
     self.refresh_module_context_cache(&modids).await?;
 
-    self.session_mut()?.push_page(PageV1 {
+    self.session_mut()?.push_turn(TurnV2 {
       prompt: Some(content),
       ..Default::default()
     }).await?;
@@ -221,15 +199,16 @@ impl NovelCraftEngine {
         sender,
       ).await?;
 
-    self.session_mut()?.update_page(|mut page| {
-      page.assimilate(&conv.messages[prev_msg_len..])?;
-      Ok(page)
+    self.session_mut()?.update_turn(|mut turn| {
+      turn.assimilate(&conv.messages[prev_msg_len..])?;
+      Ok(turn)
     }).await?;
 
+    self.compress_memory_if_due().await;
     Ok(())
   }
 
-  /// Rewrite the last page under consideration of the given instructions.
+  /// Rewrite the last turn under consideration of the given instructions.
   pub async fn rewrite(
     &mut self,
     instruct: String,
@@ -239,14 +218,14 @@ impl NovelCraftEngine {
 
     self.refresh_module_context_cache(&modids).await?;
 
-    self.session_mut()?.update_page(move |mut page| {
-      if let Some(system) = page.system {
-        page.system = Some(format!("{}\n{}", system, instruct));
+    self.session_mut()?.update_turn(move |mut turn| {
+      if let Some(system) = turn.system {
+        turn.system = Some(format!("{}\n{}", system, instruct));
       } else {
-        page.system = Some(instruct);
+        turn.system = Some(instruct);
       }
-      page.responses.clear();
-      Ok(page)
+      turn.responses.clear();
+      Ok(turn)
     }).await?;
 
     let mut conv = self.conversation(&modids)?;
@@ -262,65 +241,48 @@ impl NovelCraftEngine {
         sender,
       ).await?;
 
-    self.session_mut()?.update_page(|mut page| {
-      page.assimilate(&conv.messages[prev_msg_len..])?;
-      Ok(page)
+    self.session_mut()?.update_turn(|mut turn| {
+      turn.assimilate(&conv.messages[prev_msg_len..])?;
+      Ok(turn)
     }).await?;
 
+    self.compress_memory_if_due().await;
     Ok(())
   }
 
-  /// Fork this session from the given page index, deleting all subsequent pages.
-  pub async fn fork(&mut self, page_index: usize) -> Result<(), EngineError> {
-    let sid = self.session_id()?.clone();
-    let batch_index = PageBatchV1::batch_of(page_index);
-    Self::truncate_batches(&sid, batch_index).await?;
-    Self::truncate_batch_pages(&sid, page_index).await?;
-    let session = SessionV1::load(&sid, &self.config.profiles).await?;
-    self.session = Some(session);
+  /// Fork this session from the given retained turn index, deleting all
+  /// later turns.
+  pub async fn fork(&mut self, turn_index: usize) -> Result<(), EngineError> {
+    let profiles = self.config.profiles.clone();
+    self.session_mut()?.fork(turn_index, &profiles).await?;
     // NOTE: no need to rebuild agent_loop because tools didn't change
     Ok(())
   }
 
-  /// Delete all batches after the given `batch_index`, with this `batch_index` becoming
-  /// the last retained batch.
-  async fn truncate_batches(sid: &String, batch_index: usize) -> Result<(), EngineError> {
-    let batches = SessionV1::batches(sid).await?;
-    let batches = batches
-      .iter()
-      .map(|b| PageBatchV1::parse_batch_idx(b.to_string_lossy()))
-      .filter(Option::is_some)
-      .map(|idx| idx.unwrap())
-      .filter(|idx| *idx > batch_index);
-    let dir = SessionV1::dir(sid)?;
-    for batch in batches {
-      let path = PageBatchV1::join_path(&dir, batch);
-      tokio::fs::remove_file(&path).await?;
+  /// Compress the retained history into the rolling story summary once it
+  /// exceeds `2 * summary_threshold` turns. Failures are logged & retried on
+  /// a later trigger — never surfaced to the player.
+  async fn compress_memory_if_due(&mut self) {
+    let threshold = self.config.summary_threshold;
+    let Some(session) = self.session.as_mut() else { return };
+    if !session.should_compress(threshold) {
+      return;
     }
-    Ok(())
-  }
 
-  /// Delete the pages after the given `page_index` within its containing batch.
-  async fn truncate_batch_pages(sid: &String, page_index: usize) -> Result<(), EngineError> {
-    let keep = PageBatchV1::page_offset(page_index) + 1;
-    let Ok(mut batch) = PageBatchV1::load(sid.clone(), PageBatchV1::batch_of(page_index)).await
-    else {
-      // No batch file for this page — nothing to truncate.
-      return Ok(());
-    };
-    if batch.pages.len() > keep {
-      batch.pages.truncate(keep);
-      batch.save().await?;
+    let model = self.config.models[ModelPurpose::Summarizer].clone();
+    match session.compress_memory(threshold, &model).await {
+      Ok(true) => info!("Compressed {threshold} turns into the rolling story summary"),
+      Ok(false) => {}
+      Err(err) => warn!("Memory compression failed (will retry on a later turn): {err}"),
     }
-    Ok(())
   }
 
   async fn refresh_module_context_cache(&mut self, modids: &[String]) -> Result<(), EngineError> {
     let gamestate = self.gamestate()?;
     for modid in modids {
-      let dirty = gamestate.mark_clean(&modid)? ||
-        self.module_context_cache.get(modid).is_none();
-      if let Some(module) = self.session()?.module(&modid) && dirty {
+      let dirty = gamestate.mark_clean(modid)? ||
+        !self.module_context_cache.contains_key(modid);
+      if let Some(module) = self.session()?.module(modid) && dirty {
         let mut f2 = PromptFormatter::new();
         module.context(gamestate.clone(), &mut f2).await?;
         self.module_context_cache.insert(modid.clone(), f2.finish());
@@ -334,6 +296,13 @@ impl NovelCraftEngine {
 
     f.writeline(&self.config.system_prompt)?;
     f.newline()?;
+
+    let exposition = self.session().map(|s| s.exposition.clone()).unwrap_or_default();
+    if !exposition.trim().is_empty() {
+      f.write("# Story premise")?;
+      f.indented(|f| f.write(&exposition))?;
+      f.newline()?;
+    }
 
     if !modids.is_empty() {
       f.write("# Gameplay module contexts")?;
@@ -366,14 +335,13 @@ impl NovelCraftEngine {
 fn build_agent_loop(
   agent_loop: Option<AgentLoop<GameStateView>>,
   config: &NovelCraftConfig,
-  session: Option<&SessionV1>,
+  session: Option<&SessionV2>,
 ) -> Option<AgentLoop<GameStateView>> {
-  let Some(session) = session else { return None };
   let mut agent_loop = agent_loop.unwrap_or_default();
   config.contribute(Some(&mut agent_loop));
   Some(agent_loop
     .with_toolsets(
-      session.modules
+      session?.modules
         .values()
         .map(|m| m.clone().toolset())
     ))

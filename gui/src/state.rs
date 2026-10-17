@@ -2,9 +2,9 @@ use std::sync::OnceLock;
 
 use dioxus::prelude::*;
 use novelcraft_engine::config::NovelCraftConfig;
-use novelcraft_engine::game::pages::PageV1;
+use novelcraft_engine::game::turns::TurnV2;
 use novelcraft_engine::game::profile::ProfileV1;
-use novelcraft_engine::game::session::SessionV1;
+use novelcraft_engine::game::session::SessionV2;
 use novelcraft_engine::AgentMessageChunk;
 
 /// Result of an engine query, mirroring the semantics of the previous
@@ -112,8 +112,8 @@ pub static PROFILES: GlobalSignal<Query<Profiles>> = GlobalSignal::new(|| {
     .map(|config| Query::Recent(Profiles::from(config)))
     .unwrap_or(Query::Empty)
 });
-pub static SESSIONS: GlobalSignal<Query<Vec<SessionV1>>> = GlobalSignal::new(|| Query::Empty);
-pub static SESSION: GlobalSignal<Query<SessionV1>> = GlobalSignal::new(|| Query::Empty);
-pub static PAGE_INDEX: GlobalSignal<usize> = GlobalSignal::new(|| 0);
-pub static PAGE: GlobalSignal<Query<PageV1>> = GlobalSignal::new(|| Query::Empty);
+pub static SESSIONS: GlobalSignal<Query<Vec<SessionV2>>> = GlobalSignal::new(|| Query::Empty);
+pub static SESSION: GlobalSignal<Query<SessionV2>> = GlobalSignal::new(|| Query::Empty);
+pub static TURN_INDEX: GlobalSignal<usize> = GlobalSignal::new(|| 0);
+pub static TURN: GlobalSignal<Query<TurnV2>> = GlobalSignal::new(|| Query::Empty);
 pub static STREAM: GlobalSignal<Option<StreamState>> = GlobalSignal::new(|| None);

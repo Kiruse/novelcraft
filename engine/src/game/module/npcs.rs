@@ -14,10 +14,6 @@ pub struct NpcsModule {
 }
 
 impl NpcsModule {
-  pub const ID: &str = "npcs";
-
-  // fn id() -> String { Self::ID.to_string() }
-
   pub async fn context(&self, _state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
     if self.npcs.is_empty() { return Ok(()) };
 
@@ -53,7 +49,7 @@ impl NpcsModule {
   }
 }
 
-#[toolset]
+#[toolset(strip_suffix = "module")]
 impl AgentToolset<GameStateView> for NpcsModule {
   /// Update the named NPC's apparel.
   /// @name Name of the NPC whose apparel to update.

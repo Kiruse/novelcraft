@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use kiruklaw_agent_loop::{AgentToolset, ModelConfig, Toolset};
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +11,7 @@ use crate::util::prompting::{PromptFormatter, PromptifyResult};
 pub mod story;
 pub mod npcs;
 pub mod player;
+pub mod memory;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GameplayModule {
@@ -21,14 +24,29 @@ pub enum GameplayModule {
   /// Player module manages player-relevant state. Initial state
   /// is populated from profiles + story module.
   Player(player::PlayerModule),
+
+  /// Memory module provides long-term memory: rolling story summary &
+  /// agent-maintained chapter notes.
+  Memory(memory::MemoryModule),
 }
 
 impl GameplayModule {
+  /// Fresh instances of all existing gameplay modules, keyed by module ID.
+  pub fn default_set() -> HashMap<String, GameplayModule> {
+    HashMap::from([
+      (story::StoryModule::ID.to_string(), GameplayModule::Story(Default::default())),
+      (npcs::NpcsModule::ID.to_string(), GameplayModule::Npcs(Default::default())),
+      (player::PlayerModule::ID.to_string(), GameplayModule::Player(Default::default())),
+      (memory::MemoryModule::ID.to_string(), GameplayModule::Memory(Default::default())),
+    ])
+  }
+
   pub fn as_toolset(&self) -> &dyn AgentToolset<GameStateView> {
     match self {
       Self::Story(module)  => module,
       Self::Npcs(module)   => module,
       Self::Player(module) => module,
+      Self::Memory(module) => module,
     }
   }
 
@@ -37,6 +55,7 @@ impl GameplayModule {
       Self::Story(_)  => story::StoryModule::ID,
       Self::Npcs(_)   => npcs::NpcsModule::ID,
       Self::Player(_) => player::PlayerModule::ID,
+      Self::Memory(_) => memory::MemoryModule::ID,
     }
   }
 
@@ -47,7 +66,7 @@ impl GameplayModule {
     }
   }
 
-  pub async fn handle<'a>(&'a self, ctx: GameStateView, tool_name: &str, args: String) -> String {
+  pub async fn handle(&self, ctx: GameStateView, tool_name: &str, args: String) -> String {
     self.as_toolset().handle(ctx, tool_name, args).await
   }
 
@@ -57,14 +76,16 @@ impl GameplayModule {
       Self::Story(module)  => module.context(state, f).await,
       Self::Npcs(module)   => module.context(state, f).await,
       Self::Player(module) => module.context(state, f).await,
+      Self::Memory(module) => module.context(state, f).await,
     }
   }
 
-  pub(crate) fn toolset<'a>(self) -> Toolset<GameStateView> {
+  pub(crate) fn toolset(self) -> Toolset<GameStateView> {
     Toolset::Immutable(match self {
       Self::Npcs(module)   => Box::new(module),
       Self::Player(module) => Box::new(module),
       Self::Story(module)  => Box::new(module),
+      Self::Memory(module) => Box::new(module),
     })
   }
 }

@@ -8,9 +8,12 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::sync::RwLock;
 
 use crate::error::EngineError;
-use crate::game::module::{GameplayModule};
-use crate::game::pages::{PageV1, Snapshot};
+use crate::game::module::GameplayModule;
 use crate::game::profile::ProfileV1;
+use crate::game::turns::TurnV2;
+
+/// Gamestate snapshot: module ID => module state as a JSON object.
+pub type Snapshot = JsonMap<String, JsonValue>;
 
 /// GameState is effectively a handle to the shared game state.
 /// Every module has its own [RwLock]ed state, and it is the
@@ -28,11 +31,21 @@ pub struct GameState {
 }
 
 impl GameState {
-  pub fn new(snapshot: Snapshot, profile: Option<Arc<ProfileV1>>) -> Result<Self, EngineError> {
+  /// Build a game state from the given snapshot. Module IDs missing from the
+  /// snapshot are seeded with empty state so that modules can always write
+  /// their keys.
+  pub fn new(
+    snapshot: Snapshot,
+    module_ids: impl IntoIterator<Item = String>,
+    profile: Option<Arc<ProfileV1>>,
+  ) -> Result<Self, EngineError> {
+    let mut snapshot = snapshot;
+    for id in module_ids {
+      snapshot.entry(id).or_insert_with(|| json!({}));
+    }
     Ok(Self {
       storage: Self::build_storage(snapshot)?,
       profile,
-      ..Default::default()
     })
   }
 
@@ -64,15 +77,13 @@ impl GameState {
     Ok(module.dirty.swap(false, Ordering::AcqRel))
   }
 
-  /// Replay the tool calls that happened during the given pages and
+  /// Replay the tool calls that happened during the given turns and
   /// mutate the GameState.
-  pub async fn replay(&self, modules: &HashMap<String, GameplayModule>, pages: &[PageV1]) -> Result<(), EngineError> {
-    let tool_calls = pages
+  pub async fn replay(&self, modules: &HashMap<String, GameplayModule>, turns: &[TurnV2]) -> Result<(), EngineError> {
+    let tool_calls = turns
       .iter()
-      .map(|page| &page.responses)
-      .flatten()
-      .map(|res| &res.tool_calls)
-      .flatten();
+      .flat_map(|turn| &turn.responses)
+      .flat_map(|res| &res.tool_calls);
     for tc in tool_calls {
       if tc.name.find("::").is_none() {
         return Err(EngineError::input(format!("invalid tool name {}", tc.name)));
@@ -82,7 +93,9 @@ impl GameState {
       let module_name = parts.next().ok_or(EngineError::input("expected module name"))?;
       let tool_name = parts.next().ok_or(EngineError::input("expected tool name"))?;
 
-      let module = &modules[module_name];
+      let module = modules.get(module_name).ok_or_else(|| {
+        EngineError::input(format!("unknown module {module_name} in recorded tool call {}", tc.name))
+      })?;
       let ctx = self.view(module_name.to_string());
       let response = module.handle(ctx, tool_name, tc.arguments.clone()).await;
       if response.starts_with("Error:") {
@@ -137,44 +150,40 @@ impl ModuleState {
     }
 
     let guard = self.storage.read().await;
-    let Some(mut curr) = guard.get(&keypath[0]) else { return None };
+    let mut curr = guard.get(&keypath[0])?;
 
     for keypart in &keypath[1..] {
-      if let Some(value) = curr.get(keypart) {
-        curr = value;
-      } else {
-        return None;
-      }
+      curr = curr.get(keypart)?;
     }
-    return Some(serde_json::from_value(curr.clone()));
+    Some(serde_json::from_value(curr.clone()))
   }
 
-  /// Set a value at the given keypath. Only the module itself is allowed to set the value,
-  /// exposed through the [GameStateView] struct.
+  /// Set a value at the given keypath. Missing keys along the path are
+  /// auto-created as JSON objects. Only the module itself is allowed to set
+  /// the value, exposed through the [GameStateView] struct.
   async fn set<T: Serialize>(&self, keypath: &[String], value: &T) -> Result<(), EngineError> {
     if keypath.is_empty() {
       return Err(EngineError::input("empty keypath"));
     }
 
-    let e_not_found = EngineError::not_found(format!("Keypath \"{}\"", keypath.join(".")));
+    let value = serde_json::to_value(value)?;
     let mut guard = self.storage.write().await;
+    let mut curr: &mut JsonMap<String, JsonValue> = &mut guard;
 
-    let Some(mut curr) = guard.get_mut(&keypath[0]) else {
-      return Err(e_not_found);
-    };
-
-    for (i, keypart) in keypath[1..keypath.len() - 1].iter().enumerate() {
-      if !curr.is_object() {
-        return Err(EngineError::state(format!("not a JSON object at {}", keypath[0..i].join("."))));
+    for (i, keypart) in keypath.iter().enumerate() {
+      if i + 1 == keypath.len() {
+        curr.insert(keypart.clone(), value);
+        return Ok(());
       }
-      curr = curr.as_object_mut()
-        .unwrap()
-        .entry(keypart)
-        .or_insert(json!({}));
+      if !curr.get(keypart).is_some_and(|v| v.is_object()) {
+        curr.insert(keypart.clone(), json!({}));
+      }
+      curr = curr.get_mut(keypart)
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| EngineError::state(format!("not a JSON object at {}", keypath[..=i].join("."))))?;
     }
 
-    curr[keypath.last().unwrap()] = serde_json::to_value(value)?;
-    Ok(())
+    unreachable!()
   }
 }
 
@@ -196,7 +205,7 @@ pub struct GameStateView {
 impl GameStateView {
   /// Get & deserialize a value from the given gameplay module at the given keypath.
   pub async fn get<D: DeserializeOwned>(&self, module: &String, keypath: &[String]) -> Option<Result<D, serde_json::Error>> {
-    let Some(module) = self.gamestate.get(module) else { return None };
+    let module = self.gamestate.get(module)?;
     module.get(keypath).await
   }
 

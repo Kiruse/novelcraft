@@ -1,13 +1,14 @@
 use dioxus::prelude::*;
-use novelcraft_engine::game::pages::PageV1;
+use novelcraft_engine::game::module::memory::MemoryState;
+use novelcraft_engine::game::turns::TurnV2;
 
 use crate::comps::{CloseButton, Loading, INPUT_CLASS};
 use crate::engine;
-use crate::state::{StreamState, PAGE, PAGE_INDEX, PROFILES, SESSION, STREAM};
+use crate::state::{StreamState, PROFILES, SESSION, STREAM, TURN, TURN_INDEX};
 
-/// Swipe distance (in logical pixels) required to flip to the adjacent page.
+/// Swipe distance (in logical pixels) required to flip to the adjacent turn.
 const SWIPE_THRESHOLD: f64 = 60.0;
-/// Width of the toggleable game state side bar.
+/// Width of the toggleable story memory side bar.
 const SIDEBAR_WIDTH_PX: f64 = 280.0;
 
 #[component]
@@ -18,7 +19,7 @@ pub fn StoryGameplay(id: String) -> Element {
   // Horizontal start position of the active swipe gesture, if any.
   let mut swipe_start: Signal<Option<f64>> = use_signal(|| None);
 
-  // Load the session into the engine, then open its last page.
+  // Load the session into the engine, then open its last turn.
   use_hook(move || {
     let id = id.clone();
     spawn(async move {
@@ -34,7 +35,7 @@ pub fn StoryGameplay(id: String) -> Element {
 
   let streaming = STREAM.read().is_some();
   let can_send = !streaming
-    && engine::session_page_count().is_some()
+    && engine::session_turn_count().is_some()
     && !input.read().trim().is_empty();
 
   let mut submit = move || {
@@ -47,18 +48,18 @@ pub fn StoryGameplay(id: String) -> Element {
     }
     input.set(String::new());
 
-    let Some(count) = engine::session_page_count() else { return };
-    let page_idx = *PAGE_INDEX.read();
-    // Fork from the current page only when not already on the last page.
-    let from_page = (page_idx + 1 < count).then_some(page_idx);
-    engine::prompt(content, from_page);
+    let Some(count) = engine::session_turn_count() else { return };
+    let turn_idx = *TURN_INDEX.read();
+    // Fork from the current turn only when not already on the last turn.
+    let from_turn = (turn_idx + 1 < count).then_some(turn_idx);
+    engine::prompt(content, from_turn);
   };
 
   rsx! {
     div {
       class: "flex flex-col items-center w-full h-full bg-nc-bg text-nc-text",
       onkeydown: move |ev: KeyboardEvent| {
-        // Page navigation via alt+arrows, mirroring the previous global
+        // Turn navigation via alt+arrows, mirroring the previous global
         // keybindings (scoped to the gameplay screen).
         if ev.data.modifiers().contains(Modifiers::ALT) {
           match ev.data.key() {
@@ -104,7 +105,7 @@ pub fn StoryGameplay(id: String) -> Element {
           },
           onpointerup: move |_| swipe_start.set(None),
           onpointerleave: move |_| swipe_start.set(None),
-          { page_content_ui() }
+          { turn_content_ui() }
         }
         { sidebar_open.read().then(|| rsx! { Sidebar {} }) }
       }
@@ -143,7 +144,7 @@ pub fn StoryGameplay(id: String) -> Element {
   }
 }
 
-fn page_content_ui() -> Element {
+fn turn_content_ui() -> Element {
   if let Some(stream) = &*STREAM.read() {
     return stream_card(stream);
   }
@@ -157,39 +158,39 @@ fn page_content_ui() -> Element {
     };
   };
 
-  // Fresh session — there are no pages to fetch yet.
-  if session.page_count == 0 {
+  // Fresh session — there are no turns to fetch yet.
+  if session.turn_count() == 0 {
     return rsx! { "Send your first prompt to begin the story ..." };
   }
 
-  let page_q = PAGE.read();
-  let Some(page) = page_q.value() else {
-    return if page_q.error().is_some() {
-      rsx! { div { class: "text-nc-dangerfg", "Failed to load page" } }
+  let turn_q = TURN.read();
+  let Some(turn) = turn_q.value() else {
+    return if turn_q.error().is_some() {
+      rsx! { div { class: "text-nc-dangerfg", "Failed to load turn" } }
     } else {
-      rsx! { Loading { text: "Loading page ..." } }
+      rsx! { Loading { text: "Loading turn ..." } }
     };
   };
 
-  if page_is_empty(page) {
+  if turn_is_empty(turn) {
     rsx! { "Send your first prompt to begin the story ..." }
   } else {
-    page_card(page)
+    turn_card(turn)
   }
 }
 
 fn status_row_ui() -> Element {
-  let count = engine::session_page_count();
-  let page_index = *PAGE_INDEX.read();
+  let count = engine::session_turn_count();
+  let turn_index = *TURN_INDEX.read();
   let streaming = STREAM.read().is_some();
   let show_indicator = !streaming && count.is_some_and(|count| count > 0);
-  let show_jump = !streaming && count.is_some_and(|count| count > 0 && page_index + 1 < count);
+  let show_jump = !streaming && count.is_some_and(|count| count > 0 && turn_index + 1 < count);
 
   rsx! {
     div { class: "w-full flex flex-row justify-center items-center gap-3",
       { show_indicator.then(|| {
           rsx! {
-            div { class: "text-sm text-nc-label", "{page_index + 1}/{count.unwrap()}" }
+            div { class: "text-sm text-nc-label", "{turn_index + 1}/{count.unwrap()}" }
           }
       }) }
       { show_jump.then(|| {
@@ -287,30 +288,98 @@ fn profile_popover_ui(mut popover_open: Signal<bool>) -> Element {
 
 #[component]
 fn Sidebar() -> Element {
+  // The sidebar is only mounted while open, so this fetches on every open.
+  let mut memory: Signal<Option<Result<MemoryState, String>>> = use_signal(|| None);
+  use_hook(move || {
+    spawn(async move {
+      let res = engine::memory_async().await.map_err(|err| err.to_string());
+      memory.set(Some(res));
+    });
+  });
+
+  let exposition = SESSION.read().value()
+    .map(|session| session.exposition.clone())
+    .unwrap_or_default();
+  let memory_body = match memory.read().as_ref() {
+    None => rsx! { Loading { text: "Loading memory ..." } },
+    Some(Err(err)) => rsx! { div { class: "text-nc-dangerfg text-sm", "{err}" } },
+    Some(Ok(mem)) => memory_ui(&exposition, mem),
+  };
+
   rsx! {
     div {
-      class: "flex-none h-full border-l p-4 border-nc-border",
+      class: "flex-none h-full border-l p-4 border-nc-border overflow-y-auto",
       style: "width: {SIDEBAR_WIDTH_PX}px",
-      div { class: "text-sm text-nc-label", "Game state \u{2014} coming soon" }
+      div { class: "text-sm text-nc-label mb-3", "Story memory" }
+      { memory_body }
     }
   }
 }
 
-fn page_is_empty(page: &PageV1) -> bool {
-  page.prompt.is_none()
-    && page.responses.iter().all(|response| response.content.is_none())
+fn memory_ui(exposition: &str, mem: &MemoryState) -> Element {
+  let premise_empty = exposition.trim().is_empty();
+  let summary_empty = mem.summary.trim().is_empty();
+
+  rsx! {
+    div { class: "flex flex-col gap-4 text-sm",
+      { (!premise_empty).then(|| rsx! {
+        div { class: "flex flex-col gap-1",
+          div { class: "text-nc-label", "Premise" }
+          div { class: "whitespace-pre-wrap", { exposition.to_string() } }
+        }
+      }) }
+      { (!summary_empty).then(|| rsx! {
+        div { class: "flex flex-col gap-1",
+          div { class: "text-nc-label", "Story so far" }
+          div { class: "whitespace-pre-wrap", { mem.summary.clone() } }
+        }
+      }) }
+      { (!mem.chapters.is_empty()).then(|| rsx! {
+        div { class: "flex flex-col gap-2",
+          div { class: "text-nc-label", "Chapters" }
+          for chapter in mem.chapters.iter().filter(|ch| !ch.title.trim().is_empty() || !ch.notes.trim().is_empty()) {
+            {
+              let title = if chapter.title.trim().is_empty() {
+                "Current chapter".to_string()
+              } else {
+                chapter.title.clone()
+              };
+              rsx! {
+                div {
+                  key: "{chapter.title}",
+                  class: "flex flex-col gap-1",
+                  div { class: "font-medium", { title } }
+                  { (!chapter.notes.trim().is_empty()).then(|| rsx! {
+                    div { class: "text-nc-label whitespace-pre-wrap", { chapter.notes.trim().to_string() } }
+                  }) }
+                }
+              }
+            }
+          }
+        }
+      }) }
+      { (premise_empty && summary_empty && mem.chapters.is_empty()).then(|| rsx! {
+        div { class: "text-nc-label", "The story has no memory yet." }
+      }) }
+    }
+  }
 }
 
-fn page_card(page: &PageV1) -> Element {
+fn turn_is_empty(turn: &TurnV2) -> bool {
+  turn.prompt.is_none()
+    && turn.responses.iter().all(|response| response.content.is_none())
+}
+
+fn turn_card(turn: &TurnV2) -> Element {
   rsx! {
     div { class: "w-full flex flex-col gap-3",
-      for prompt in page.prompt.iter() {
+      for prompt in turn.prompt.iter() {
         div {
           class: "w-full p-3 border rounded-sm border-nc-border text-nc-label",
           { prompt.clone() }
         }
       }
-      for content in page.responses.iter().filter_map(|response| response.content.as_ref()) {
+      for content in turn.responses.iter().filter_map(|response| response.content.as_ref()) {
         div { class: "w-full", { content.clone() } }
       }
     }

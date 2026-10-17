@@ -41,8 +41,10 @@ impl ModelFields {
 pub fn Settings() -> Element {
   let mut steps = use_signal(String::new);
   let mut system_prompt = use_signal(String::new);
+  let mut threshold = use_signal(String::new);
   let mut dm = use_signal(ModelFields::default);
   let mut suggestions = use_signal(ModelFields::default);
+  let mut summarizer = use_signal(ModelFields::default);
 
   // Populate the fields from the config query as soon as (and whenever)
   // it publishes a value.
@@ -50,8 +52,10 @@ pub fn Settings() -> Element {
     let Query::Recent(config) = &*CONFIG.read() else { return };
     steps.set(config.max_agent_steps.to_string());
     system_prompt.set(config.system_prompt.clone());
+    threshold.set(config.summary_threshold.to_string());
     dm.set(ModelFields::from_config(&config.models[ModelPurpose::DungeonMaster]));
     suggestions.set(ModelFields::from_config(&config.models[ModelPurpose::Suggestions]));
+    summarizer.set(ModelFields::from_config(&config.models[ModelPurpose::Summarizer]));
   });
 
   let save = move |_| {
@@ -61,9 +65,15 @@ pub fn Settings() -> Element {
       .trim()
       .parse()
       .unwrap_or(config.max_agent_steps);
+    config.summary_threshold = threshold
+      .read()
+      .trim()
+      .parse()
+      .unwrap_or(config.summary_threshold);
     config.system_prompt = system_prompt.read().clone();
     config.models[ModelPurpose::DungeonMaster] = dm.read().clone().into_config();
     config.models[ModelPurpose::Suggestions] = suggestions.read().clone().into_config();
+    config.models[ModelPurpose::Summarizer] = summarizer.read().clone().into_config();
 
     spawn(async move {
       match engine::save_config(config).await {
@@ -85,6 +95,13 @@ pub fn Settings() -> Element {
           oninput: move |ev: FormEvent| steps.set(ev.value()),
         }
       }
+      Field { label: "Summary Threshold (turns)",
+        input {
+          class: INPUT_CLASS,
+          value: "{threshold}",
+          oninput: move |ev: FormEvent| threshold.set(ev.value()),
+        }
+      }
       Field { label: "System Prompt",
         textarea {
           class: INPUT_CLASS,
@@ -97,6 +114,7 @@ pub fn Settings() -> Element {
         div { class: "text-xl", "Models" }
         ModelGroup { label: ModelPurpose::DungeonMaster.as_str(), fields: dm }
         ModelGroup { label: ModelPurpose::Suggestions.as_str(), fields: suggestions }
+        ModelGroup { label: ModelPurpose::Summarizer.as_str(), fields: summarizer }
       }
       Button { label: "Save", variant: BtnVariant::Primary, on_click: save }
     }

@@ -6,93 +6,93 @@ This document describes the code styling, import patterns, and conventions used 
 
 ### Formatting
 
-The Rust workspace uses [`rustfmt`](https://rust-lang.github.io/rustfmt/) with a project-level config:
+Formatting is **manual** — **never run `cargo fmt`, `just fmt`, or `just fmt-check`**. rustfmt is not well suited for this codebase's UI code (rsx blocks & long attribute chains). The indentation convention is 2 spaces (`engine/src/rustfmt.toml` sets `tab_spaces = 2`); match the style of surrounding code by hand.
 
-- **Indentation**: 2 spaces (`tab_spaces = 2`)
-- Format with `just fmt`, verify with `just fmt-check`
+### Engine Methods
 
-### Engine Command Functions
-
-All command functions are plain `pub async fn` taking `&AppState` as the first parameter (or no state for read-only operations). No `#[tauri::command]` or `#[specta::specta]` decorators.
+Engine functionality lives as methods on `NovelCraftEngine` (`engine/src/game/engine.rs`) — or on `SessionV2`/`GameState` when it belongs at that layer. There is no `AppState` and no `commands/` module tree.
 
 ```rust
-use novelcraft_engine::AppState;
+use novelcraft_engine::game::session::SessionV2;
 
-pub async fn session_list(app: &AppState) -> Result<Vec<SessionMeta>> {
-    // ...
-}
+let sessions = NovelCraftEngine::list_sessions().await?;
+let mut session = SessionV2::load(id, &profiles).await?;
+session.fork(turn_index, &profiles).await?;
 ```
 
-- Return `Result<T>` using the engine's error type
-- Ensure parameter/return types derive `Serialize`/`Deserialize` as needed
-- One file per domain in `engine/src/commands/`
+- Return `Result<T>` using the engine's error type (`EngineError`)
+- Types crossing the GUI boundary derive `Serialize`/`Deserialize` as needed
+- Game-engine code is grouped by layer: `game/engine.rs`, `game/session.rs`, `game/turns.rs`, `game/state.rs`, `game/module/*`
 
 ### Import Patterns
 
 - **Within engine**: Standard Rust `mod`/`use` paths. No special aliases.
-- **GUI depends on engine**: `use novelcraft_engine::commands::...` (or re-exports from `novelcraft_engine::*`).
+- **GUI depends on engine**: `use novelcraft_engine::game::session::SessionV2;`, `use novelcraft_engine::config::NovelCraftConfig;`, etc. Screens never import engine types directly — data flows through `gui/src/engine.rs` (bridge) and `gui/src/state.rs` (signals).
 
 ### Async/Await
 
 Always use `async/await` for async operations:
 
 ```rust
-let sessions = session::session_list(&app).await?;
-session::session_save_meta(&app, id, updated_meta).await?;
+let sessions = NovelCraftEngine::list_sessions().await?;
+session.save().await?;
 ```
 
 ### Error Handling
 
-Functions return `Result<T>` and use `?` for propagation. Errors are defined in `engine/src/error.rs` using `thiserror`.
+Functions return `Result<T>` and use `?` for propagation. Errors are defined in `engine/src/error.rs` using `thiserror` (`EngineError`, with helpers like `EngineError::state`, `EngineError::validation`); the GUI wraps them in `GuiError` (`gui/src/error.rs`).
 
 ```rust
-if !session {
-    return Err(Error::SessionNotFound(id.to_string()));
+if session.turn_count() == 0 {
+    return Err(EngineError::state("fresh session"));
 }
 ```
 
 ### State Management
 
-`AppState` uses `Arc<Mutex<T>>` pattern — constructed via `AppState::init()`, shared across engine functions by reference (`&AppState`).
+There is no `AppState`. The engine is a single `NovelCraftEngine` value owning the config and the active session (`Option<SessionV2>`). The GUI holds it process-wide behind `OnceLock<Arc<tokio::sync::Mutex<NovelCraftEngine>>>` (`gui/src/engine.rs`); all access locks the mutex — operations are serialized.
 
 ```rust
-let models = app.models.lock().await;
-let config = app.config.lock().await;
+let engine = engine();
+let mut eng = engine.lock().await;
+eng.set_config(config);
 ```
 
 ### LLM Streaming
 
-All LLM calls go through `commands::llm::prompt()`, which takes callback closures:
+All LLM calls go through the engine, which runs the kiruklaw `AgentLoop` (HTTP streaming + SSE parsing live inside `kiruklaw-agent-loop`). Chunks stream to the caller through a tokio mpsc channel of `AgentMessageChunk`s:
 
 ```rust
-commands::llm::prompt(
-    &app,
-    request,
-    OnText { |chunk| /* handle text */ },
-    OnReasoning { |chunk| /* handle reasoning */ },
-    OnToolCall { |delta| /* handle tool call */ },
-    OnError { |msg| /* handle error */ },
-    OnDone { |reason, usage| /* handle completion */ },
-)?;
+let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentMessageChunk>(100);
+engine.prompt(content, tx).await?;
+
+while let Some(chunk) = rx.recv().await {
+    match chunk {
+        AgentMessageChunk::Content { text } => { /* append text */ }
+        AgentMessageChunk::ToolCallStart { .. } | AgentMessageChunk::ToolCallArgs { .. } => { /* activity */ }
+        AgentMessageChunk::Reasoning { .. } | AgentMessageChunk::Done { .. } => { /* ignore */ }
+    }
+}
 ```
+
+Memory compression additionally uses a one-shot `kiruklaw_agent_loop::prompt` call (no agent loop, no tools) with the `Summarizer` model and `SUMMARIZER_PERSONA` (`engine/src/game/module/memory.rs`).
 
 ### Data Persistence
 
-All data access goes through engine command functions — never direct file I/O from the GUI layer.
+All data access goes through engine types (`NovelCraftEngine`, `SessionV2`) — never direct file I/O from the GUI layer. Path resolution is centralized in `engine/src/paths.rs`.
 
 ```rust
-use novelcraft_engine::AppState;
-use novelcraft_engine::commands::{session, profile, story, lore};
+use novelcraft_engine::game::engine::NovelCraftEngine;
+use novelcraft_engine::game::session::SessionV2;
 
-let sessions = session::session_list(&app).await?;
-session::session_create(&app, id, story_id, title, description).await?;
-session::session_push_page(&app, id, page_entry).await?;
-let result = profile::profile_list(&app).await?;
-let story = story::story_get(&app, id).await?;
-let results = lore::lore_query(&app, id, "search").await?;
+let sessions = NovelCraftEngine::list_sessions().await?;   // associated fn: metadata only, newest first
+let mut engine = NovelCraftEngine::new(config);
+let session = engine.create_session(title, exposition).await?; // &mut self
+let mut session = SessionV2::load(id, &profiles).await?;
+session.save().await?;                                     // meta + snapshot + history
 ```
 
-**No transactions**: Each function call is independent. Consumers drive sequential operations.
+**No transactions**: each save writes whole files. Consumers drive sequential operations.
 
 ### Inspiration REST Client
 

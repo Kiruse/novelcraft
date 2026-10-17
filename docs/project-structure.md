@@ -16,34 +16,31 @@ novelcraft/
 ├── engine/                           # Rust library crate (novelcraft-engine)
 │   ├── Cargo.toml                    # Engine dependencies
 │   └── src/
-│       ├── lib.rs                    # Crate root — re-exports modules
-│       ├── util.rs                   # SSE stream parsing (StreamEvent, process_stream), file I/O helpers
-│       ├── config.rs                 # App configuration (NovelCraftConfig)
-│       ├── error.rs                  # Error types
-│       ├── commands/
-│       │   ├── mod.rs                # Module barrel
-│       │   ├── paths.rs              # Centralized data/config directory resolution
-│       │   ├── llm.rs                # LLM proxy (HTTP streaming via reqwest, callback-based, model config)
-│       │   ├── game.rs               # Game agent loop (game_prompt, game_fork, game_sessions, game_page)
-│       │   ├── profile.rs            # Profile persistence (OnceCell<Mutex<ProfilesFile>>)
-│       │   ├── session.rs            # Session/page/snapshot persistence (JSON files)
-│       │   ├── story.rs              # Story persistence (JSON files)
-│       │   ├── lore.rs               # Lore persistence (JSON files)
-│       │   └── fs.rs                 # File operations (export/import, file dialogs)
-│       ├── markdown/
-│       │   ├── mod.rs                # Module barrel
-│       │   └── todo.rs               # TodoItem/TodoList parsing & diffing
-│       ├── game/                     # Game engine types
-│       │   ├── mod.rs                # Module barrel
-│       │   ├── engine.rs             # GameEngine (session creation/loading, page CRUD, fork, history, LRU page cache)
-│       │   ├── session.rs            # Game session model (SessionV1, file-based persistence)
-│       │   ├── pages.rs              # Page types (PageV1, PageBatch, ResponseV1)
-│       │   ├── state.rs              # AppState (config + profiles, initialized in lib.rs setup)
-│       │   └── module.rs             # Game module abstractions
-│       └── infer/                    # Inference types
-│           ├── mod.rs                # Module barrel (pub mod api, pub mod internal)
-│           ├── api.rs                # OpenAI API types (request/response structs for SSE)
-│           └── internal.rs           # Command-level types (ModelConfig, LlmMessage, LlmTool, etc.)
+│       ├── lib.rs                    # Crate root — module declarations + kiruklaw re-exports (agent_loop, AgentMessageChunk)
+│       ├── config.rs                 # NovelCraftConfig, ModelPurpose, Models, DEFAULT_HOST / DEFAULT_SYSTEM_PROMPT / DEFAULT_SUMMARY_THRESHOLD
+│       ├── error.rs                  # EngineError (thiserror)
+│       ├── paths.rs                  # data_dir(), config_dir(), sessions_dir() — centralized path resolution
+│       ├── rustfmt.toml              # tab_spaces = 2 (formatting is manual — do not run rustfmt)
+│       ├── util/                     # Engine utilities
+│       │   ├── mod.rs                # JSON file I/O helpers (serialize, deserialize), RFC3339 timestamp serde, discard_channel
+│       │   └── prompting.rs          # PromptFormatter / Promptify — indented prompt text building (with unit tests)
+│       ├── markdown/                 # Markdown parsing utilities
+│       │   ├── mod.rs                # Module barrel (re-exports bullets + todo)
+│       │   ├── todo.rs               # TodoItem / TodoList / TodoListDiff — timeline parsing & diffing
+│       │   └── bullets.rs            # BulletList parser — validates chapter notes ("- " per line)
+│       └── game/                     # Game engine
+│           ├── mod.rs                # Module barrel
+│           ├── engine.rs             # NovelCraftEngine — prompt/rewrite/fork, create_session, list_sessions, memory, module-context cache
+│           ├── session.rs            # SessionV2 — persistence (meta/snapshot/history), fork, memory compression (render_transcript, summarize)
+│           ├── turns.rs              # TurnV2 / AgentResponse + conversation reconstruction
+│           ├── state.rs              # GameState / ModuleState / GameStateView — per-module JSON state, replay, snapshots
+│           ├── profile.rs            # ProfileV1 — persisted inside config.json
+│           └── module/               # Gameplay modules
+│               ├── mod.rs            # GameplayModule enum (Story/Npcs/Player/Memory), default_set(), toolset/context glue
+│               ├── story.rs          # story — timeline TODO list (manage_timeline tool)
+│               ├── npcs.rs           # npcs — NPC persistence
+│               ├── player.rs         # player — player-relevant state
+│               └── memory.rs         # memory — rolling summary / chapters, SUMMARIZER_PERSONA
 ├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft)
 │   ├── Cargo.toml                    # GUI dependencies (dioxus, novelcraft-engine, reqwest, chrono, log, tokio)
 │   ├── Dioxus.toml                   # dx config (app name, bundle identifier)
@@ -51,25 +48,26 @@ novelcraft/
 │   ├── input.css                     # Tailwind source: @theme tokens, base rules
 │   ├── assets/tailwind.css           # Compiled stylesheet (build artifact, do not edit)
 │   └── src/
-│       ├── main.rs                   # Entry point — engine init, BOOT_CONFIG, launch, App
-│       ├── engine.rs                 # Engine bridge — all engine access & query refreshes
-│       ├── state.rs                  # Global reactive state — Query<T>, GlobalSignals
+│       ├── main.rs                   # Entry point — config load, engine construction, BOOT_CONFIG stash, launch, App
+│       ├── engine.rs                 # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded refreshes, window-relative turn navigation
+│       ├── state.rs                  # Global reactive state — Query<T>, GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs                  # Toast notifications (global signal + overlay component)
 │       ├── comps.rs                  # Shared components (Screen, Button, Chip, Field, ...)
+│       ├── titlebar.rs               # Window chrome — custom title bar (drag/min/max/close) + resize handles
 │       ├── api.rs                    # Inspiration REST client (API_BASE_URL, get_json)
 │       ├── error.rs                  # GuiError (Engine/Api variants)
 │       └── screens/
 │           ├── mod.rs                # Route enum (Routable) + go_back()
 │           ├── home.rs               # Session list
-│           ├── settings.rs           # Engine config editor
-│           ├── create_story.rs       # New vignette + inspiration browser
-│           ├── story_overview.rs     # Story detail + Play button
-│           └── story_gameplay.rs     # Game view — pages, streaming, chat bar
+│           ├── settings.rs           # Engine config editor (three model groups, system prompt, summary threshold)
+│           ├── create_story.rs       # New vignette + inspiration browser (debounced tag-filtered fetches)
+│           ├── story_overview.rs     # Session detail (title/exposition) + Play/Delete buttons
+│           └── story_gameplay.rs     # Game view — turn cards, streaming, chat bar, memory sidebar, profile popover, swipe
 └── docs/                             # Project documentation
     ├── project-structure.md          # This file
     ├── code-conventions.md           # Code styling and conventions
     ├── database-schema.md            # JSON file formats and storage layout
-    ├── api-routes.md                 # Engine command function reference
+    ├── api-routes.md                 # Engine API reference (NovelCraftEngine methods)
     ├── gui-architecture.md           # Dioxus GUI components, screens, styling conventions
     └── frontend-architecture.md      # [vestigial] Vue/Tauri frontend (no longer used)
 ```
@@ -81,50 +79,40 @@ novelcraft/
 Pure Rust library with all business logic. No UI framework coupling.
 
 **`engine/src/`**
-- `lib.rs` — Crate root, re-exports modules
-- `util.rs` — SSE stream parsing (`StreamEvent` enum, `process_stream()`), file I/O helpers (`serialize`, `deserialize`, `deserialize_sync`, `ensure_dir`)
-- `config.rs` — `NovelCraftConfig` struct (holds `max_agent_steps: u8`, default 10). Loaded from `{configDir}/config.json`. Held in `AppState.config: Mutex<NovelCraftConfig>`.
-- `error.rs` — Error types using `thiserror`
-- `commands/` — Engine command functions (plain `pub async fn`)
-  - `paths.rs` — `data_dir()`, `config_dir()` — centralized path resolution via `dirs::data_dir()` / `dirs::config_dir()`
-  - `llm.rs` — LLM proxy: builds requests, streams from OpenAI-compatible API via `reqwest`, delegates SSE parsing to `util::process_stream()`, invokes callback closures. Model registry (`Models` struct) in `AppState.models: Mutex<Models>`.
-  - `game.rs` — Game agent loop: `game_prompt` runs an async agent loop reading session history, iterating LLM calls (up to `max_agent_steps`). `game_fork` truncates at a page index then runs the agent loop. Events delivered via generic `on_event: F` callback.
-  - `profile.rs` — Profile CRUD for `profiles.json`. Uses `OnceCell<Mutex<ProfilesFile>>` pattern.
-  - `session.rs` — Session/page/snapshot CRUD. All types include `version` field with `read_versioned_json()`.
-  - `story.rs` — Story CRUD for `stories/{id}.json`. Version-gated deserialization.
-  - `lore.rs` — Lore query for `lore/{id}.json`. Version-gated deserialization.
-  - `fs.rs` — File operations: export/import session JSON, native file/folder picker dialogs.
-- `game/` — Game engine types (separate from `commands/game.rs`)
-  - `engine.rs` — `GameEngine`: creates game sessions (`create_session`: fresh `SessionV1` with default instances of all gameplay modules and the active profile), loads game sessions, manages page batches, provides history for prompting, page CRUD, fork, lists sessions (metadata-only `SessionV1`s, newest first). Uses LRU cache (`moka::future::Cache`, capacity 8).
-  - `session.rs` — `SessionV1`: game session model with file-based persistence (`save`, `save_metadata`, `load`, `load_metadata`). `save` skips unattached placeholder page batches; `load` uses saturating arithmetic so zero-batch sessions load without underflow.
-  - `pages.rs` — Page types: `PageV1`, `PageBatch`, `ResponseV1`.
-  - `state.rs` — `AppState`: holds `config`, `profiles`, and `models` mutexes.
-  - `module.rs` — Game module abstractions.
-- `infer/` — LLM API type definitions
-  - `api.rs` — OpenAI API wire types: `ChatCompletionRequest`, `StreamResponse`, etc.
-  - `internal.rs` — Command-level types: `ModelConfig`, `LlmMessage`, `LlmPromptRequest`, etc.
-- `markdown/` — Markdown parsing utilities
-  - `todo.rs` — `TodoItem`, `TodoList`, `TodoListDiff` — parsing & diffing with unit tests
+- `lib.rs` — Crate root; declares the modules and re-exports `kiruklaw_agent_loop` as `agent_loop` plus `AgentMessageChunk`
+- `config.rs` — `NovelCraftConfig` (`max_agent_steps`, `system_prompt`, `models`, `summary_threshold`, `profiles`, `active_profile`). `ModelPurpose` enum (`DungeonMaster`/`Suggestions`/`Summarizer`); `Models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — config.json must contain all three keys. Persisted at `{configDir}/NovelCraft/config.json`. `contribute()` pushes max steps, persona & DM model into the agent loop
+- `error.rs` — `EngineError` (thiserror) with constructors like `EngineError::state`, `EngineError::validation`, `EngineError::module_not_found`
+- `paths.rs` — `data_dir()`, `config_dir()`, `sessions_dir()` — append `NovelCraft` to the platform directories (`dirs` crate); single source of truth for filesystem paths
+- `util/` — `mod.rs`: async/sync JSON file I/O (`serialize`, `deserialize`, `deserialize_sync`, `ensure_dir`), RFC3339 timestamp serde, `discard_channel`. `prompting.rs`: `PromptFormatter`/`Promptify` for building indented prompt text (used for module contexts, transcripts, summaries)
+- `markdown/` — `todo.rs`: `TodoList`/`TodoItem`/`TodoListDiff` (story timeline). `bullets.rs`: `BulletList` — every non-empty line must start with `"- "`; validates memory-chapter notes
+- `game/` — the game engine:
+  - `engine.rs` — `NovelCraftEngine`: owns config + active `SessionV2` + cached `AgentLoop`. `prompt`/`rewrite` run the DM agent loop (system message = persona + module contexts + player profile, then retained history); `fork`; `create_session`; `list_sessions` (metadata only, newest first); `memory()` read model; `compress_memory_if_due` after every commit
+  - `session.rs` — `SessionV2`: memory-managed session persisted as ONE file `{sessionsDir}/{id}.json` (file version gate `== 2`; carries metadata incl. `total_turns`, the gamestate `snapshot`, and the retained `turns`). `fork(turn_index, profiles)` only within the retained window; `compress_memory(threshold, model)` summarizes the oldest `threshold` turns into the rolling summary (one-shot `kiruklaw_agent_loop::prompt` with `SUMMARIZER_PERSONA`; nothing is mutated on LLM failure)
+  - `turns.rs` — `TurnV2` (`system`/`prompt`/`responses`), `AgentResponse` (content + tool calls + tool responses), `TurnV2::to_conversation` (rebuilds the agent-loop conversation from retained turns); `Snapshot` (module ID → JSON state map) lives in `state.rs`
+  - `state.rs` — `GameState` (per-module `RwLock`ed JSON state + dirty flags), `ModuleState::set` (auto-creates missing keys along the keypath), `GameState::replay` (re-applies recorded tool calls; errors on unknown modules), `GameStateView` (the only writer, scoped to one module)
+  - `profile.rs` — `ProfileV1` (`id`, `name`, `fields`, timestamps; `Promptify` impl for system-prompt injection)
+  - `module/` — `GameplayModule` enum + one file per module. IDs (`story`, `npcs`, `player`, `memory`) **must** equal the module's toolset namespace — the kiruklaw `#[toolset]` macro derives it from the snake_case struct name, with `#[toolset(strip_suffix = "module")]` stripping the `_module` suffix, and replay resolves recorded calls by it. `memory.rs` also defines `SUMMARIZER_PERSONA`, `MemoryState`/`ChapterV2`, and the `begin_chapter`/`note_events` tools
 
 ### `gui/` — Rust Binary Crate (`novelcraft-gui`, binary name: `novelcraft`)
 
 Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind CSS v4. Depends on `novelcraft-engine` as a library. Desktop is the primary target; Android/iOS are supported compile targets.
 
 **`gui/src/`**
-- `main.rs` — Binary entry point — engine construction, `BOOT_CONFIG` stash, `dioxus::LaunchBuilder` + window config, `App` component (stylesheet link, toast overlay, router)
-- `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `prompt` streaming), generation-guarded query refreshes, page navigation helpers
-- `state.rs` — Global reactive state — `Query<T>` (Empty/Error/Stale/Recent), `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `PAGE`/`PAGE_INDEX`, `STREAM`), `Profiles`/`StreamState` types
+- `main.rs` — Binary entry point — loads `NovelCraftConfig` (falls back to defaults), constructs the engine (`engine::init_engine`), stashes `BOOT_CONFIG`, `dioxus::LaunchBuilder` + undecorated window config, `App` component (stylesheet link, title bar, router, toast overlay)
+- `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `memory_async`, `prompt` streaming), generation-guarded query refreshes, window-relative turn navigation (`load_turn`/`goto`/`navigate`/`jump_to_end`)
+- `state.rs` — Global reactive state — `Query<T>` (Empty/Error/Stale/Recent), `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`/`StreamState` types
 - `toast.rs` — `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay component
 - `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` constant
+- `titlebar.rs` — Custom window chrome (`TitleBar`, `ResizeHandles`) for the undecorated window
 - `api.rs` — Inspiration REST client (`API_BASE_URL`, `get_json`)
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
 - `screens/` — `Route` enum (`mod.rs`, Dioxus Router) + one component module per screen
   - `mod.rs` — `Route` enum, `go_back()`
   - `home.rs` — Home screen (session launcher)
-  - `settings.rs` — Settings screen (config editor)
-  - `create_story.rs` — Vignette creation form + Get Inspired section (debounced tag-filtered fetches)
-  - `story_overview.rs` — Story overview (banner placeholder, title/premise, Play button)
-  - `story_gameplay.rs` — Gameplay screen (page viewport with swipe, streaming cards, chat bar, profile popover, sidebar placeholder)
+  - `settings.rs` — Settings screen (Max Agent Steps, Summary Threshold (turns), System Prompt, three model groups: Dungeon Master / Suggestions / Summarizer)
+  - `create_story.rs` — Vignette creation form (title + premise) + Get Inspired section (debounced tag-filtered fetches); submits via `engine::create_session`
+  - `story_overview.rs` — Session overview (banner placeholder, title/exposition, Play + Delete buttons; Delete opens a screen-local `ConfirmDialog` modal, then `engine::delete_session` removes the file and clears the engine's active session if it was the one deleted)
+  - `story_gameplay.rs` — Gameplay screen (turn cards with swipe, streaming cards, ☰ story-memory sidebar, status row, chat bar, profile popover)
 
 **`gui/` (non-Rust)**
 - `Dioxus.toml` — dx app config (name, bundle identifier)
@@ -145,25 +133,23 @@ The root `justfile` is the single source of truth for all build commands.
 | `just dev` | Run the app with hot-reload (Tailwind watcher + `dx serve --platform desktop`) |
 | `just css` | Compile the Tailwind stylesheet once (minified) |
 | `just build` | Bundle the app for the current platform (`just css` + `dx bundle --platform desktop`) |
+| `just llama` | Serve a local GGUF model on `:8888` via llama.cpp (matches `DEFAULT_HOST`) |
 | `just check` | Cargo check (entire workspace) |
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |
 | `just check-gui` | Cargo check (`novelcraft-gui` only) |
 | `just clippy` | Cargo clippy (entire workspace) |
-| `just fmt` | Cargo fmt (entire workspace) |
-| `just fmt-check` | Cargo fmt --check (entire workspace) |
+| `just fmt` / `just fmt-check` | **Do not use** — rustfmt is unsuited for this codebase's rsx-heavy UI code; formatting is manual |
 
 ## File Naming Conventions
 
-### Rust Commands
-- snake_case: `llm.rs`, `fs.rs`, `session.rs`, `story.rs`, `lore.rs`
-- One file per domain in `engine/src/commands/`
-
 ### Rust Source Files
-- snake_case: `main.rs`, `util.rs`, `config.rs`, `error.rs`
+- snake_case: `main.rs`, `config.rs`, `error.rs`, `paths.rs`, `session.rs`, `turns.rs`, `state.rs`, `profile.rs`
+- One file per gameplay module in `engine/src/game/module/`, named after the module struct (`story.rs` → `StoryModule`)
+- Directories group by layer: `util/`, `markdown/`, `game/module/`
 
 ## Related Documentation
 
 - [Code Conventions](./code-conventions.md) - Styling guidelines and import patterns
 - [Data Storage](./database-schema.md) - JSON file formats and storage layout
-- [Engine API](./api-routes.md) - Engine command function reference
+- [Engine API](./api-routes.md) - Engine API reference
 - [GUI Architecture](./gui-architecture.md) - Dioxus screens, components, and styling conventions

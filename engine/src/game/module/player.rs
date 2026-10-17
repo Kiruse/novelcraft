@@ -14,10 +14,6 @@ pub struct PlayerModule {
 }
 
 impl PlayerModule {
-  pub const ID: &str = "player";
-
-  fn id() -> String { Self::ID.to_string() }
-
   pub async fn init(&self, ctx: &mut GameplayModuleInitContext<'_>) -> Result<(), EngineError> {
     if let Some(profile) = ctx.profile {
       let mut fields = profile.fields.clone();
@@ -77,7 +73,7 @@ impl From<PlayerModule> for super::GameplayModule {
   }
 }
 
-#[toolset]
+#[toolset(strip_suffix = "module")]
 impl AgentToolset<GameStateView> for PlayerModule {}
 
 #[derive(Debug, Clone)]

@@ -11,10 +11,6 @@ use crate::util::prompting::{PromptFormatter, PromptifyResult};
 pub struct StoryModule {}
 
 impl StoryModule {
-  pub const ID: &str = "story";
-
-  fn id() -> String { Self::ID.to_string() }
-
   pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
     let Some(module) = state.get(&Self::id()) else { return Ok(()) };
     let timeline = module.get::<String>(&Keypath::Timeline.to_keypath())
@@ -29,7 +25,7 @@ impl StoryModule {
   }
 }
 
-#[toolset]
+#[toolset(strip_suffix = "module")]
 impl AgentToolset<GameStateView> for StoryModule {
   /// Manage the active timeline in the form of a TODO list. Checked-off items have been visited,
   /// unchecked items are outstanding. You may add new items (checked or unchecked), check off items,
