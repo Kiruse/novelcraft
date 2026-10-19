@@ -3,7 +3,7 @@ use novelcraft_engine::game::session::SessionV2;
 
 use super::Route;
 
-use crate::comps::{Loading, Screen};
+use crate::comps::{Loading, Markdown, Screen};
 use crate::engine;
 use crate::state::{Query, SESSIONS};
 
@@ -50,12 +50,20 @@ fn sessions_ui(q: &Query<Vec<SessionV2>>) -> Element {
                     .with_timezone(&chrono::Local)
                     .format("%Y-%m-%d %H:%M")
                     .to_string();
+                  // Preview the rolling story summary once memory has been
+                  // compressed; before that, the premise is all there is.
+                  let summary = session.summary();
+                  let body = if summary.trim().is_empty() {
+                    session.exposition.clone()
+                  } else {
+                    summary
+                  };
                   rsx! {
                     SessionCard {
                       key: "{session.id}",
                       id: session.id.clone(),
                       title: session.title.clone(),
-                      exposition: session.exposition.clone(),
+                      body,
                       updated_label,
                     }
                   }
@@ -89,7 +97,7 @@ fn CreateVignette() -> Element {
 }
 
 #[component]
-fn SessionCard(id: String, title: String, exposition: String, updated_label: String) -> Element {
+fn SessionCard(id: String, title: String, body: String, updated_label: String) -> Element {
   let nav = navigator();
 
   rsx! {
@@ -101,7 +109,7 @@ fn SessionCard(id: String, title: String, exposition: String, updated_label: Str
       },
       div { class: "text-lg", { title.clone() } }
       div { class: "text-sm text-nc-label", { updated_label.clone() } }
-      div { { exposition.clone() } }
+      Markdown { text: body.clone(), class: "text-sm" }
     }
   }
 }

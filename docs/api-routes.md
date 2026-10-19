@@ -66,6 +66,7 @@ let memory = engine::memory_async().await?;       // MemoryState
 | `should_compress` | `threshold` | `bool` | Retained history exceeds `2 × threshold` turns |
 | `compress_memory` | `threshold, model` | `Result<bool>` | Summarize + drain the oldest `threshold` turns into the rolling summary; re-anchors the snapshot |
 | `turn_count` / `try_turn` | — / `index` | `usize` / `Option<&TurnV2>` | Retained-window accessors |
+| `summary` | — | `String` | Rolling story summary read straight from the memory module's snapshot state (no gamestate rebuild; works on metadata-only loads) |
 
 ## Gamestate (`engine/src/game/state.rs`)
 

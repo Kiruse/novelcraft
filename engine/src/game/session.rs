@@ -145,6 +145,19 @@ impl SessionV2 {
     self.turns.len()
   }
 
+  /// The stored rolling story summary from the memory module's snapshot
+  /// state, or empty if there is none. Reads the persisted snapshot
+  /// directly — no gamestate rebuild — so it also works on metadata-only
+  /// loads (as used by the sessions list).
+  pub fn summary(&self) -> String {
+    self.snapshot
+      .get(MemoryModule::ID)
+      .and_then(|state| state.get("summary"))
+      .and_then(|value| value.as_str())
+      .unwrap_or_default()
+      .to_string()
+  }
+
   /// Get a retained turn by its window-relative index, if any.
   pub fn try_turn(&self, index: usize) -> Option<&TurnV2> {
     self.turns.get(index)
@@ -362,6 +375,17 @@ mod tests {
   fn session_rejects_wrong_version() {
     let json = r#"{"version": 1, "id": "x"}"#;
     assert!(serde_json::from_str::<SessionV2>(json).is_err());
+  }
+
+  #[test]
+  fn summary_reads_memory_snapshot() {
+    let mut session = SessionV2::default();
+    assert_eq!(session.summary(), "");
+    session.snapshot.insert(
+      MemoryModule::ID.to_string(),
+      serde_json::json!({"summary": "so far", "chapters": []}),
+    );
+    assert_eq!(session.summary(), "so far");
   }
 
   #[test]

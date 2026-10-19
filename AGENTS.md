@@ -289,6 +289,7 @@ session.save().await?;
 | `should_compress` | `threshold` | `bool` | Retained history exceeds `2 × threshold` |
 | `compress_memory` | `threshold, model` | `Result<bool>` | Summarize + drain the oldest `threshold` turns (see lifecycle) |
 | `turn_count` / `try_turn` | — / `index` | `usize` / `Option<&TurnV2>` | Retained-window accessors |
+| `summary` | — | `String` | Rolling story summary from the memory module's snapshot state (no gamestate rebuild; works on metadata-only loads) |
 
 ### `GameState` / module state (`engine/src/game/state.rs`)
 

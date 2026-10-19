@@ -109,7 +109,7 @@ Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind 
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
 - `screens/` — `Route` enum (`mod.rs`, Dioxus Router) + one component module per screen
   - `mod.rs` — `Route` enum, `go_back()`
-  - `home.rs` — Home screen (session launcher)
+  - `home.rs` — Home screen (session launcher; cards render the rolling story summary — falling back to the premise — via `Markdown`)
   - `settings.rs` — Settings screen (Max Agent Steps, Summary Threshold (turns), System Prompt, three model groups: Dungeon Master / Suggestions / Summarizer)
   - `create_story.rs` — Vignette creation form (title + premise) + Get Inspired section (debounced tag-filtered fetches); submits via `engine::create_session`
   - `story_overview.rs` — Session overview (banner placeholder, title/exposition, Play + Delete buttons; Delete opens a screen-local `ConfirmDialog` modal, then `engine::delete_session` removes the file and clears the engine's active session if it was the one deleted)
