@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use novelcraft_engine::config::{DEFAULT_HOST, ModelConfig, ModelPurpose};
+use novelcraft_engine::config::{DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose};
 
 use crate::comps::{Button, BtnVariant, Field, FieldGroup, Screen, INPUT_CLASS};
 use crate::engine;
@@ -7,11 +7,21 @@ use crate::state::{Query, CONFIG};
 use crate::toast::{push_toast, Toast};
 
 /// Editable fields of a single model config.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct ModelFields {
   base_url: String,
   api_key: String,
   model: String,
+}
+
+impl Default for ModelFields {
+  fn default() -> Self {
+    Self {
+      base_url: DEFAULT_HOST.to_string(),
+      api_key: String::new(),
+      model: DEFAULT_MODEL.to_string(),
+    }
+  }
 }
 
 impl ModelFields {
@@ -154,6 +164,7 @@ fn ModelGroup(props: ModelGroupProps) -> Element {
       Field { label: "API Key",
         input {
           class: INPUT_CLASS,
+          r#type: "password",
           value: "{fields.read().api_key}",
           oninput: set_api_key,
         }

@@ -12,7 +12,8 @@ use crate::paths;
 use crate::util::{deserialize, deserialize_sync, serialize};
 
 /// Default host of llama.cpp
-pub const DEFAULT_HOST: &str = "http://localhost:8888/v1";
+pub const DEFAULT_HOST: &str = "https://openrouter.ai/api/v1";
+pub const DEFAULT_MODEL: &str = "google/gemma-4-26b-a4b-it:free";
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
 You are a Dungeon Master in a novel, modernized text adventure game session.
