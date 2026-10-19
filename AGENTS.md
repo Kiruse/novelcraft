@@ -66,7 +66,8 @@ novelcraft/
 │       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded query refreshes, turn navigation
 │       ├── state.rs            # Global reactive state — Query<T> (Empty/Error/Stale/Recent), GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs            # Toast notifications (global signal + fixed overlay component)
-│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, Loading, SettingsGear, CloseButton)
+│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, Loading, Markdown, SettingsGear, CloseButton)
+│       ├── markdown.rs         # Markdown-like parser for streamed agent output (subset, unit tested)
 │       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
 │       ├── api.rs              # Inspiration REST client (API_BASE_URL, get_json)
 │       ├── error.rs            # GuiError (thiserror): Engine/Api variants

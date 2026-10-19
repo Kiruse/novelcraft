@@ -102,7 +102,8 @@ Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind 
 - `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `memory_async`, `prompt` streaming), generation-guarded query refreshes, window-relative turn navigation (`load_turn`/`goto`/`navigate`/`jump_to_end`)
 - `state.rs` — Global reactive state — `Query<T>` (Empty/Error/Stale/Recent), `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`/`StreamState` types
 - `toast.rs` — `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay component
-- `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` constant
+- `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `Markdown`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` constant
+- `markdown.rs` — Markdown-like parser tuned for streaming agent output (`parse` → `Vec<Block>`, flat styled `Segment`s with `BOLD`/`ITALIC`/`SPEECH` bits; unterminated constructs render as-if closed). Subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`, double-quoted `"speech"` (own line, white). Unit tested
 - `titlebar.rs` — Custom window chrome (`TitleBar`, `ResizeHandles`) for the undecorated window
 - `api.rs` — Inspiration REST client (`API_BASE_URL`, `get_json`)
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants

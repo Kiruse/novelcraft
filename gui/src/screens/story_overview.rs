@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::comps::{Button, BtnVariant, Loading, Screen};
+use crate::comps::{Button, BtnVariant, Loading, Markdown, Screen};
 use crate::engine;
 use crate::screens::{Route, go_back};
 use crate::state::SESSIONS;
@@ -33,7 +33,7 @@ pub fn StoryOverview(id: String) -> Element {
             rsx! {
               div { class: "flex flex-col gap-1 w-full",
                 div { class: "text-2xl", { session.title.clone() } }
-                div { { session.exposition.clone() } }
+                Markdown { text: session.exposition.clone() }
               }
             },
       } }

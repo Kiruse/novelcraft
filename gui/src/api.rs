@@ -8,7 +8,7 @@ use crate::error::GuiError;
 // proper domain.
 
 /// Base URL of the inspiration service.
-pub const API_BASE_URL: &str = "http://localhost:8000";
+pub const API_BASE_URL: &str = "https://novelcraft-api.onrender.com";
 
 /// GETs `{API_BASE_URL}{path}`, sending the `query` params, and decodes the
 /// JSON response. Must be called from within an async (tokio) context.

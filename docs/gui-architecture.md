@@ -32,6 +32,7 @@ gui/
     ├── state.rs             # Global reactive state — Query<T>, GlobalSignals
     ├── toast.rs             # Toast notifications (global signal + overlay component)
     ├── comps.rs             # Shared components (Screen, Button, Chip, Field, …)
+    ├── markdown.rs          # Markdown-like parser (streaming-safe subset, unit tested)
     ├── titlebar.rs          # Window chrome — custom title bar + resize handles
     ├── api.rs               # Inspiration REST client (get_json)
     ├── error.rs             # GuiError (thiserror): Engine/Api variants
@@ -173,6 +174,7 @@ Each toast schedules its own dismissal task (default 5s). Toast variants (Info/S
 | `Chip` | Rounded tag pill with `selected` toggle styling |
 | `Field` / `FieldGroup` | Labeled input row / bordered group with heading |
 | `Loading` | Pulsing text (`animate-pulse`) |
+| `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`; double-quoted `"speech"` breaks onto its own line in white while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
 | `SettingsGear` / `CloseButton` | Top-bar icon buttons |
 
 `INPUT_CLASS` is the shared text-input styling constant.

@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::markdown::{self, Block, Segment};
 use crate::screens::{go_back, Route};
 
 /// Shared class list for text inputs.
@@ -124,6 +125,59 @@ pub fn FieldGroup(props: FieldGroupProps) -> Element {
 pub fn Loading(text: String) -> Element {
   rsx! {
     div { class: "animate-pulse", { text } }
+  }
+}
+
+/// Markdown-like text rendering (see [`crate::markdown`]) — a streaming-
+/// safe subset: paragraphs, headings, blockquotes, `**bold**`, `*italic*`
+/// and double-quoted `"speech"`, which breaks onto its own line in white
+/// while all other text renders at 80% opacity (`.markdown` in input.css).
+/// Incomplete markers (open bold/italic/quote at end-of-text) render
+/// as-if closed, so streamed agent output never leaks raw syntax.
+#[derive(Props, Clone, PartialEq)]
+pub struct MarkdownProps {
+  text: String,
+  #[props(default)]
+  class: String,
+}
+
+#[component]
+pub fn Markdown(props: MarkdownProps) -> Element {
+  let blocks = markdown::parse(&props.text);
+  let class = format!("markdown text-nc-text/80 {}", props.class);
+
+  rsx! {
+    div { class, { render_blocks(&blocks) } }
+  }
+}
+
+fn render_blocks(blocks: &[Block]) -> Element {
+  rsx! {
+    for (idx, block) in blocks.iter().enumerate() {
+      { match block {
+          Block::Heading { level, segments } => rsx! {
+            div { key: "{idx}", class: "md-h md-h{level}", { render_segments(segments) } }
+          },
+          Block::Quote(inner) => rsx! {
+            blockquote { key: "{idx}", { render_blocks(inner) } }
+          },
+          Block::Paragraph(segments) => rsx! {
+            p { key: "{idx}", { render_segments(segments) } }
+          },
+      } }
+    }
+  }
+}
+
+fn render_segments(segments: &[Segment]) -> Element {
+  rsx! {
+    for (idx, segment) in segments.iter().enumerate() {
+      span {
+        key: "{idx}",
+        class: segment.classes(),
+        { segment.text.clone() }
+      }
+    }
   }
 }
 

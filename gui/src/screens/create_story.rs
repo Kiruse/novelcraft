@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use serde::Deserialize;
 
 use crate::api::get_json;
-use crate::comps::{Button, BtnVariant, Chip, Field, Loading, Screen, INPUT_CLASS};
+use crate::comps::{Button, BtnVariant, Chip, Field, Loading, Markdown, Screen, INPUT_CLASS};
 use crate::engine;
 use crate::error::GuiError;
 use crate::screens::Route;
@@ -178,7 +178,7 @@ fn InspirationCard(inspiration: Inspiration) -> Element {
   rsx! {
     div { class: "w-full p-3 flex flex-col gap-1 border rounded-sm border-nc-border",
       div { class: "text-lg", { inspiration.title.clone() } }
-      div { { inspiration.premise.clone() } }
+      Markdown { text: inspiration.premise.clone(), class: "text-sm/relaxed" }
       div { class: "flex flex-wrap gap-1",
         for tag in inspiration.tags.iter() {
           div {

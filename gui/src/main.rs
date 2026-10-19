@@ -2,6 +2,7 @@ mod api;
 mod comps;
 mod engine;
 mod error;
+mod markdown;
 mod screens;
 mod state;
 mod titlebar;

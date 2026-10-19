@@ -102,7 +102,7 @@ The Create Story screen's "Get Inspired" data is fetched from a REST inspiration
   - `const API_BASE_URL: &str = "http://localhost:8000"` — hardcoded base URL (TODO: replace once the service gets a proper domain)
   - `get_json<T: DeserializeOwned>(path, query)` — awaits a `reqwest` GET of `{API_BASE_URL}{path}` with the `query` params (comma-joined values are the caller's choice), applies `error_for_status()`, and decodes the JSON; every failure maps to `GuiError::Api(String)`. Must be called from within an async (tokio) context — the Dioxus runtime provides one
 - `gui/src/screens/create_story.rs`:
-  - `Inspiration { title, premise, tags }` — screen-local serde type (`tags` holds tag strings)
+  - `Inspiration { title, premise, tags }` — screen-local serde type (`tags` holds tag strings); `premise` is markdown, rendered with the shared `Markdown` component
   - `GET /inspirations/tags` → `Vec<String>` (plain tags; rendered as-is for now — formatting/localization is the GUI's concern, not implemented yet) and `GET /inspirations?tags=a,b` → `Vec<Inspiration>`
   - `fetch_tags()` / `fetch_inspirations(selected)` — wrappers over `api::get_json`; `fetch_inspirations` passes the selected tags comma-joined as the `tags` query param — the service OR-filters server-side (an empty selection omits the param, matching everything)
 

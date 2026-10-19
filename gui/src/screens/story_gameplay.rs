@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use novelcraft_engine::game::module::memory::MemoryState;
 use novelcraft_engine::game::turns::TurnV2;
 
-use crate::comps::{CloseButton, Loading, INPUT_CLASS};
+use crate::comps::{CloseButton, Loading, Markdown, INPUT_CLASS};
 use crate::engine;
 use crate::state::{StreamState, PROFILES, SESSION, STREAM, TURN, TURN_INDEX};
 
@@ -373,14 +373,17 @@ fn turn_is_empty(turn: &TurnV2) -> bool {
 fn turn_card(turn: &TurnV2) -> Element {
   rsx! {
     div { class: "w-full flex flex-col gap-3",
+      for system in turn.system.iter() {
+        Markdown { key: "{system.len()}", text: system.clone(), class: "w-full" }
+      }
       for prompt in turn.prompt.iter() {
         div {
-          class: "w-full p-3 border rounded-sm border-nc-border text-nc-label",
-          { prompt.clone() }
+          class: "w-full p-3 border rounded-sm border-nc-border",
+          Markdown { text: prompt.clone() }
         }
       }
-      for content in turn.responses.iter().filter_map(|response| response.content.as_ref()) {
-        div { class: "w-full", { content.clone() } }
+      for (idx, content) in turn.responses.iter().filter_map(|response| response.content.as_ref()).enumerate() {
+        Markdown { key: "{idx}", text: content.clone(), class: "w-full" }
       }
     }
   }
@@ -389,15 +392,15 @@ fn turn_card(turn: &TurnV2) -> Element {
 fn stream_card(stream: &StreamState) -> Element {
   rsx! {
     div { class: "w-full flex flex-col gap-3",
-      div { class: "w-full p-3 border rounded-sm border-nc-border text-nc-label",
-        { stream.prompt.clone() }
+      div { class: "w-full p-3 border rounded-sm border-nc-border",
+        Markdown { text: stream.prompt.clone() }
       }
       { if stream.activity {
           rsx! { Loading { text: "The DM is taking action ..." } }
         } else if stream.text.is_empty() {
           rsx! { Loading { text: "Thinking ..." } }
         } else {
-          rsx! { div { class: "w-full", { stream.text.clone() } } }
+          rsx! { Markdown { text: stream.text.clone(), class: "w-full" } }
         } }
     }
   }
