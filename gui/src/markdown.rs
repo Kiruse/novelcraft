@@ -6,42 +6,38 @@
 //! - `#`..`######` headings
 //! - `>` blockquotes (contiguous groups; inner lines re-parsed as blocks)
 //! - `**bold**` and `*italic*`
-//! - double-quoted `"speech"` — the quote characters are kept and the run
-//!   is rendered on its own line in white (via the `md-speech` class)
+//! - double-quoted `"speech"` — the quote characters are kept and the whole
+//!   run renders as a single block element in white (via the `md-speech`
+//!   class) with emphasis nested inside it
 //!
 //! Nothing has to be closed: a stream cut off mid-marker renders the
 //! pending style through end-of-text instead of leaking raw markers.
 
-/// Bold style bit for [`Segment::style`].
+/// Bold style bit for [`Segment::Styled`].
 pub const BOLD: u8 = 1;
-/// Italic style bit for [`Segment::style`].
+/// Italic style bit for [`Segment::Styled`].
 pub const ITALIC: u8 = 2;
-/// Double-quoted speech style bit for [`Segment::style`].
-pub const SPEECH: u8 = 4;
 
-/// A flat run of text sharing one style — inline constructs never nest.
+/// An inline element. Speech runs are containers — emphasis inside a quote
+/// nests within the run, so the whole quoted phrase renders as one
+/// block-level element instead of fragmenting into several.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Segment {
-  pub style: u8,
-  pub text: String,
+pub enum Segment {
+  /// A run of plain, bold or italic text — style bits [`BOLD`]/[`ITALIC`].
+  Styled { style: u8, text: String },
+  /// A double-quoted `"speech"` run — the quote characters are kept —
+  /// rendered as one block (`md-speech`); children nest emphasis.
+  Speech(Vec<Segment>),
 }
 
-impl Segment {
-  /// CSS classes rendering this style combination.
-  pub fn classes(&self) -> &'static str {
-    let bold = self.style & BOLD != 0;
-    let italic = self.style & ITALIC != 0;
-    let speech = self.style & SPEECH != 0;
-    match (bold, italic, speech) {
-      (true, true, true) => "font-bold italic md-speech",
-      (true, true, false) => "font-bold italic",
-      (true, false, true) => "font-bold md-speech",
-      (true, false, false) => "font-bold",
-      (false, true, true) => "italic md-speech",
-      (false, true, false) => "italic",
-      (false, false, true) => "md-speech",
-      (false, false, false) => "",
-    }
+/// CSS classes rendering the given emphasis style bits
+/// (see [`Segment::Styled`]).
+pub fn styled_classes(style: u8) -> &'static str {
+  match (style & BOLD != 0, style & ITALIC != 0) {
+    (true, true) => "font-bold italic",
+    (true, false) => "font-bold",
+    (false, true) => "italic",
+    (false, false) => "",
   }
 }
 
@@ -127,14 +123,6 @@ enum Marker {
 }
 
 impl Marker {
-  fn bit(self) -> u8 {
-    match self {
-      Self::Bold => BOLD,
-      Self::Italic => ITALIC,
-      Self::Speech => SPEECH,
-    }
-  }
-
   /// Byte length of the literal marker.
   fn len(self) -> usize {
     match self {
@@ -164,9 +152,11 @@ fn next_marker(text: &str) -> Option<(usize, Marker)> {
   None
 }
 
-/// Split inline text into flat styled segments. Markers toggle their style
-/// on/off; a marker left open at end-of-text keeps the style active for the
-/// remainder (incomplete stream input still renders).
+/// Split inline text into segments. Double-quoted speech runs become
+/// [`Segment::Speech`] containers — from the opening quote to the next
+/// quote (or end-of-text while streaming) — with emphasis nested inside;
+/// `**bold**` and `*italic*` toggle as before. Style state does not carry
+/// across a quote boundary.
 fn parse_inline(text: &str) -> Vec<Segment> {
   let mut segments = Vec::new();
   let mut plain = String::new();
@@ -175,33 +165,73 @@ fn parse_inline(text: &str) -> Vec<Segment> {
 
   while let Some((idx, marker)) = next_marker(rest) {
     plain.push_str(&rest[..idx]);
-    let bit = marker.bit();
-    let closing = style & bit != 0;
-    if marker == Marker::Speech {
-      // Keep the quote characters in the rendered text: the opening one
-      // belongs to the following speech run, the closing one to the
-      // preceding speech run.
-      if closing {
-        plain.push('"');
+    match marker {
+      Marker::Speech => {
+        // The quote characters are kept: the opening one belongs to the
+        // following speech run, the closing one to the run it ends.
+        let inner = &rest[idx + 1..];
+        let (run, remainder) = match inner.split_once('"') {
+          Some((run, remainder)) => (format!("\"{run}\""), remainder),
+          None => (format!("\"{inner}"), ""),
+        };
         if !plain.is_empty() {
-          segments.push(Segment { style, text: std::mem::take(&mut plain) });
+          segments.push(Segment::Styled { style, text: std::mem::take(&mut plain) });
         }
-      } else {
-        if !plain.is_empty() {
-          segments.push(Segment { style, text: std::mem::take(&mut plain) });
-        }
-        plain.push('"');
+        segments.push(Segment::Speech(parse_emphasis(&run)));
+        rest = remainder;
       }
-    } else if !plain.is_empty() {
-      segments.push(Segment { style, text: std::mem::take(&mut plain) });
+      Marker::Bold | Marker::Italic => {
+        if !plain.is_empty() {
+          segments.push(Segment::Styled { style, text: std::mem::take(&mut plain) });
+        }
+        style ^= match marker {
+          Marker::Bold => BOLD,
+          _ => ITALIC,
+        };
+        rest = &rest[idx + marker.len()..];
+      }
     }
-    style ^= bit;
-    rest = &rest[idx + marker.len()..];
   }
 
   plain.push_str(rest);
   if !plain.is_empty() {
-    segments.push(Segment { style, text: plain });
+    segments.push(Segment::Styled { style, text: plain });
+  }
+  segments
+}
+
+/// Split speech-run text into emphasis segments. Quotes inside the run are
+/// content; a marker left open at end-of-text keeps the style active for
+/// the remainder (streaming-friendly).
+fn parse_emphasis(text: &str) -> Vec<Segment> {
+  let mut segments = Vec::new();
+  let mut plain = String::new();
+  let mut style = 0u8;
+  let mut rest = text;
+
+  while let Some((idx, marker)) = next_marker(rest) {
+    plain.push_str(&rest[..idx]);
+    match marker {
+      Marker::Speech => {
+        plain.push('"');
+        rest = &rest[idx + 1..];
+      }
+      Marker::Bold | Marker::Italic => {
+        if !plain.is_empty() {
+          segments.push(Segment::Styled { style, text: std::mem::take(&mut plain) });
+        }
+        style ^= match marker {
+          Marker::Bold => BOLD,
+          _ => ITALIC,
+        };
+        rest = &rest[idx + marker.len()..];
+      }
+    }
+  }
+
+  plain.push_str(rest);
+  if !plain.is_empty() {
+    segments.push(Segment::Styled { style, text: plain });
   }
   segments
 }
@@ -210,35 +240,43 @@ fn parse_inline(text: &str) -> Vec<Segment> {
 mod tests {
   use super::*;
 
-  /// Inline text as (style, content) pairs.
-  fn segs(text: &str) -> Vec<(u8, String)> {
-    parse_inline(text).into_iter().map(|s| (s.style, s.text)).collect()
+  fn segs(text: &str) -> Vec<Segment> {
+    parse_inline(text)
+  }
+
+  fn styled(style: u8, text: &str) -> Segment {
+    Segment::Styled { style, text: text.to_string() }
+  }
+
+  fn plain(text: &str) -> Segment {
+    styled(0, text)
+  }
+
+  fn speech(children: Vec<Segment>) -> Segment {
+    Segment::Speech(children)
   }
 
   #[test]
   fn plain_text_is_one_segment() {
-    assert_eq!(segs("hello world"), vec![(0, "hello world".to_string())]);
+    assert_eq!(segs("hello world"), vec![plain("hello world")]);
   }
 
   #[test]
   fn bold_and_italic_drop_markers() {
     assert_eq!(
       segs("**bold** plain *italic*"),
-      vec![(BOLD, "bold".to_string()), (0, " plain ".to_string()), (ITALIC, "italic".to_string())]
+      vec![styled(BOLD, "bold"), plain(" plain "), styled(ITALIC, "italic")]
     );
   }
 
   #[test]
   fn unclosed_bold_reaches_end() {
-    assert_eq!(
-      segs("stream **cut off"),
-      vec![(0, "stream ".to_string()), (BOLD, "cut off".to_string())]
-    );
+    assert_eq!(segs("stream **cut off"), vec![plain("stream "), styled(BOLD, "cut off")]);
   }
 
   #[test]
   fn bold_italic_nest() {
-    assert_eq!(segs("***both***"), vec![(BOLD | ITALIC, "both".to_string())]);
+    assert_eq!(segs("***both***"), vec![styled(BOLD | ITALIC, "both")]);
   }
 
   #[test]
@@ -246,21 +284,43 @@ mod tests {
     assert_eq!(
       segs("He said \"listen closely\" and left"),
       vec![
-        (0, "He said ".to_string()),
-        (SPEECH, "\"listen closely\"".to_string()),
-        (0, " and left".to_string()),
+        plain("He said "),
+        speech(vec![plain("\"listen closely\"")]),
+        plain(" and left"),
       ]
     );
   }
 
   #[test]
   fn unclosed_speech_reaches_end() {
-    assert_eq!(segs("\"to be continued"), vec![(SPEECH, "\"to be continued".to_string())]);
+    assert_eq!(segs("\"to be continued"), vec![speech(vec![plain("\"to be continued")])]);
+  }
+
+  #[test]
+  fn emphasis_inside_speech_nests_within_the_run() {
+    // A quote renders as ONE speech element with the emphasis nested inside
+    // it — never as separate siblings, or it would fragment across lines.
+    assert_eq!(
+      segs("\"hello *there* friend\""),
+      vec![speech(vec![
+        plain("\"hello "),
+        styled(ITALIC, "there"),
+        plain(" friend\""),
+      ])]
+    );
+    assert_eq!(
+      segs("\"give me **everything** now\""),
+      vec![speech(vec![
+        plain("\"give me "),
+        styled(BOLD, "everything"),
+        plain(" now\""),
+      ])]
+    );
   }
 
   #[test]
   fn single_quotes_stay_plain() {
-    assert_eq!(segs("it's 'fine'"), vec![(0, "it's 'fine'".to_string())]);
+    assert_eq!(segs("it's 'fine'"), vec![plain("it's 'fine'")]);
   }
 
   #[test]
@@ -285,7 +345,8 @@ mod tests {
     let blocks = parse("one\ntwo\n\nthree");
     assert_eq!(blocks.len(), 2);
     let Block::Paragraph(segments) = &blocks[0] else { panic!("expected paragraph") };
-    assert_eq!(segments[0].text, "one two");
+    let Segment::Styled { text, .. } = &segments[0] else { panic!("expected styled segment") };
+    assert_eq!(text, "one two");
   }
 
   #[test]
@@ -302,7 +363,7 @@ mod tests {
     // Stream cut mid-heading, mid-marker and mid-speech — all render.
     let blocks = parse("## Partial tit");
     assert!(matches!(blocks.as_slice(), [Block::Heading { level: 2, .. }]));
-    assert_eq!(segs("**still"), vec![(BOLD, "still".to_string())]);
-    assert_eq!(segs("said \"hi"), vec![(0, "said ".to_string()), (SPEECH, "\"hi".to_string())]);
+    assert_eq!(segs("**still"), vec![styled(BOLD, "still")]);
+    assert_eq!(segs("said \"hi"), vec![plain("said "), speech(vec![plain("\"hi")])]);
   }
 }

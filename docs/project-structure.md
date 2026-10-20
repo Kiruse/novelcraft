@@ -30,7 +30,7 @@ novelcraft/
 │       │   └── bullets.rs            # BulletList parser — validates chapter notes ("- " per line)
 │       └── game/                     # Game engine
 │           ├── mod.rs                # Module barrel
-│           ├── engine.rs             # NovelCraftEngine — prompt/rewrite/fork, create_session, list_sessions, memory, module-context cache
+│           ├── engine.rs             # NovelCraftEngine — prompt/rewrite/fork, create_session, list_sessions, story_state/module_state, module-context cache
 │           ├── session.rs            # SessionV2 — persistence (meta/snapshot/history), fork, memory compression (render_transcript, summarize)
 │           ├── turns.rs              # TurnV2 / AgentResponse + conversation reconstruction
 │           ├── state.rs              # GameState / ModuleState / GameStateView — per-module JSON state, replay, snapshots
@@ -40,7 +40,7 @@ novelcraft/
 │               ├── story.rs          # story — timeline TODO list (manage_timeline tool)
 │               ├── npcs.rs           # npcs — NPC persistence
 │               ├── player.rs         # player — player-relevant state
-│               └── memory.rs         # memory — rolling summary / chapters, SUMMARIZER_PERSONA
+│               └── story.rs          # story — timeline TODO list, rolling summary / chapters, SUMMARIZER_PERSONA
 ├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft)
 │   ├── Cargo.toml                    # GUI dependencies (dioxus, novelcraft-engine, reqwest, chrono, log, tokio)
 │   ├── Dioxus.toml                   # dx config (app name, bundle identifier)
@@ -62,7 +62,7 @@ novelcraft/
 │           ├── settings.rs           # Engine config editor (three model groups, system prompt, summary threshold)
 │           ├── create_story.rs       # New vignette + inspiration browser (debounced tag-filtered fetches)
 │           ├── story_overview.rs     # Session detail (title/exposition) + Play/Delete buttons
-│           └── story_gameplay.rs     # Game view — turn cards, streaming, chat bar, memory sidebar, profile popover, swipe
+│           └── story_gameplay.rs     # Game view — turn cards, streaming, chat bar, module sidebar, profile popover, swipe
 └── docs/                             # Project documentation
     ├── project-structure.md          # This file
     ├── code-conventions.md           # Code styling and conventions
@@ -86,12 +86,12 @@ Pure Rust library with all business logic. No UI framework coupling.
 - `util/` — `mod.rs`: async/sync JSON file I/O (`serialize`, `deserialize`, `deserialize_sync`, `ensure_dir`), RFC3339 timestamp serde, `discard_channel`. `prompting.rs`: `PromptFormatter`/`Promptify` for building indented prompt text (used for module contexts, transcripts, summaries)
 - `markdown/` — `todo.rs`: `TodoList`/`TodoItem`/`TodoListDiff` (story timeline). `bullets.rs`: `BulletList` — every non-empty line must start with `"- "`; validates memory-chapter notes
 - `game/` — the game engine:
-  - `engine.rs` — `NovelCraftEngine`: owns config + active `SessionV2` + cached `AgentLoop`. `prompt`/`rewrite` run the DM agent loop (system message = persona + module contexts + player profile, then retained history); `fork`; `create_session`; `list_sessions` (metadata only, newest first); `memory()` read model; `compress_memory_if_due` after every commit
-  - `session.rs` — `SessionV2`: memory-managed session persisted as ONE file `{sessionsDir}/{id}.json` (file version gate `== 2`; carries metadata incl. `total_turns`, the gamestate `snapshot`, and the retained `turns`). `fork(turn_index, profiles)` only within the retained window; `compress_memory(threshold, model)` summarizes the oldest `threshold` turns into the rolling summary (one-shot `kiruklaw_agent_loop::prompt` with `SUMMARIZER_PERSONA`; nothing is mutated on LLM failure)
+  - `engine.rs` — `NovelCraftEngine`: owns config + active `SessionV2` + cached `AgentLoop`. `prompt`/`rewrite` run the DM agent loop (system message = persona + module contexts + player profile, then retained history); `fork`; `regenerate` (fork from the second-to-last turn — or reset the history for the very first — and re-run the same prompt); `create_session`; `list_sessions` (metadata only, newest first); `memory()` read model; `compress_memory_if_due` after every commit
+  - `session.rs` — `SessionV2`: memory-managed session persisted as ONE file `{sessionsDir}/{id}.json` (file version gate `== 2`; carries metadata incl. `total_turns`, the gamestate `snapshot`, and the retained `turns`). `fork(turn_index, profiles)` only within the retained window; `reset_turns(profiles)` drops the whole history (regenerating the very first turn); `compress_memory(threshold, model)` summarizes the oldest `threshold` turns into the rolling summary (one-shot `kiruklaw_agent_loop::prompt` with `SUMMARIZER_PERSONA`; nothing is mutated on LLM failure)
   - `turns.rs` — `TurnV2` (`system`/`prompt`/`responses`), `AgentResponse` (content + tool calls + tool responses), `TurnV2::to_conversation` (rebuilds the agent-loop conversation from retained turns); `Snapshot` (module ID → JSON state map) lives in `state.rs`
   - `state.rs` — `GameState` (per-module `RwLock`ed JSON state + dirty flags), `ModuleState::set` (auto-creates missing keys along the keypath), `GameState::replay` (re-applies recorded tool calls; errors on unknown modules), `GameStateView` (the only writer, scoped to one module)
   - `profile.rs` — `ProfileV1` (`id`, `name`, `fields`, timestamps; `Promptify` impl for system-prompt injection)
-  - `module/` — `GameplayModule` enum + one file per module. IDs (`story`, `npcs`, `player`, `memory`) **must** equal the module's toolset namespace — the kiruklaw `#[toolset]` macro derives it from the snake_case struct name, with `#[toolset(strip_suffix = "module")]` stripping the `_module` suffix, and replay resolves recorded calls by it. `memory.rs` also defines `SUMMARIZER_PERSONA`, `MemoryState`/`ChapterV2`, and the `begin_chapter`/`note_events` tools
+  - `module/` — `GameplayModule` enum + one file per module. IDs (`story`, `npcs`, `player`) **must** equal the module's toolset namespace — the kiruklaw `#[toolset]` macro derives it from the snake_case struct name, with `#[toolset(strip_suffix = "module")]` stripping the `_module` suffix, and replay resolves recorded calls by it. `story.rs` also defines `SUMMARIZER_PERSONA`, `StoryState`/`ChapterV2`, and the `manage_timeline`/`begin_chapter`/`note_events` tools
 
 ### `gui/` — Rust Binary Crate (`novelcraft-gui`, binary name: `novelcraft`)
 
@@ -99,11 +99,12 @@ Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind 
 
 **`gui/src/`**
 - `main.rs` — Binary entry point — loads `NovelCraftConfig` (falls back to defaults), constructs the engine (`engine::init_engine`), stashes `BOOT_CONFIG`, `dioxus::LaunchBuilder` + undecorated window config, `App` component (stylesheet link, title bar, router, toast overlay)
-- `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `memory_async`, `prompt` streaming), generation-guarded query refreshes, window-relative turn navigation (`load_turn`/`goto`/`navigate`/`jump_to_end`)
+- `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `effective_prompt_async`, `module_state_async`/`set_module_state_async`, `set_last_prompt_async`, `prompt`/`regenerate` streaming), generation-guarded query refreshes, window-relative turn navigation (`load_turn`/`goto`/`navigate`/`jump_to_end`)
 - `state.rs` — Global reactive state — `Query<T>` (Empty/Error/Stale/Recent), `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`/`StreamState` types
 - `toast.rs` — `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay component
 - `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `Markdown`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` constant
-- `markdown.rs` — Markdown-like parser tuned for streaming agent output (`parse` → `Vec<Block>`, flat styled `Segment`s with `BOLD`/`ITALIC`/`SPEECH` bits; unterminated constructs render as-if closed). Subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`, double-quoted `"speech"` (own line, white). Unit tested
+- `modules.rs` — `ModuleContext` trait for per-module sidebar rendering & state edits: `module_context(id)` resolves custom impls (memory) with a generic tree-editor fallback; sidebar iterates the session's active modules. `set_path` handles object keys & decimal array indices
+- `markdown.rs` — Markdown-like parser tuned for streaming agent output (`parse` → `Vec<Block>`; inline `Segment` tree — plain/bold/italic runs, and double-quoted `"speech"` as a container segment nesting emphasis so a quote renders as one block; unterminated constructs render as-if closed). Subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`, `"speech"` (own line, white). Unit tested
 - `titlebar.rs` — Custom window chrome (`TitleBar`, `ResizeHandles`) for the undecorated window
 - `api.rs` — Inspiration REST client (`API_BASE_URL`, `get_json`)
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
@@ -113,7 +114,7 @@ Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind 
   - `settings.rs` — Settings screen (Max Agent Steps, Summary Threshold (turns), System Prompt, three model groups: Dungeon Master / Suggestions / Summarizer)
   - `create_story.rs` — Vignette creation form (title + premise) + Get Inspired section (debounced tag-filtered fetches); submits via `engine::create_session`
   - `story_overview.rs` — Session overview (banner placeholder, title/exposition, Play + Delete buttons; Delete opens a screen-local `ConfirmDialog` modal, then `engine::delete_session` removes the file and clears the engine's active session if it was the one deleted)
-  - `story_gameplay.rs` — Gameplay screen (turn cards with swipe, streaming cards, ☰ story-memory sidebar, status row, chat bar, profile popover)
+  - `story_gameplay.rs` — Gameplay screen (turn cards with swipe, streaming cards, ☰ sidebar — premise, effective prompt, one collapsible section per active module via `ModuleContext`, tool calls of the viewed turn — chat bar, status row, profile popover & dialog)
 
 **`gui/` (non-Rust)**
 - `Dioxus.toml` — dx app config (name, bundle identifier)

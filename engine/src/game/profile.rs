@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::util::{serialize_timestamp, deserialize_timestamp};
 use crate::util::prompting::Promptify;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileV1 {
   pub id: String,
   pub name: String,

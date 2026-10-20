@@ -43,6 +43,19 @@ impl BulletList {
   pub fn len(&self) -> usize {
     self.0.len()
   }
+
+  /// Merge `other` into `self`: bullets new to `self` are appended in order
+  /// of appearance; bullets already present keep their position. Duplicates
+  /// (re-submitted or re-ordered) are ignored — the record only grows.
+  pub fn merge(&self, other: &Self) -> Self {
+    let mut items = self.0.clone();
+    for item in &other.0 {
+      if !items.contains(item) {
+        items.push(item.clone());
+      }
+    }
+    Self(items)
+  }
 }
 
 impl Display for BulletList {
@@ -89,5 +102,21 @@ mod tests {
   fn parse_rejects_bare_dash() {
     assert!(BulletList::parse("-").is_err());
     assert!(BulletList::parse("- ").is_err());
+  }
+
+  #[test]
+  fn merge_appends_new_bullets_in_order() {
+    let existing = BulletList::parse("- a\n- b").unwrap();
+    let new = BulletList::parse("- b\n- c\n- a").unwrap();
+    let merged = existing.merge(&new);
+    assert_eq!(merged.items(), &["a".to_string(), "b".to_string(), "c".to_string()]);
+  }
+
+  #[test]
+  fn merge_empty_sides() {
+    let empty = BulletList::default();
+    let items = BulletList::parse("- a").unwrap();
+    assert_eq!(empty.merge(&items).items(), &["a".to_string()]);
+    assert_eq!(items.merge(&empty).items(), &["a".to_string()]);
   }
 }

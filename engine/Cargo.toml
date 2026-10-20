@@ -21,3 +21,9 @@ futures = "0.3"
 kiruklaw-agent-loop = { git = "https://github.com/Kiruse/kiruklaw", package = "kiruklaw-agent-loop" }
 reqwest = { version = "0.12", features = ["stream", "json"] }
 uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["fs"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["v4", "js"] }

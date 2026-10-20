@@ -3,6 +3,7 @@ mod comps;
 mod engine;
 mod error;
 mod markdown;
+mod modules;
 mod screens;
 mod state;
 mod titlebar;

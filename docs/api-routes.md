@@ -10,7 +10,7 @@ The engine crate (`novelcraft-engine`) owns the config, the active session, and 
 
 - **Session management** — create, list (metadata-only), load, fork memory-managed sessions (`SessionV2`)
 - **Dungeon Master agent loop** — `prompt`/`rewrite` run a kiruklaw `AgentLoop` over the session's gameplay-module toolsets, streaming `AgentMessageChunk`s
-- **Long-term memory** — rolling story summary compression (one-shot Summarizer call) + `MemoryState` read model
+- **Long-term memory** — rolling story summary compression (one-shot Summarizer call) + `StoryState` read model
 - **Config & profiles** — `NovelCraftConfig` incl. all profiles, persisted at `{configDir}/NovelCraft/config.json`
 - **Filesystem persistence** — JSON files only (see [Data Storage](./database-schema.md))
 
@@ -27,7 +27,6 @@ engine::prompt(content, from_turn);               // Some(idx) forks at that tur
 engine::goto(index); engine::navigate(delta); engine::jump_to_end();
 engine::switch_profile(id).await;
 engine::save_config(config).await;
-let memory = engine::memory_async().await?;       // MemoryState
 ```
 
 ## `NovelCraftEngine` Methods (`engine/src/game/engine.rs`)
@@ -48,7 +47,7 @@ let memory = engine::memory_async().await?;       // MemoryState
 | `fork` | `turn_index` | `Result<()>` | Fork at a retained turn, deleting all later turns |
 | `turn` | `index` | `Option<TurnV2>` | Retained turn by window-relative index |
 | `turn_count` | — | `Option<usize>` | Retained turn count of the active session |
-| `memory` | — | `Result<MemoryState>` | Read long-term memory: rolling summary, chapters |
+| `story_state` | — | `Result<StoryState>` | Read long-term story state: rolling summary, chapters |
 | `save` | — | `Result<()>` | Persist the active session + config |
 
 ## `SessionV2` Methods (`engine/src/game/session.rs`)
@@ -84,12 +83,13 @@ Each module is a `#[toolset(strip_suffix = "module")] impl AgentToolset<GameStat
 
 | Module | ID | Tools | Purpose |
 |--------|----|-------|---------|
-| `StoryModule` | `story` | `manage_timeline(contents)` | Story timeline as a checked/unchecked TODO list (`TodoList` parser) |
 | `NpcsModule` | `npcs` | NPC CRUD (e.g. `update_apparel`) | NPC persistence (name, personality, physique, apparel) |
 | `PlayerModule` | `player` | — | Player-relevant state, initialized from the profile |
-| `MemoryModule` | `memory` | `begin_chapter(title)`, `note_events(notes)` | Long-term memory: `summary` (engine-written only), `chapters` (agent-managed; `begin_chapter` titles & closes the active chapter and opens a fresh untitled one, `note_events` full-replaces its bullet notes, validated by `BulletList`) |
+| `StoryModule` | `story` | `manage_timeline(contents)`, `begin_chapter(title)`, `note_events(notes)` | Story: `timeline` (TODO list of markdown task items `- [ ]`/`- [x]`; the parser tolerates plain `- ` bullets, normalizing them to unchecked items; updates merge — append new items, check off, ignore uncheck/remove), `summary` (engine-written only), `chapters` (agent-managed; `begin_chapter` titles & closes the active chapter and opens a fresh untitled one, `note_events` appends bullets (duplicates ignored), validated by `BulletList`) |
 
-`MemoryModule::read(&GameState)` returns the GUI-facing `MemoryState { summary, chapters }`; `MemoryModule::context()` injects "Story so far / Chapters" into the system prompt. The story premise is injected separately from the session's exposition (`# Story premise` section).
+`StoryModule::read(&GameState)` returns the GUI-facing `StoryState { summary, chapters }`; `StoryModule::context()` injects "Timeline / Story so far / Chapters" into the system prompt. The story premise is injected separately from the session's exposition (`# Story premise` section).
+
+Replay tolerates imperfect history: tool calls whose recorded response is an error are skipped (they had no state effect originally), re-dispatch errors on originally-successful calls are logged and tolerated, and only structurally invalid history (unknown module names, malformed tool names) fails the load.
 
 ## Adding a New Engine Capability
 

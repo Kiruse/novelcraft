@@ -25,6 +25,7 @@ impl PlayerModule {
           ConversationMessage::system("Following is the user's RPG character profile. Please extract the player character's apparel as a short, comma-separated list.".to_string()).into(),
           ConversationMessage::user(fields.to_prompt()?).into(),
         ],
+        None,
         discard_channel(),
       ).await?;
       let ConversationMessage::Assistant { content, .. } = msg else { unreachable!() };
@@ -33,30 +34,18 @@ impl PlayerModule {
     Ok(())
   }
 
+  /// Render the agent-facing context: only the derived apparel this module
+  /// manages at runtime. The player profile itself is rendered by the
+  /// engine-level system message — never by a module.
   pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
-    if let Some(profile) = &state.profile {
-      let module = state.get(&Self::id()).expect("Missing player module state");
-      f.writeline("# Player Character Profile")?;
-
-      f.write("Name: ")?;
-      f.writeline(&profile.name)?;
-
-      for (k, v) in &profile.fields {
-        match k.trim().to_lowercase().as_str() {
-          "apparel" => {
-            f.write("Apparel: ")?;
-            let apparel = Self::get_opt_field(module, Keypath::Apparel)
-              .await
-              .unwrap_or("None".to_string());
-            f.writeline(&apparel)?;
-          }
-          _ => {
-            f.write(k)?;
-            f.write(": ")?;
-            f.writeline(v)?;
-          }
-        }
-      }
+    let module = state.get(&Self::id()).expect("Missing player module state");
+    let apparel = Self::get_opt_field(module, Keypath::Apparel)
+      .await
+      .unwrap_or_default();
+    if !apparel.trim().is_empty() {
+      f.writeline("## Player Character")?;
+      f.write("Apparel: ")?;
+      f.writeline(&apparel)?;
     }
     Ok(())
   }
@@ -86,5 +75,41 @@ impl Keypath {
     match self {
       Self::Apparel => vec!["apparel".to_string()],
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::game::state::GameState;
+
+  fn state() -> GameState {
+    GameState::new(Default::default(), vec![PlayerModule::ID.to_string()], None).unwrap()
+  }
+
+  #[tokio::test]
+  async fn context_renders_derived_apparel_only() {
+    let state = state();
+    state
+      .view(PlayerModule::ID.to_string())
+      .set(&Keypath::Apparel.to_keypath(), &"iron helmet, wool cloak")
+      .await
+      .unwrap();
+
+    let mut f = PromptFormatter::new();
+    PlayerModule::default().context(state, &mut f).await.unwrap();
+    let text = f.finish();
+
+    assert!(text.contains("# Player Character"));
+    assert!(text.contains("Apparel: iron helmet, wool cloak"));
+    // The raw profile never appears here — the engine renders it.
+    assert!(!text.contains("Name:"));
+  }
+
+  #[tokio::test]
+  async fn context_is_empty_without_apparel() {
+    let mut f = PromptFormatter::new();
+    PlayerModule::default().context(state(), &mut f).await.unwrap();
+    assert!(f.finish().trim().is_empty());
   }
 }

@@ -14,22 +14,44 @@ pub struct TodoItem {
 
 impl TodoItem {
   /// Parse a single markdown TODO list item.
+  ///
+  /// Accepts the canonical GFM task-list syntax plus a few common agent
+  /// spellings, normalizing everything to the canonical form:
+  /// - `- [ ] item` / `- [x] item` / `- [X] item` — bullet with checkbox
+  /// - `[ ] item` / `[x] item` / `[X] item` — bare checkbox
+  /// - `- item` / `* item` — plain bullet, treated as unchecked
   pub fn parse(src: &str) -> Result<Self, EngineError> {
     if src.contains("\n") {
       return Err(EngineError::input("expected single-line string"));
     }
 
-    let checked = if src.starts_with("[ ]") {
-      false
-    } else if src.starts_with("[x]") {
-      true
-    } else {
-      return Err(EngineError::validation("invalid todo item"));
-    };
+    let trimmed = src.trim();
+    let mut rest = trimmed;
+    let mut checked: Option<bool> = None;
+
+    if rest.starts_with("- ") || rest.starts_with("* ") {
+      rest = rest[2..].trim_start();
+    }
+
+    if rest.starts_with("[ ]") {
+      checked = Some(false);
+      rest = &rest[3..];
+    } else if rest.starts_with("[x]") || rest.starts_with("[X]") {
+      checked = Some(true);
+      rest = &rest[3..];
+    }
+
+    if checked.is_none() && !trimmed.starts_with("- ") && !trimmed.starts_with("* ") {
+      return Err(EngineError::validation("invalid todo item: expected `- [ ] item` or `- item`"));
+    }
+    let content = rest.trim();
+    if content.is_empty() {
+      return Err(EngineError::validation("invalid todo item: empty content"));
+    }
 
     Ok(TodoItem {
-      checked,
-      content: src[3..].trim().to_string(),
+      checked: checked.unwrap_or(false),
+      content: content.to_string(),
     })
   }
 
@@ -38,23 +60,47 @@ impl TodoItem {
 impl Display for TodoItem {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     if self.checked {
-      f.write_str("[x] ")?;
+      f.write_str("- [x] ")?;
     } else {
-      f.write_str("[ ] ")?;
+      f.write_str("- [ ] ")?;
     }
     f.write_str(&self.content)?;
     Ok(())
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TodoList(pub Vec<TodoItem>);
 
 impl TodoList {
   pub fn parse(src: &str) -> Result<Self, EngineError> {
-    Ok(Self(src.lines().map(TodoItem::parse).collect::<Result<_, _>>()?))
+    Ok(Self(src.lines()
+      .filter(|line| !line.trim().is_empty())
+      .map(TodoItem::parse)
+      .collect::<Result<_, _>>()?))
   }
 
+
+  /// Merge `other` into `self`. Items are matched by content:
+  /// - unchecked items that `other` marks checked become checked;
+  /// - items new to `self` are appended at the end, in order of appearance;
+  /// - unchecked and removed items are ignored — the list only grows and
+  ///   checked state only moves forward.
+  pub fn merge(&self, other: &Self) -> Self {
+    let mut items: Vec<TodoItem> = self.0.iter()
+      .map(|item| TodoItem {
+        checked: item.checked
+          || other.0.iter().any(|o| o.content == item.content && o.checked),
+        content: item.content.clone(),
+      })
+      .collect();
+    for item in &other.0 {
+      if !items.iter().any(|existing| existing.content == item.content) {
+        items.push(item.clone());
+      }
+    }
+    TodoList(items)
+  }
 
   pub fn diff(&self, other: &Self) -> Vec<TodoListDiff> {
     let mut result = vec![];
@@ -229,6 +275,59 @@ mod tests {
   }
 
   #[test]
+  fn todo_item_parse_plain_bullet_is_unchecked() {
+    let parsed = TodoItem::parse("- buy milk").unwrap();
+    assert_eq!(parsed, item(false, "buy milk"));
+  }
+
+  #[test]
+  fn todo_item_parse_star_bullet_is_unchecked() {
+    let parsed = TodoItem::parse("* buy milk").unwrap();
+    assert_eq!(parsed, item(false, "buy milk"));
+  }
+
+  #[test]
+  fn todo_item_parse_bullet_with_checkbox() {
+    assert_eq!(TodoItem::parse("- [ ] buy milk").unwrap(), item(false, "buy milk"));
+    assert_eq!(TodoItem::parse("- [x] read book").unwrap(), item(true, "read book"));
+    assert_eq!(TodoItem::parse("- [X] read book").unwrap(), item(true, "read book"));
+  }
+
+  #[test]
+  fn todo_item_parse_capital_x_is_checked() {
+    let parsed = TodoItem::parse("[X] read book").unwrap();
+    assert_eq!(parsed, item(true, "read book"));
+  }
+
+  #[test]
+  fn todo_item_parse_rejects_bare_text() {
+    let err = TodoItem::parse("buy milk").unwrap_err();
+    assert!(matches!(err, EngineError::Validation(_)));
+  }
+
+  #[test]
+  fn todo_item_parse_rejects_empty_items() {
+    assert!(TodoItem::parse("-").is_err());
+    assert!(TodoItem::parse("- ").is_err());
+    assert!(TodoItem::parse("- [ ]").is_err());
+    assert!(TodoItem::parse("* ").is_err());
+  }
+
+  #[test]
+  fn todo_item_display_is_canonical() {
+    assert_eq!(item(false, "buy milk").to_string(), "- [ ] buy milk");
+    assert_eq!(item(true, "read book").to_string(), "- [x] read book");
+  }
+
+  #[test]
+  fn todo_item_parse_display_roundtrip() {
+    let src = "- [ ] buy milk";
+    assert_eq!(TodoItem::parse(src).unwrap().to_string(), src);
+    let src = "- [x] read book";
+    assert_eq!(TodoItem::parse(src).unwrap().to_string(), src);
+  }
+
+  #[test]
   fn todo_item_parse_rejects_multiline() {
     let err = TodoItem::parse("[ ] line1\n[ ] line2").unwrap_err();
     assert!(matches!(err, EngineError::Input(_)));
@@ -268,6 +367,63 @@ mod tests {
   fn todo_list_parse_invalid_item_propagates_error() {
     let err = TodoList::parse("[ ] ok\n[-] bad").unwrap_err();
     assert!(matches!(err, EngineError::Validation(_)));
+  }
+
+  #[test]
+  fn todo_list_parse_skips_blank_lines() {
+    let parsed = TodoList::parse("[ ] first\n\n[x] second\n").unwrap();
+    assert_eq!(parsed.0.len(), 2);
+    assert_eq!(parsed.0[0], item(false, "first"));
+    assert_eq!(parsed.0[1], item(true, "second"));
+  }
+
+  #[test]
+  fn todo_list_parse_accepts_plain_bullets() {
+    let parsed = TodoList::parse("- first\n- [x] second").unwrap();
+    assert_eq!(parsed.0, vec![item(false, "first"), item(true, "second")]);
+  }
+
+  #[test]
+  fn todo_list_display_roundtrip() {
+    let src = "- [ ] first\n- [x] second\n- [ ] third";
+    let list = TodoList::parse(src).unwrap();
+    assert_eq!(list.to_string(), src);
+    assert_eq!(TodoList::parse(&list.to_string()).unwrap(), list);
+  }
+
+  // --- TodoList::merge ---
+
+  #[test]
+  fn merge_checks_off_and_appends() {
+    let existing = list(vec![item(false, "a"), item(true, "b")]);
+    let new = list(vec![item(true, "a"), item(false, "c")]);
+    let merged = existing.merge(&new);
+    assert_eq!(merged.0, vec![item(true, "a"), item(true, "b"), item(false, "c")]);
+  }
+
+  #[test]
+  fn merge_ignores_uncheck_and_remove() {
+    let existing = list(vec![item(true, "a"), item(true, "b")]);
+    // `a` arrives unchecked (uncheck attempt) and `b` is absent (remove attempt)
+    let new = list(vec![item(false, "a")]);
+    let merged = existing.merge(&new);
+    assert_eq!(merged.0, vec![item(true, "a"), item(true, "b")]);
+  }
+
+  #[test]
+  fn merge_appends_new_items_in_order() {
+    let existing = list(vec![item(false, "a")]);
+    let new = list(vec![item(true, "x"), item(false, "y"), item(true, "x")]);
+    let merged = existing.merge(&new);
+    assert_eq!(merged.0, vec![item(false, "a"), item(true, "x"), item(false, "y")]);
+  }
+
+  #[test]
+  fn merge_empty_sides() {
+    let empty = list(vec![]);
+    let items = list(vec![item(false, "a")]);
+    assert_eq!(empty.merge(&items).0, vec![item(false, "a")]);
+    assert_eq!(items.merge(&empty).0, vec![item(false, "a")]);
   }
 
   // --- TodoList::diff ---

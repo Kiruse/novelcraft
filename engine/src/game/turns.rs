@@ -13,6 +13,12 @@ pub struct TurnV2 {
   pub prompt: Option<String>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub responses: Vec<AgentResponse>,
+  /// Manual gamestate edits made by the player from the sidebar while this
+  /// was the last turn. Each pair is a full keypath (first segment = module
+  /// ID) and its string override; an empty string removes the field. Applied
+  /// after the turn's tool calls during [`crate::game::state::GameState::replay`].
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub edits: Vec<(Vec<String>, String)>,
 }
 
 impl TurnV2 {
@@ -105,7 +111,7 @@ mod tests {
       content.to_string(),
       tc_id.map(|id| vec![ToolCall {
         id: id.to_string(),
-        name: "memory::note_events".to_string(),
+        name: "story::note_events".to_string(),
         arguments: "{}".to_string(),
       }]).unwrap_or_default(),
     )
@@ -153,6 +159,7 @@ mod tests {
     let mut turn = TurnV2::default();
     turn.system = Some("Rewrite this.".to_string());
     turn.prompt = Some("look around".to_string());
+    turn.edits = vec![(vec!["story".to_string(), "timeline".to_string()], "- [ ] x".to_string())];
     turn.assimilate(&[assistant("You are in a tavern.", None)]).unwrap();
 
     let json = serde_json::to_string(&turn).unwrap();

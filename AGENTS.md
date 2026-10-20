@@ -52,8 +52,8 @@ novelcraft/
 │           └── module/         # Gameplay modules
 │               ├── mod.rs      # GameplayModule enum (Story/Npcs/Player/Memory), default_set(), toolset glue
 │               ├── story.rs    # story — timeline TODO list management
-│               ├── npcs.rs     # npcs — NPC persistence
-│               ├── player.rs   # player — player-relevant state
+│           ├── npcs.rs     # npcs — NPC persistence (gamestate-backed; upsert_npc/rename_npc/update_apparel/add_note/remove_note tools, key/value context rendering)
+│           ├── player.rs   # player — player-relevant state (context renders only derived apparel; the profile is rendered by the engine)
 │               └── memory.rs   # memory — rolling summary/chapters, SUMMARIZER_PERSONA
 ├── gui/                        # Rust binary crate (novelcraft-gui, binary name: novelcraft)
 │   ├── Cargo.toml              # GUI dependencies (dioxus, novelcraft-engine, reqwest, chrono, log, tokio)
@@ -68,6 +68,7 @@ novelcraft/
 │       ├── toast.rs            # Toast notifications (global signal + fixed overlay component)
 │       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, Loading, Markdown, SettingsGear, CloseButton)
 │       ├── markdown.rs         # Markdown-like parser for streamed agent output (subset, unit tested)
+│       ├── modules.rs          # ModuleContext trait — per-module sidebar rendering & state edits (default tree editor + memory impl)
 │       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
 │       ├── api.rs              # Inspiration REST client (API_BASE_URL, get_json)
 │       ├── error.rs            # GuiError (thiserror): Engine/Api variants
@@ -80,6 +81,7 @@ novelcraft/
 │           └── story_gameplay.rs # Game view — turns, streaming, chat bar, memory sidebar, profile popover, swipe
 └── docs/                       # Comprehensive documentation
     ├── gui-architecture.md     # Dioxus GUI components, screens, styling conventions
+    ├── known-issues.md         # Dev-only issues not worth fixing (check before debugging crashes)
     └── ...
 ```
 
@@ -126,7 +128,7 @@ Models are configured in Rust, persisted to disk as JSON, and held in the engine
 - **Engine side**: `NovelCraftConfig` (defined in `engine/src/config.rs`, persisted at `{configDir}/NovelCraft/config.json`) holds `max_agent_steps`, `system_prompt`, `models: Models` — an `exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>` keyed by **all three** `ModelPurpose` variants (`DungeonMaster`, `Suggestions`, `Summarizer`) — plus `summary_threshold`, `profiles`, and `active_profile`.
 - Each `ModelConfig` (re-exported from `kiruklaw-agent-loop`, internally tagged) is `ModelConfig::OpenAi { base_url, api_key, model }`, where `model` is the actual LLM API model identifier.
 - **Because `Models` is exhaustive, `config.json` must contain a `summarizer` key.** The `Summarizer` purpose was added in the memory rewrite — existing users migrate their local config manually. `summary_threshold` is `#[serde(default)]` (defaults to `DEFAULT_SUMMARY_THRESHOLD` = 50), so older configs still deserialize.
-- `NovelCraftConfig::contribute()` pushes `max_agent_steps`, `system_prompt` (the DM persona), and the Dungeon Master model into the `AgentLoop`. The Summarizer model is used only by the one-shot memory-compression call.
+- `NovelCraftConfig::contribute()` pushes `max_agent_steps`, `system_prompt` (the DM persona), and the Dungeon Master model into the `AgentLoop`. The loop is also built with `hide_tool_history` enabled: tool calls & results from earlier rounds are stripped from each request (module contexts and the rolling summary re-inject the relevant state; the narrative text reflects their outcomes) — a token-usage optimization. It also requests reasoning (`reasoning: { effort: "medium" }`, the OpenRouter-unified parameter; models without reasoning support ignore it) so the DM plans its tool calls before narrating. The Summarizer model is used only by the one-shot memory-compression call, without reasoning.
 - Default host is `http://localhost:8888/v1` (`DEFAULT_HOST` — local llama.cpp/LM Studio server); the default system prompt is the Dungeon Master persona in `config.rs` (it instructs the DM to maintain chapter notes with the memory tools).
 - The GUI's Settings screen edits this config (three model groups + "Summary Threshold (turns)" field) and persists it via `engine::save_config` (`config.save()` + `NovelCraftEngine::set_config`).
 
@@ -137,14 +139,14 @@ Models are configured in Rust, persisted to disk as JSON, and held in the engine
 - **Dungeon Master agent loop** — `NovelCraftEngine::prompt(content, sender)` / `rewrite(instruct, sender)` (`engine/src/game/engine.rs`):
   1. Refresh the module-context cache (a module's `context()` is re-rendered only when its state is dirty or uncached).
   2. Push a new turn (`prompt`) or attach steering instructions to the last turn and clear its responses (`rewrite`).
-  3. Assemble the conversation: a single system message (config persona + `# Gameplay module contexts` + player character profile) followed by the retained short-term history.
+  3. Assemble the conversation: a single system message (config persona + `# Gameplay module contexts` + player character profile) followed by the retained short-term history, then the `TOOL_REMINDER` system message spliced in immediately before the latest user prompt (`inject_tool_reminder`) — nudging the agent to document the turn via its tools.
   4. Run the `kiruklaw` `AgentLoop` with a `ContextProvider` that hands each toolset a `GameStateView` scoped to its module.
   5. Assimilate the newly produced assistant/tool messages into the turn (`TurnV2::assimilate`) and commit.
   6. Run `compress_memory_if_due()` (see [Session & Memory Lifecycle](#session--memory-lifecycle)).
 - **Streaming** — chunks arrive as `AgentMessageChunk` variants (`Content { text }`, `ToolCallStart`, `ToolCallArgs`, `Reasoning`, `Done`) through a tokio mpsc `Sender` that the caller provides.
 - **Memory compression** — a ONE-SHOT `kiruklaw_agent_loop::prompt` call (no agent loop, no tools) using the `Summarizer` model and `SUMMARIZER_PERSONA`.
 
-**Important terminology:** A "persona" is ONLY the system prompt passed to the LLM call — it defines who the agent *is*. Exactly two personas exist: the DM persona (`NovelCraftConfig.system_prompt`, default `DEFAULT_SYSTEM_PROMPT` in `config.rs`) and `SUMMARIZER_PERSONA` (`engine/src/game/module/memory.rs`). Everything else — turn-level `system` fields (DM steering instructions for rewrites), module contexts, the player profile — is **NOT** a persona. They are regular messages (or parts of the system message) injected into the conversation to guide behavior.
+**Important terminology:** A "persona" is ONLY the system prompt passed to the LLM call — it defines who the agent *is*. Exactly two personas exist: the DM persona (`NovelCraftConfig.system_prompt`, default `DEFAULT_SYSTEM_PROMPT` in `config.rs`) and `SUMMARIZER_PERSONA` (`engine/src/game/module/story.rs`). Everything else — turn-level `system` fields (DM steering instructions for rewrites), module contexts, the player profile — is **NOT** a persona. They are regular messages (or parts of the system message) injected into the conversation to guide behavior.
 
 ### Data Persistence — Filesystem via Engine Types
 
@@ -161,15 +163,15 @@ All data is stored as **JSON files** on disk, managed by engine types (`SessionV
 
 The conversation is the agent's **short-term memory**: only the last `2 × summary_threshold` turns are retained (default threshold 50). Everything older is compressed into a rolling story summary held by the memory module (**long-term memory**).
 
-- **Core invariant** — the session snapshot holds the gamestate as it was just BEFORE the first retained turn. Loading = `GameState::new(snapshot, module_ids, profile)` + `GameState::replay(history)` (re-applies every recorded tool call; errors on unknown module names).
-- **Session creation** — `NovelCraftEngine::create_session(title, exposition)`: builds a fresh `SessionV2` via `SessionV2::default()` (modules filled by `GameplayModule::default_set()`: `story`, `npcs`, `player`, `memory`), records the engine's active profile, and persists. The exposition doubles as the story premise: it is injected into the system prompt from the session (see below), never copied into gamestate.
-- **Module ID invariant** — module IDs (`story`, `npcs`, `player`, `memory`) MUST match the toolset namespace. The kiruklaw `#[toolset]` macro derives the namespace from the snake_case struct name, and every module declares `#[toolset(strip_suffix = "module")]` to strip the `_module` suffix (`StoryModule` → `story`). `GameState::replay` resolves recorded tool calls by that namespace against the session's module map. Mismatches silently break replay.
+- **Core invariant** — the session snapshot holds the gamestate as it was just BEFORE the first retained turn. Loading = `GameState::new(snapshot, module_ids, profile)` + `GameState::replay(history)`: error'ed tool calls are **skipped** (their recorded response is an error — they had no state effect originally, and re-dispatching could double-apply if validation semantics changed); originally-successful calls are re-dispatched, and a re-dispatch error (state drift) is logged, never fatal. After each turn's tool calls, that turn's manual edits (`TurnV2::edits` — sidebar overrides, keypath[0] = module ID, empty string removes) are applied; bad edits (unknown module, unwritable path) are logged and skipped. Only structurally invalid history errors (unknown module names, malformed tool names).
+- **Session creation** — `NovelCraftEngine::create_session(title, exposition)`: builds a fresh `SessionV2` via `SessionV2::default()` (modules filled by `GameplayModule::default_set()`: `story`, `npcs`, `player`), records the engine's active profile, and persists. The exposition doubles as the story premise: it is injected into the system prompt from the session (see below), never copied into gamestate.
+- **Module ID invariant** — module IDs (`story`, `npcs`, `player`) MUST match the toolset namespace. The kiruklaw `#[toolset]` macro derives the namespace from the snake_case struct name, and every module declares `#[toolset(strip_suffix = "module")]` to strip the `_module` suffix (`StoryModule` → `story`). `GameState::replay` resolves recorded tool calls by that namespace against the session's module map. Mismatches silently break replay.
 - **Compression** — after each prompt/rewrite commit, `NovelCraftEngine::compress_memory_if_due()` → `SessionV2::compress_memory(threshold, model)` when `should_compress()` (retained len > 2 × threshold):
   1. Render the oldest `threshold` turns into a transcript (`render_transcript`) prefixed by the previous rolling summary, if any.
   2. ONE-SHOT Summarizer LLM call merges the transcript into the rolling summary. **Summarize FIRST**: on LLM failure nothing is mutated; the engine logs a warning and compression silently retries on a later trigger — the player's turn never fails.
-  3. Drain the old turns, write the summary into the gamestate (`MemoryModule::write_summary` — engine-written; agents never touch it), re-snapshot the gamestate (re-anchoring it to the new first retained turn), save.
+  3. Drain the old turns, write the summary into the gamestate (`StoryModule::write_summary` — engine-written; agents never touch it), re-snapshot the gamestate (re-anchoring it to the new first retained turn), save.
 - **Fork** — `NovelCraftEngine::fork(turn_index)` → `SessionV2::fork(turn_index, profiles)`: works ONLY within the retained window (errors otherwise); truncates history to `turn_index + 1`, rebuilds the gamestate from snapshot + replay, saves. In the GUI, sending a prompt from any turn other than the last forks at that turn first (`engine::prompt(content, from_turn)`).
-- **Long-term memory (memory module)** — gamestate keys under `memory`: `summary` (rolling summary, engine-written only) and `chapters: Vec<ChapterV2>` (`{title, notes}` — notes are markdown bullet lists). Chapters bootstrap lazily (there is always an active, untitled last chapter). Agents maintain them via `note_events(notes)` (full-replace of the active chapter's bullet notes, validated by the `BulletList` parser — every non-empty line must start with `"- "`) and `begin_chapter(title)` (closes the active chapter under the given descriptive title and opens a fresh untitled one). The story premise is NOT gamestate — it comes from the session's `exposition` and is injected into the system prompt (`# Story premise` section in `NovelCraftEngine::system_prompt_msg`). `MemoryModule::read(&GameState)` returns the GUI-facing `MemoryState { summary, chapters }`; the engine exposes it as `NovelCraftEngine::memory()`. `MemoryModule::context()` injects "Story so far / Chapters" into the system prompt via the module-context cache.
+- **Long-term memory (story module)** — gamestate keys under `story`: `timeline` (agent-managed TODO list of markdown task items `- [ ]`/`- [x]`; the parser tolerates plain `- ` bullets and normalizes them to unchecked items; `manage_timeline` **merges** rather than replaces — new items append at the end, checked state only moves forward, uncheck/remove attempts are ignored), `summary` (rolling summary, engine-written only) and `chapters: Vec<ChapterV2>` (`{title, notes}` — notes are markdown bullet lists). Chapters bootstrap lazily (there is always an active, untitled last chapter). Agents maintain them via `note_events(notes)` (appends bullets to the active chapter's notes — duplicates ignored, the record never shrinks; validated by the `BulletList` parser — every non-empty line must start with `"- "`) and `begin_chapter(title)` (closes the active chapter under the given descriptive title and opens a fresh untitled one). The story premise is NOT gamestate — it comes from the session's `exposition` and is injected into the system prompt (`# Story premise` section in `NovelCraftEngine::system_prompt_msg`). `StoryModule::read(&GameState)` returns the GUI-facing `StoryState { summary, chapters }`; the engine exposes it as `NovelCraftEngine::story_state()`. `StoryModule::context()` injects "Timeline / Story so far / Chapters" into the system prompt via the module-context cache.
 
 ### Game Agent Loop
 
@@ -232,7 +234,6 @@ let session = engine::create_session(title, exposition).await?;
 engine::play_session(id).await;                          // loads + opens the last retained turn
 engine::prompt(content, from_turn);                      // Some(idx) forks at that turn first
 engine::goto(idx); engine::navigate(delta); engine::jump_to_end();
-let memory = engine::memory_async().await?;              // MemoryState (summary/chapters)
 engine::delete_session(id).await?;                       // deletes from disk + clears active session if it was
 ```
 
@@ -261,6 +262,8 @@ session.save().await?;
 | `set_config` | `NovelCraftConfig` | — | Swap config; re-contributes values into the cached agent loop |
 | `set_session` | `Option<SessionV2>` | — | Set the active session; rebuilds agent loop toolsets from its modules |
 | `set_active_profile` | `Option<String>` | — | Update active profile (config + active session) |
+| `create_profile` | — | `Result<ProfileV1>` | Append a new profile (seeded with Gender/Age/Personality/Appearance), make it the active one, persist |
+| `update_profile` | `ProfileV1` | `Result<()>` | Replace the profile (matched by id) and persist; refreshes the active session's copy if it is the active profile |
 | `config` | — | `&NovelCraftConfig` | Read-only config access |
 | `profile` | — | `Option<&ProfileV1>` | Resolve the active profile |
 | `session` | — | `Result<&SessionV2>` | Active session or error |
@@ -269,9 +272,13 @@ session.save().await?;
 | `prompt` | `content, Sender<AgentMessageChunk>` | `Result<()>` | Push a new user turn and run the DM agent loop |
 | `rewrite` | `instruct, Sender<AgentMessageChunk>` | `Result<()>` | Regenerate the last turn under the given steering instructions |
 | `fork` | `turn_index` | `Result<()>` | Fork at a retained turn, deleting all later turns |
+| `reset_history` | — | `Result<()>` | Drop the entire retained history, restoring the gamestate to the session snapshot (fresh start of the story) |
+| `regenerate` | `Sender<AgentMessageChunk>` | `Result<()>` | Regenerate the last response: fork from the second-to-last turn (drop the entire history for the very first turn) and re-run the same user prompt |
+| `set_last_prompt` | `content` | `Result<()>` | Overwrite the user prompt of the last retained turn (GUI inline editing, saved on blur) |
 | `turn` | `index` | `Option<TurnV2>` | Get a retained turn by window-relative index |
 | `turn_count` | — | `Option<usize>` | Retained turn count of the active session |
-| `memory` | — | `Result<MemoryState>` | Read the long-term memory (summary, chapters) |
+| `story_state` | — | `Result<StoryState>` | Read the long-term story state (summary, chapters) |
+| `effective_prompt` | — | `Result<String>` | The effective prompt the DM agent loop sees next, rendered for display: system message (persona, premise, module contexts, profile) + retained conversation history, **mirroring `hide_tool_history`** (old tool calls & results stripped when the loop hides them); refreshes the module-context cache |
 | `save` | — | `Result<()>` | Persist the active session + config |
 
 ### `SessionV2` (`engine/src/game/session.rs`)
@@ -286,6 +293,7 @@ session.save().await?;
 | `update_turn` | `cb: FnOnce(TurnV2) -> Result<TurnV2>` | `Result<()>` | Transform the last turn and save |
 | `replace_turn` / `pop_turn` | `turn` / — | `Result<()>` / `Result<Option<TurnV2>>` | Swap / drop the last turn |
 | `fork` | `turn_index, profiles` | `Result<()>` | Truncate to `turn_index + 1` (retained window only), rebuild gamestate, save |
+| `reset_turns` | `profiles` | `Result<()>` | Drop all retained turns and restore the gamestate to the snapshot (used when regenerating the very first turn) |
 | `should_compress` | `threshold` | `bool` | Retained history exceeds `2 × threshold` |
 | `compress_memory` | `threshold, model` | `Result<bool>` | Summarize + drain the oldest `threshold` turns (see lifecycle) |
 | `turn_count` / `try_turn` | — / `index` | `usize` / `Option<&TurnV2>` | Retained-window accessors |
@@ -296,7 +304,7 @@ session.save().await?;
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
 | `GameState::new` | `snapshot, module_ids, profile` | `Result<GameState>` | Build from snapshot; module IDs missing from the snapshot are seeded with empty state |
-| `GameState::replay` | `modules, turns` | `Result<()>` | Re-apply all recorded tool calls; errors on unknown module names |
+| `GameState::replay` | `modules, turns` | `Result<()>` | Re-apply recorded tool calls; skips error'ed calls (recorded `Error:` responses), tolerates re-dispatch drift, errors on unknown module names |
 | `GameState::snapshot` | — | `Snapshot` | Export all module states |
 | `GameStateView::get` / `set` | `module, keypath` / `keypath, value` | … / `Result<()>` | Typed read / write of a module's JSON state (writes auto-create missing keys along the keypath) |
 

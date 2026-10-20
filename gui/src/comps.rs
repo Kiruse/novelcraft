@@ -144,7 +144,7 @@ pub struct MarkdownProps {
 #[component]
 pub fn Markdown(props: MarkdownProps) -> Element {
   let blocks = markdown::parse(&props.text);
-  let class = format!("markdown text-nc-text/80 {}", props.class);
+  let class = format!("markdown {}", props.class);
 
   rsx! {
     div { class, { render_blocks(&blocks) } }
@@ -172,11 +172,18 @@ fn render_blocks(blocks: &[Block]) -> Element {
 fn render_segments(segments: &[Segment]) -> Element {
   rsx! {
     for (idx, segment) in segments.iter().enumerate() {
-      span {
-        key: "{idx}",
-        class: segment.classes(),
-        { segment.text.clone() }
-      }
+      { match segment {
+          Segment::Speech(children) => rsx! {
+            span { key: "{idx}", class: "md-speech", { render_segments(children) } }
+          },
+          Segment::Styled { style, text } => rsx! {
+            span {
+              key: "{idx}",
+              class: markdown::styled_classes(*style),
+              { text.clone() }
+            }
+          },
+      } }
     }
   }
 }

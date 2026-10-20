@@ -86,12 +86,50 @@ pub struct StreamState {
 impl StreamState {
   pub fn absorb(&mut self, chunk: AgentMessageChunk) {
     match chunk {
-      AgentMessageChunk::Content { text } => self.text.push_str(&text),
+      AgentMessageChunk::Content { text } => {
+        // Prose is flowing again — stop showing the tool-activity spinner
+        // so the incoming text actually streams in.
+        self.activity = false;
+        self.text.push_str(&text);
+      }
       AgentMessageChunk::ToolCallStart { .. } | AgentMessageChunk::ToolCallArgs { .. } => {
         self.activity = true;
       }
       AgentMessageChunk::Reasoning { .. } | AgentMessageChunk::Done { .. } => {}
     }
+  }
+}
+
+/// Reasoning of the latest generation, captured from `Reasoning` chunks by
+/// the stream drain task and kept after the stream closes for the sidebar's
+/// Reasoning section.
+pub static REASONING: GlobalSignal<String> = GlobalSignal::new(String::new);
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn activity_toggles_with_chunks() {
+    let mut stream = StreamState::default();
+
+    stream.absorb(AgentMessageChunk::ToolCallStart {
+      index: 0,
+      id: "1".to_string(),
+      name: "story::note_events".to_string(),
+    });
+    assert!(stream.activity);
+
+    stream.absorb(AgentMessageChunk::Content { text: "hello ".to_string() });
+    assert!(!stream.activity);
+    assert_eq!(stream.text, "hello ");
+
+    stream.absorb(AgentMessageChunk::ToolCallArgs { index: 0, args: "{}".to_string() });
+    assert!(stream.activity);
+
+    stream.absorb(AgentMessageChunk::Content { text: "world".to_string() });
+    assert!(!stream.activity);
+    assert_eq!(stream.text, "hello world");
   }
 }
 
@@ -114,6 +152,9 @@ pub static PROFILES: GlobalSignal<Query<Profiles>> = GlobalSignal::new(|| {
 });
 pub static SESSIONS: GlobalSignal<Query<Vec<SessionV2>>> = GlobalSignal::new(|| Query::Empty);
 pub static SESSION: GlobalSignal<Query<SessionV2>> = GlobalSignal::new(|| Query::Empty);
-pub static TURN_INDEX: GlobalSignal<usize> = GlobalSignal::new(|| 0);
+/// View position within the gameplay screen: `-1` is the premise page
+/// (virtual page 0, before the first turn), `0..` are turn indices.
+pub const PREMISE_PAGE: isize = -1;
+pub static TURN_INDEX: GlobalSignal<isize> = GlobalSignal::new(|| PREMISE_PAGE);
 pub static TURN: GlobalSignal<Query<TurnV2>> = GlobalSignal::new(|| Query::Empty);
 pub static STREAM: GlobalSignal<Option<StreamState>> = GlobalSignal::new(|| None);

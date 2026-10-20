@@ -75,7 +75,7 @@ while let Some(chunk) = rx.recv().await {
 }
 ```
 
-Memory compression additionally uses a one-shot `kiruklaw_agent_loop::prompt` call (no agent loop, no tools) with the `Summarizer` model and `SUMMARIZER_PERSONA` (`engine/src/game/module/memory.rs`).
+Memory compression additionally uses a one-shot `kiruklaw_agent_loop::prompt` call (no agent loop, no tools) with the `Summarizer` model and `SUMMARIZER_PERSONA` (`engine/src/game/module/story.rs`).
 
 ### Data Persistence
 

@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::error::EngineError;
 use crate::game::module::GameplayModule;
-use crate::game::module::memory::{MemoryModule, SUMMARIZER_PERSONA};
+use crate::game::module::story::{StoryModule, SUMMARIZER_PERSONA};
 use crate::game::profile::ProfileV1;
 use crate::game::state::GameState;
 use crate::game::state::Snapshot;
@@ -151,7 +151,7 @@ impl SessionV2 {
   /// loads (as used by the sessions list).
   pub fn summary(&self) -> String {
     self.snapshot
-      .get(MemoryModule::ID)
+      .get(StoryModule::ID)
       .and_then(|state| state.get("summary"))
       .and_then(|value| value.as_str())
       .unwrap_or_default()
@@ -223,6 +223,16 @@ impl SessionV2 {
     self.save().await
   }
 
+  /// Drop all retained turns, restoring the gamestate to the session
+  /// snapshot. Unlike [Self::fork] this may empty the history entirely —
+  /// used when regenerating the very first turn.
+  pub async fn reset_turns(&mut self, profiles: &[ProfileV1]) -> Result<(), EngineError> {
+    self.updated_at = Utc::now();
+    self.turns.clear();
+    self.rebuild_gamestate(profiles).await?;
+    self.save().await
+  }
+
   /// Whether the retained history exceeds `2 * threshold` turns and should
   /// be compressed.
   #[inline(always)]
@@ -243,7 +253,7 @@ impl SessionV2 {
       return Ok(false);
     }
 
-    let previous = MemoryModule::read(&self.gamestate).await?.summary;
+    let previous = StoryModule::read(&self.gamestate).await?.summary;
     let transcript = {
       let mut f = PromptFormatter::new();
       f.indented(|f| render_transcript(f, &self.turns[..threshold], &previous))?;
@@ -255,7 +265,7 @@ impl SessionV2 {
     let summary = summarize(model, &transcript).await?;
 
     self.turns.drain(..threshold);
-    MemoryModule::write_summary(&self.gamestate, summary).await?;
+    StoryModule::write_summary(&self.gamestate, summary).await?;
     self.snapshot = self.gamestate.snapshot().await;
     self.save().await?;
     Ok(true)
@@ -321,6 +331,8 @@ async fn summarize(model: &ModelConfig, transcript: &str) -> Result<String, Engi
       ConversationMessage::system(SUMMARIZER_PERSONA.to_string()).into(),
       ConversationMessage::user(transcript.to_string()).into(),
     ],
+    // The summarizer is a one-shot call — no reasoning requested.
+    None,
     discard_channel(),
   ).await?;
 
@@ -382,7 +394,7 @@ mod tests {
     let mut session = SessionV2::default();
     assert_eq!(session.summary(), "");
     session.snapshot.insert(
-      MemoryModule::ID.to_string(),
+      StoryModule::ID.to_string(),
       serde_json::json!({"summary": "so far", "chapters": []}),
     );
     assert_eq!(session.summary(), "so far");
@@ -431,7 +443,7 @@ mod tests {
       responses: vec![super::super::turns::AgentResponse {
         tool_calls: vec![kiruklaw_agent_loop::ToolCall {
           id: "tc1".to_string(),
-          name: "memory::begin_chapter".to_string(),
+          name: "story::begin_chapter".to_string(),
           arguments: r#"{"title":"Exodus"}"#.to_string(),
         }],
         tool_responses: vec![("tc1".to_string(), "Began a new chapter.".to_string())],
@@ -442,12 +454,12 @@ mod tests {
     session.total_turns = 1;
 
     session.rebuild_gamestate(&[]).await.unwrap();
-    let memory = MemoryModule::read(&session.gamestate).await.unwrap();
+    let story = StoryModule::read(&session.gamestate).await.unwrap();
     // The replayed call titled the bootstrapped first chapter and opened a
     // fresh stub.
-    assert_eq!(memory.chapters.len(), 2);
-    assert_eq!(memory.chapters[0].title, "Exodus");
-    assert!(memory.chapters[1].title.is_empty());
+    assert_eq!(story.chapters.len(), 2);
+    assert_eq!(story.chapters[0].title, "Exodus");
+    assert!(story.chapters[1].title.is_empty());
   }
 
   #[test]
@@ -477,7 +489,7 @@ mod tests {
           content: Some("hi there".to_string()),
           tool_calls: vec![kiruklaw_agent_loop::ToolCall {
             id: "t".to_string(),
-            name: "memory::note_events".to_string(),
+            name: "story::note_events".to_string(),
             arguments: "{}".to_string(),
           }],
           ..Default::default()
@@ -491,7 +503,7 @@ mod tests {
     assert!(text.contains("Previous summary: Once upon a time."));
     assert!(text.contains("Player: hello"));
     assert!(text.contains("DM: hi there"));
-    assert!(text.contains("memory::note_events"));
+    assert!(text.contains("story::note_events"));
 
     // An empty previous summary is omitted entirely.
     let mut f = PromptFormatter::new();

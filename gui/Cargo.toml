@@ -7,14 +7,24 @@ edition = "2024"
 name = "novelcraft"
 path = "src/main.rs"
 
+[features]
+default = ["dioxus/desktop"]
+
 [dependencies]
 chrono = "0.4"
 log.workspace = true
 env_logger.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
-dioxus = { version = "0.7", features = ["desktop", "router"] }
+dioxus = { version = "0.7", features = ["router"] }
 novelcraft-engine = { path = "../engine" }
 reqwest = { version = "0.12", features = ["json"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["fs"] }

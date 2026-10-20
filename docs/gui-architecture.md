@@ -42,7 +42,7 @@ gui/
         ├── settings.rs      # Engine config editor (models, system prompt, summary threshold)
         ├── create_story.rs  # New vignette + inspiration browser
         ├── story_overview.rs# Session detail + Play/Delete (with confirm dialog) buttons
-        └── story_gameplay.rs# Game view — turns, streaming, chat bar, memory sidebar
+        └── story_gameplay.rs# Game view — turns, streaming, chat bar, module sidebar
 ```
 
 ## Architecture
@@ -127,8 +127,9 @@ engine::save_config(config).await;
 engine::load_turn(index); engine::goto(index);
 engine::navigate(delta); engine::jump_to_end();
 
-// long-term memory read model (rolling summary, chapters)
-let memory = engine::memory_async().await?;
+// module state read/write (sidebar rendering & leaf edits)
+let state = engine::module_state_async("npcs".into()).await?;
+engine::edit_module_state_async(vec!["npcs".into(), "Mira".into(), "mood".into()], "curious".into()).await?;
 ```
 
 ### Streaming Prompts
@@ -142,7 +143,7 @@ let memory = engine::memory_async().await?;
 
 While `STREAM` is `Some`, turn navigation and sending are blocked and the status row hides its indicators.
 
-All turn indices (`load_turn`/`goto`/`navigate`/`jump_to_end`, `TURN_INDEX`) are **window-relative**: they index into the session's *retained* history (the last `2 × summary_threshold` turns), not the absolute conversation — older turns are compressed away into the rolling story summary by the engine (see `SessionV2::compress_memory`).
+All turn indices (`load_turn`/`goto`/`navigate`/`jump_to_end`, `TURN_INDEX`) are **window-relative**: they index into the session's *retained* history (the last `2 × summary_threshold` turns), not the absolute conversation — older turns are compressed away into the rolling story summary by the engine (see `SessionV2::compress_memory`). `TURN_INDEX` is an `isize` where `PREMISE_PAGE` (`-1`, `gui/src/state.rs`) is the virtual premise page 0 shown before the first turn; prompting from it calls `engine::start_over`, which drops the retained history and restarts the story with the new prompt.
 
 ### Window Chrome
 
@@ -174,7 +175,7 @@ Each toast schedules its own dismissal task (default 5s). Toast variants (Info/S
 | `Chip` | Rounded tag pill with `selected` toggle styling |
 | `Field` / `FieldGroup` | Labeled input row / bordered group with heading |
 | `Loading` | Pulsing text (`animate-pulse`) |
-| `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`; double-quoted `"speech"` breaks onto its own line in white while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
+| `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`; double-quoted `"speech"` renders as one block on its own line in white (emphasis inside a quote nests within the speech element) while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
 | `SettingsGear` / `CloseButton` | Top-bar icon buttons |
 
 `INPUT_CLASS` is the shared text-input styling constant.
@@ -222,7 +223,7 @@ Notes:
 ## Conventions
 
 - Screens use the shared `Screen` wrapper; gameplay uses a custom root layout (top bar with ☰ sidebar toggle, turn viewport + optional sidebar, status row, chat bar).
-- The gameplay sidebar (280px, toggled by the ☰ button) renders the session's **story memory** — the premise (from the session's exposition), rolling summary ("Story so far"), and chapters with their bullet notes — fetched via `engine::memory_async()` each time it opens (the `Sidebar` component is only mounted while open).
+- The gameplay sidebar (280px, toggled by the ☰ button) renders the premise (from the session's exposition), the effective prompt, one collapsible section per **active module** via the `ModuleContext` trait (`gui/src/modules.rs` — custom renderer for the story module, generic editable-tree fallback for the rest), and the viewed turn's tool calls. The effective prompt and module states are (re)fetched on open, on session change, and whenever the viewed turn changes (navigation or a completed generation) — one `use_effect` keyed on `SESSION`, `TURN`, and `TURN_INDEX`. The sidebar is **editable only on the last page** (the gamestate reflects ALL turns' tool calls, so older pages don't line up); leaf edits go through `engine::edit_module_state_async`, which applies to the live gamestate and records the override on the last turn (`TurnV2::edits`, replayed on load).
 - Event handlers must not return values — end `nav.push(…)` and friends with `;` (Dioxus interprets non-unit returns as async spawns and fails to compile).
 - Never touch global signals from `main()` or from plain helper functions outside components/tasks — signal access requires the Dioxus runtime.
 - Engine access goes exclusively through `engine.rs`; screens never import `NovelCraftEngine` directly.

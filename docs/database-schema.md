@@ -42,13 +42,12 @@ Those files are ALL there is — no page batches, no checkpoint files, no separa
   "modules": {
     "story": { "Story": {} },
     "npcs": { "Npcs": {} },
-    "player": { "Player": {} },
-    "memory": { "Memory": {} }
+    "player": { "Player": {} }
   },
   "profile": "profile-uuid-or-absent",
   "total_turns": 12,
-  "snapshot": { "memory": { "..." : "..." } },
-  "turns": [ { "prompt": "What do I see in the tavern?", "responses": [ ... ] } ]
+  "snapshot": { "story": { "..." : "..." } },
+  "turns": [ { "prompt": "What do I see in the tavern?", "responses": [ ... ], "edits": [ [ ["npcs", "Mira", "mood"], "curious" ] ] } ]
 }
 ```
 
@@ -64,7 +63,8 @@ The gamestate **as it was just before the first retained turn**. Re-anchored whe
 
 ```json
 {
-  "memory": {
+  "story": {
+    "timeline": "- [x] intro\n- [ ] the city",
     "summary": "Rolling story summary written by the engine ...",
     "chapters": [
       { "title": "Chapter 1", "notes": "- met a merchant\n- bought a horse\n" }
@@ -77,7 +77,8 @@ The gamestate **as it was just before the first retained turn**. Re-anchored whe
 ```
 
 - Each entry is one gameplay module's JSON object; missing modules are seeded as `{}` on load (`GameState::new`)
-- `memory.summary` is written ONLY by the engine (`MemoryModule::write_summary` during compression). Agents never touch it; they maintain `chapters` via the `begin_chapter` (titles & closes the active chapter, opens a fresh untitled one) and `note_events` (full-replace of the active chapter's bullet notes) tools. Chapters bootstrap lazily — there is always an active, untitled last chapter. The story premise is NOT gamestate — it lives on the session (`exposition`) and is injected into the system prompt
+- `turn.edits` — manual sidebar overrides made on the last page (keypath with module ID prefix → string value; empty string = delete), re-applied after that turn's tool calls during replay
+- `story.summary` is written ONLY by the engine (`StoryModule::write_summary` during compression). Agents never touch it; they maintain `chapters` via the `begin_chapter` (titles & closes the active chapter, opens a fresh untitled one) and `note_events` (appends bullets to the active chapter's notes, duplicates ignored) tools. Chapters bootstrap lazily — there is always an active, untitled last chapter. The story premise is NOT gamestate — it lives on the session (`exposition`) and is injected into the system prompt
 - Loading = `GameState::new(snapshot, module_ids, profile)` + `GameState::replay(turns)` — every recorded tool call is re-applied on top of the snapshot
 
 #### `turns` — Retained Short-Term Memory
@@ -93,7 +94,7 @@ The last `2 × summary_threshold` turns of the conversation (default threshold 5
       {
         "content": "The common room falls quiet as you enter ...",
         "tool_calls": [
-          { "id": "tc1", "name": "memory::note_events", "arguments": "{\"notes\":\"- ...\"}" }
+          { "id": "tc1", "name": "story::note_events", "arguments": "{\"notes\":\"- ...\"}" }
         ],
         "tool_responses": [["tc1", "Chapter notes updated."]]
       }

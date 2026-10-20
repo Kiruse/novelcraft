@@ -11,11 +11,12 @@ use crate::util::prompting::{PromptFormatter, PromptifyResult};
 pub mod story;
 pub mod npcs;
 pub mod player;
-pub mod memory;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GameplayModule {
-  /// Story module provides authored events & trajectory planning
+  /// Story module provides authored events & trajectory planning,
+  /// long-term memory (rolling story summary & agent-maintained chapter
+  /// notes).
   Story(story::StoryModule),
 
   /// NPCs module provides persistency for NPCs
@@ -24,10 +25,6 @@ pub enum GameplayModule {
   /// Player module manages player-relevant state. Initial state
   /// is populated from profiles + story module.
   Player(player::PlayerModule),
-
-  /// Memory module provides long-term memory: rolling story summary &
-  /// agent-maintained chapter notes.
-  Memory(memory::MemoryModule),
 }
 
 impl GameplayModule {
@@ -37,7 +34,6 @@ impl GameplayModule {
       (story::StoryModule::ID.to_string(), GameplayModule::Story(Default::default())),
       (npcs::NpcsModule::ID.to_string(), GameplayModule::Npcs(Default::default())),
       (player::PlayerModule::ID.to_string(), GameplayModule::Player(Default::default())),
-      (memory::MemoryModule::ID.to_string(), GameplayModule::Memory(Default::default())),
     ])
   }
 
@@ -46,7 +42,6 @@ impl GameplayModule {
       Self::Story(module)  => module,
       Self::Npcs(module)   => module,
       Self::Player(module) => module,
-      Self::Memory(module) => module,
     }
   }
 
@@ -55,7 +50,6 @@ impl GameplayModule {
       Self::Story(_)  => story::StoryModule::ID,
       Self::Npcs(_)   => npcs::NpcsModule::ID,
       Self::Player(_) => player::PlayerModule::ID,
-      Self::Memory(_) => memory::MemoryModule::ID,
     }
   }
 
@@ -76,7 +70,6 @@ impl GameplayModule {
       Self::Story(module)  => module.context(state, f).await,
       Self::Npcs(module)   => module.context(state, f).await,
       Self::Player(module) => module.context(state, f).await,
-      Self::Memory(module) => module.context(state, f).await,
     }
   }
 
@@ -85,7 +78,6 @@ impl GameplayModule {
       Self::Npcs(module)   => Box::new(module),
       Self::Player(module) => Box::new(module),
       Self::Story(module)  => Box::new(module),
-      Self::Memory(module) => Box::new(module),
     })
   }
 }
