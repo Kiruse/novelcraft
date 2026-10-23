@@ -7,7 +7,7 @@ NovelCraft will eventually support a proprietary sharing platform that allows hu
 NovelCraft is a Rust/Cargo workspace split into two crates:
 
 - **[novelcraft-engine](engine/)** — pure Rust library crate containing all business logic: LLM proxy (OpenAI-compatible streaming via `reqwest`), filesystem persistence (JSON files for sessions, stories, lore, profiles), the game agent loop, and file import/export. No UI framework dependency.
-- **[novelcraft-gui](gui/)** — Rust binary crate providing the UI, built on [Dioxus](https://dioxuslabs.com/), a React-style Rust framework rendered in the platform's system WebView and styled with Tailwind CSS. Desktop is the primary target; Android/iOS are supported compile targets.
+- **[novelcraft-gui](gui/)** — Rust binary crate providing the UI, built on [Dioxus](https://dioxuslabs.com/), a React-style Rust framework rendered in the platform's system WebView and styled with Tailwind CSS. Desktop is the primary target; the browser (wasm32, storage via OPFS) is a supported build target — see [Web Target](docs/web-target.md).
 
 There is no server, no database, and no authentication — all data lives as loose JSON files on disk.
 
@@ -17,6 +17,7 @@ There is no server, no database, and no authentication — all data lives as loo
 - [just](https://github.com/casey/just) (build orchestration)
 - [bun](https://bun.sh/) (provisions the Tailwind CSS toolchain in `gui/`)
 - The [Dioxus CLI](https://dioxuslabs.com/learn/0.7/getting_started) (`dx`) — used by `just dev` / `just build`
+- Web builds only: the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
 - Linux desktop only: WebKitGTK 4.1 and libxdo (e.g. `sudo pacman -S webkit2gtk-4.1 libxdo`)
 
 ## Building & Running
@@ -24,12 +25,20 @@ There is no server, no database, and no authentication — all data lives as loo
 All commands are managed by the root `justfile`. Run `just` with no arguments to list available recipes.
 
 ```bash
-just dev       # Run the app with hot-reload (Tailwind watcher + dx serve --platform desktop)
-just build     # Bundle the app for the current platform (just css + dx bundle --platform desktop)
-just css       # Compile the Tailwind stylesheet once (minified)
-just check     # Cargo check (entire workspace)
-just clippy    # Cargo clippy
+just dev        # Run the app with hot-reload (Tailwind watcher + dx serve --platform desktop)
+just build      # Bundle the app for the current platform (just css + dx bundle --platform desktop)
+just build-web  # Build the web (wasm32) bundle (just css + dx build --platform web)
+just css        # Compile the Tailwind stylesheet once (minified)
+just check      # Cargo check (entire workspace)
+just check-gui  # Cargo check the GUI for desktop AND web (wasm32) targets
+just clippy     # Cargo clippy
 ```
+
+> **Note on wasm checks:** never invoke plain `cargo check --target wasm32-unknown-unknown`
+> for the GUI — the default features compile the *desktop* renderer, which drags in a
+> native TLS/websocket stack and fails on `openssl-sys`. Use `just check-gui` (which
+> negates the defaults and enables `dioxus/web` for the wasm pass) or
+> `dx build --platform web`.
 
 ## Documentation
 

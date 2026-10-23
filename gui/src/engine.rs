@@ -18,7 +18,8 @@ static ENGINE: OnceLock<Arc<Mutex<NovelCraftEngine>>> = OnceLock::new();
 static SESSIONS_GEN: AtomicUsize = AtomicUsize::new(0);
 static TURN_GEN: AtomicUsize = AtomicUsize::new(0);
 
-/// Construct the process-wide engine. Must be called once before launch.
+/// Construct the process-wide engine. Must be called exactly once, before
+/// any engine operation (done by the `App` boot gate).
 pub fn init_engine(config: NovelCraftConfig) {
   let _ = ENGINE.set(Arc::new(Mutex::new(NovelCraftEngine::new(config))));
 }

@@ -12,7 +12,7 @@ NovelCraft is a **Rust/Cargo workspace desktop app** built with **Dioxus** (rend
 
 - **Engine** (`engine/`, crate `novelcraft-engine`) — pure Rust library crate with all business logic. Owns the game agent loop (built on the `kiruklaw-agent-loop` crate), memory-managed sessions (short-term turn window + long-term memory module), and config/profile persistence. LLM transport (HTTP streaming, SSE parsing) lives inside `kiruklaw-agent-loop`. No UI framework coupling.
 - **GUI** (`gui/`, crate `novelcraft-gui`, binary `novelcraft`) — **Dioxus 0.7** app rendered in the platform's system WebView (via `wry`; desktop is primary, Android/iOS are supported compile targets). Components are rsx functions, state is signals, styling is Tailwind CSS v4. Depends on `novelcraft-engine` as a library. Entry point is `gui/src/main.rs`.
-- **Filesystem persistence** — all data (session metadata, retained history, state snapshots, config incl. profiles) stored as JSON files under the platform data/config directories. Path resolution is centralized in `engine/src/paths.rs`.
+- **Filesystem persistence** — all data (session metadata, retained history, state snapshots, config incl. profiles) stored as JSON files under the platform data/config directories (desktop) or the OPFS root via the cfg-split storage seam in `engine/src/util/fs.rs` + `engine/src/util/fs/opfs.rs` (web; paths become logical namespaces, see [Web Target](./docs/web-target.md)). Path resolution is centralized in `engine/src/paths.rs`.
 - **No server, no auth, no database** — single-user desktop application with loose JSON files
 - **LLM calls** go through the engine — the Dungeon Master agent runs a `kiruklaw` `AgentLoop` whose tool calls operate on per-module gamestate; chunks stream to the GUI through a tokio mpsc channel of `AgentMessageChunk`s. Memory compression uses a ONE-SHOT `kiruklaw_agent_loop::prompt` call with the `Summarizer` model. No event bus or pub/sub.
 - **No `AppState`** — the engine is a single `NovelCraftEngine` value (`engine/src/game/engine.rs`) owning the config and the active session. The GUI holds it behind `OnceLock<Arc<Mutex<NovelCraftEngine>>>` (`gui/src/engine.rs`).
@@ -101,9 +101,9 @@ novelcraft/
 | Profiles | `engine/src/game/profile.rs` | `ProfileV1` — lives inside `config.json`, not a separate store |
 | Engine config | `engine/src/config.rs` | `NovelCraftConfig`, `ModelPurpose`, `Models`, `DEFAULT_HOST`, `DEFAULT_SYSTEM_PROMPT`, `DEFAULT_SUMMARY_THRESHOLD` |
 | Path Resolution | `engine/src/paths.rs` | `data_dir()`, `config_dir()`, `sessions_dir()` — single source of truth for filesystem paths |
-| Engine Utilities | `engine/src/util/` | `mod.rs` (async/sync JSON file I/O, RFC3339 timestamp serde, `discard_channel`), `prompting.rs` (`PromptFormatter`, `Promptify`) |
+| Engine Utilities | `engine/src/util/` | `mod.rs` (RFC3339 timestamp serde, `discard_channel`), `fs.rs` (cfg-split file I/O — native `tokio::fs` vs web OPFS), `fs/opfs.rs` (web-only OPFS primitives), `prompting.rs` (`PromptFormatter`, `Promptify`) |
 | Markdown Utilities | `engine/src/markdown/` | `todo.rs` (`TodoItem`, `TodoList`, `TodoListDiff`), `bullets.rs` (`BulletList` — chapter-notes validation) |
-| GUI Entry | `gui/src/main.rs` | Config load, engine construction, `BOOT_CONFIG` stash, launch config, `App` component (stylesheet link, toast overlay, router) |
+| GUI Entry | `gui/src/main.rs` | Launch config (desktop-only window settings), `App` component (boot gate: async config load → engine construction → `BOOT_CONFIG` stash → query seeding, then stylesheet link, toast overlay, router) |
 | GUI Engine Bridge | `gui/src/engine.rs` | `OnceLock<Arc<Mutex<NovelCraftEngine>>>` — the single seam to the engine; async ops + generation-guarded query refreshes + window-relative turn navigation |
 | GUI State | `gui/src/state.rs` | `Query<T>` (Empty/Error/Stale/Recent) + `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`, `StreamState` |
 | GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) |
@@ -258,7 +258,7 @@ session.save().await?;
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
-| `new` | `NovelCraftConfig` | `Self` | Construct the engine (once, before launch) |
+| `new` | `NovelCraftConfig` | `Self` | Construct the engine (once, at boot — the GUI's `App` boot gate) |
 | `set_config` | `NovelCraftConfig` | — | Swap config; re-contributes values into the cached agent loop |
 | `set_session` | `Option<SessionV2>` | — | Set the active session; rebuilds agent loop toolsets from its modules |
 | `set_active_profile` | `Option<String>` | — | Update active profile (config + active session) |
@@ -364,10 +364,11 @@ All build and development commands are in the root `justfile`.
 | `just dev` | Run the app with hot-reload (Tailwind watcher + `dx serve --platform desktop`) |
 | `just css` | Compile the Tailwind stylesheet once (minified) |
 | `just build` | Bundle the app for the current platform (`just css` + `dx bundle --platform desktop`) |
+| `just build-web` | Build the web (wasm32) bundle (`just css` + `dx build --platform web`) |
 | `just llama` | Serve a local GGUF model on `:8888` via llama.cpp (`DEFAULT_HOST`) |
 | `just check` | Cargo check (entire workspace) |
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |
-| `just check-gui` | Cargo check (`novelcraft-gui` only) |
+| `just check-gui` | Cargo check (`novelcraft-gui` only) for desktop AND web targets (the wasm pass negates default features, enabling `dioxus/web` — the desktop renderer cannot target wasm) |
 | `just clippy` | Cargo clippy (entire workspace) |
 | `just fmt` | Cargo fmt (entire workspace) — **do not use**, see note at top |
 | `just fmt-check` | Cargo fmt --check (entire workspace) — **do not use**, see note at top |

@@ -161,6 +161,21 @@ fn render_blocks(blocks: &[Block]) -> Element {
           Block::Quote(inner) => rsx! {
             blockquote { key: "{idx}", { render_blocks(inner) } }
           },
+          Block::List { ordered, items } => rsx! {
+            { if *ordered {
+              rsx! {
+                ol { key: "{idx}", for (i, item) in items.iter().enumerate() {
+                  li { key: "{i}", { render_segments(item) } }
+                } }
+              }
+            } else {
+              rsx! {
+                ul { key: "{idx}", for (i, item) in items.iter().enumerate() {
+                  li { key: "{i}", { render_segments(item) } }
+                } }
+              }
+            } }
+          },
           Block::Paragraph(segments) => rsx! {
             p { key: "{idx}", { render_segments(segments) } }
           },

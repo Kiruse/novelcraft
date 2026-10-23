@@ -109,7 +109,7 @@ Conventions:
 static ENGINE: OnceLock<Arc<Mutex<NovelCraftEngine>>> = OnceLock::new();
 ```
 
-`main()` constructs the engine before launch (`NovelCraftEngine::new(config)`); the config is also stashed in `state::BOOT_CONFIG` so the `CONFIG`/`PROFILES` signals can seed themselves lazily on first read **inside** the Dioxus runtime (touching signals from `main()` panics — never do it).
+`main()` only sets up the launch config (desktop window settings); the engine is constructed **inside the Dioxus runtime** by the `App` boot gate — an async config load (`NovelCraftConfig::load`) followed by `engine::init_engine` and a `state::BOOT_CONFIG` stash, from which the `CONFIG`/`PROFILES` signals seed themselves lazily on first read (touching signals from `main()` panics — never do it). Nothing renders until the gate completes.
 
 Engine operations are `pub async fn`s that lock the engine, call it, publish results to the global signals, and toast on failure:
 
@@ -175,7 +175,7 @@ Each toast schedules its own dismissal task (default 5s). Toast variants (Info/S
 | `Chip` | Rounded tag pill with `selected` toggle styling |
 | `Field` / `FieldGroup` | Labeled input row / bordered group with heading |
 | `Loading` | Pulsing text (`animate-pulse`) |
-| `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`; double-quoted `"speech"` renders as one block on its own line in white (emphasis inside a quote nests within the speech element) while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
+| `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `- `/`* ` bullet & `1.`/`1)` ordered lists (flat), `**bold**`, `*italic*`; multi-word double-quoted `"speech"` renders as one block on its own line in white (emphasis inside a quote nests within the speech element) — single-word quotes stay plain text while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
 | `SettingsGear` / `CloseButton` | Top-bar icon buttons |
 
 `INPUT_CLASS` is the shared text-input styling constant.
@@ -222,8 +222,8 @@ Notes:
 
 ## Conventions
 
-- Screens use the shared `Screen` wrapper; gameplay uses a custom root layout (top bar with ☰ sidebar toggle, turn viewport + optional sidebar, status row, chat bar).
-- The gameplay sidebar (280px, toggled by the ☰ button) renders the premise (from the session's exposition), the effective prompt, one collapsible section per **active module** via the `ModuleContext` trait (`gui/src/modules.rs` — custom renderer for the story module, generic editable-tree fallback for the rest), and the viewed turn's tool calls. The effective prompt and module states are (re)fetched on open, on session change, and whenever the viewed turn changes (navigation or a completed generation) — one `use_effect` keyed on `SESSION`, `TURN`, and `TURN_INDEX`. The sidebar is **editable only on the last page** (the gamestate reflects ALL turns' tool calls, so older pages don't line up); leaf edits go through `engine::edit_module_state_async`, which applies to the live gamestate and records the override on the last turn (`TurnV2::edits`, replayed on load).
+- Screens use the shared `Screen` wrapper; gameplay uses a custom root layout (top bar, turn viewport + always-visible sidebar, status row, chat bar).
+- The gameplay sidebar (280px, always visible) renders the premise (from the session's exposition), the effective prompt, one collapsible section per **active module** via the `ModuleContext` trait (`gui/src/modules.rs` — custom renderer for the story module, generic editable-tree fallback for the rest), and the viewed turn's tool calls. The effective prompt and module states are (re)fetched on open, on session change, and whenever the viewed turn changes (navigation or a completed generation) — one `use_effect` keyed on `SESSION`, `TURN`, and `TURN_INDEX`. The sidebar is **editable only on the last page** (the gamestate reflects ALL turns' tool calls, so older pages don't line up); leaf edits go through `engine::edit_module_state_async`, which applies to the live gamestate and records the override on the last turn (`TurnV2::edits`, replayed on load).
 - Event handlers must not return values — end `nav.push(…)` and friends with `;` (Dioxus interprets non-unit returns as async spawns and fails to compile).
 - Never touch global signals from `main()` or from plain helper functions outside components/tasks — signal access requires the Dioxus runtime.
 - Engine access goes exclusively through `engine.rs`; screens never import `NovelCraftEngine` directly.

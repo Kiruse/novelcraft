@@ -9,7 +9,7 @@ use crate::error::EngineError;
 use crate::game::profile::ProfileV1;
 use crate::game::state::GameStateView;
 use crate::paths;
-use crate::util::{deserialize, deserialize_sync, serialize};
+use crate::util::fs::{deserialize, serialize};
 
 /// Default host of llama.cpp
 pub const DEFAULT_HOST: &str = "https://openrouter.ai/api/v1";
@@ -61,10 +61,6 @@ impl NovelCraftConfig {
   }
   pub async fn load() -> Result<NovelCraftConfig, EngineError> {
     deserialize(&Self::default_path()?).await
-  }
-
-  pub fn load_sync() -> Result<NovelCraftConfig, EngineError> {
-    deserialize_sync(&Self::default_path()?)
   }
 
   pub async fn save(&self) -> Result<(), EngineError> {

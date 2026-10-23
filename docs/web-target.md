@@ -1,69 +1,62 @@
-# Web Target (wasm32) — Investigation Notes
+# Web Target (wasm32)
 
-Findings from the first `dx build --platform web` attempt. The desktop build is
-unaffected by everything below; the groundwork is in place so a web port is a
-series of small, well-scoped steps rather than a rewrite.
+The web build is fully working: `dx build --platform web` compiles, bundles
+(wasm-bindgen) and emits `target/dx/novelcraft/debug/web/public`. Desktop is
+unaffected; storage paths resolve identically on both targets.
 
-## Current state
+## Architecture
 
-`dx build --platform web` compiles the whole dependency graph and fails in
-`tokio` on `rt-multi-thread`, which arrives **from kiruklaw-agent-loop's own
-Cargo.toml** (unconditioned). Everything novelcraft-owned below that wall is
-either already wasm-clean or has a known, tiny fix (see checklist).
+| Concern | Desktop | Web |
+|---------|---------|-----|
+| Storage backend | `tokio::fs` (real files) | **OPFS** via web-sys (`engine/src/util/fs/opfs.rs`) |
+| Path roots | platform data/config dirs | logical namespaces `data/NovelCraft/…`, `config/NovelCraft/…` under the OPFS root (`engine/src/paths.rs`) |
+| Config boot | async `load()` behind the `booted` gate in `App` (`gui/src/main.rs`) — nothing renders until the engine is initialized |
+| Window chrome | custom `TitleBar` + `ResizeHandles` | stubbed to empty rsx (browser provides chrome) — `gui/src/titlebar.rs` |
+| LLM transport | reqwest hyper + `bytes_stream` | web-sys `fetch` + `ReadableStream` reader (`kiruklaw-agent-loop` `fetch_stream`, upstream) |
 
-The platform feature split works like this:
+The engine's fs surface is cfg-split in `engine/src/util/fs.rs`
+(`ensure_dir`, `remove_file`, `list_dir`, `read`/`write` via `serialize`/
+`deserialize`); both impls share the same
+signatures, so engine code above it is target-agnostic. OPFS ops treat
+missing paths as empty/no-op (listing → `[]`, removal → `Ok`), matching the
+native helpers' semantics. Sync OPFS access does not exist on the main
+thread, so the config boot is async — uniformly on all targets (the old
+`load_sync` path was removed).
 
-- `gui/Cargo.toml` declares only `dioxus = { features = ["router"] }` plus
-  `default = ["dioxus/desktop"]` (so plain `cargo check` / rust-analyzer build
-  the desktop renderer).
-- `dx build/serve --platform <p>` negates the default and injects the matching
-  `dioxus/<p>` feature. **Never put platform features in the dioxus dependency
-  list itself** — with both `desktop` and `web` enabled, dioxus-desktop
-  compiles on wasm and drags in tungstenite → native-tls → openssl (which
-  cannot build for wasm).
+## Streaming on wasm
 
-## Groundwork already merged
+reqwest's `stream` feature is a no-op on wasm (`bytes_stream` does not
+exist), so kiruklaw-agent-loop issues the chat-completion request as a raw
+browser `fetch` (web-sys `RequestInit`) and unwraps the body's
+`ReadableStream` via `ReadableStreamDefaultReader` + `futures` `unfold` —
+SSE chunks stream to the GUI exactly as on desktop. Upstream commit:
+"add wasm fetch-streaming transport".
 
-| Change | Where | Why |
-|--------|-------|-----|
-| Workspace tokio trimmed to `macros, sync, time, io-util, rt` | root `Cargo.toml` | `fs`/`net`/`process`/`rt-multi-thread` are hard-rejected on wasm ("Only features sync,macros,io-util,rt,time are supported") |
-| Per-target tokio `fs` re-add | `engine/Cargo.toml`, `gui/Cargo.toml` (`cfg(not(target_arch = "wasm32"))`) | Desktop keeps `tokio::fs`; wasm never sees it |
-| `getrandom` `wasm_js` backend (uuid v4 needs it) | `gui/Cargo.toml` wasm target deps + `.cargo/config.toml` rustflags | `getrandom` ≥0.3 requires the feature AND `--cfg getrandom_backend="wasm_js"` on `wasm32-unknown-unknown` |
-| uuid `js` feature (wasm target only) | `engine/Cargo.toml` | uuid's wasm randomness source |
+## CORS
 
-## Remaining checklist (in order)
-
-1. **kiruklaw-agent-loop (upstream)**
-   - tokio: gate `rt-multi-thread` behind `cfg(not(target_arch = "wasm32"))`
-     (or plain `rt` — the loop runs on the dx-injected runtime anyway).
-   - reqwest: the `stream` feature is a no-op on wasm — `bytes_stream` cannot
-     work over fetch. SSE streaming needs a fetch/ReadableStream (web-sys)
-     transport behind a cfg. This is the biggest upstream item.
-2. **Engine storage abstraction** — the *only* engine blockers, all filesystem:
-   - `engine/src/util/mod.rs`: `ensure_dir`, `serialize`, `deserialize`,
-     `deserialize_sync` (cfg-split native `tokio::fs` vs web backend).
-   - `engine/src/paths.rs`: `dirs::data_dir`/`config_dir` — on web these become
-     logical namespace keys, not real paths.
-   - `engine/src/game/session.rs` `list_sessions`: `read_dir` enumeration →
-     backend listing.
-   - `engine/src/game/engine.rs` (~l.111–118): sync config load/save.
-   Web backend choice: **OPFS or IndexedDB** (sessions are whole-file JSON;
-   localStorage's ~5 MB cap is too tight). A `Storage` trait with
-   native/web impls behind cfg keeps desktop byte-identical.
-3. **GUI cfg-gating** — desktop-only chrome behind `cfg`:
-   - `main.rs`: `dioxus::desktop::Config` / window builder (web launch takes no
-     window config).
-   - `titlebar.rs`: custom window chrome + resize handles (the browser provides
-     its own).
-4. **CORS** — the web app calls the LLM server (`DEFAULT_HOST`
-   `http://localhost:8888/v1`) cross-origin. llama.cpp's `llama-server` sends
-   `Access-Control-Allow-Origin: *` by default, so local dev works out of the
-   box; hosted deployments need the header on whatever serves the model.
+The web app calls the LLM server (`DEFAULT_HOST` `http://localhost:8888/v1`)
+cross-origin. `llama-server` sends `Access-Control-Allow-Origin: *` by
+default, so local dev works out of the box; hosted deployments need the
+header on whatever serves the model.
 
 ## Useful commands
 
 ```bash
-dx build --platform web            # full wasm build (fails at kiruklaw today)
+just build-web                     # full wasm build (just css + dx build --platform web)
 dx serve --platform web            # hot-reload web dev
-cargo check --target wasm32-unknown-unknown --features dioxus/web --no-default-features
+just check-gui                     # checks the GUI for desktop AND web (wasm32) targets
 ```
+
+**Never** run plain `cargo check --target wasm32-unknown-unknown` for the GUI:
+the default features compile the desktop renderer, whose websocket/TLS stack
+fails on `openssl-sys` (it cannot target wasm at all). The wasm pass must
+negate the defaults and enable `dioxus/web` — exactly what `just check-gui`
+does.
+
+## Version pinning
+
+The wasm-only JS-interop deps are pinned in lockstep across
+`engine/Cargo.toml` and kiruklaw's `agent-loop/Cargo.toml`:
+`wasm-bindgen 0.2.129`, `wasm-bindgen-futures 0.4`, `js-sys 0.3.106`,
+`web-sys 0.3.106` (wasm-bindgen-futures renumbers to 0.4.x and pins
+`wasm-bindgen =0.2.129` exactly). When bumping, bump everywhere.

@@ -118,15 +118,10 @@ impl NovelCraftEngine {
   /// session directories) are skipped.
   pub async fn list_sessions() -> Result<Vec<SessionV2>, EngineError> {
     let path = SessionV2::root()?;
-    if !path.exists() {
-      tokio::fs::create_dir_all(&path).await?;
-    }
-    let mut dir_iter = tokio::fs::read_dir(&path).await?;
+    crate::util::fs::ensure_dir(&path).await?;
     let mut result = Vec::new();
-    while let Some(entry) = dir_iter.next_entry().await? {
-      let ty = entry.file_type().await?;
-      let name = entry.file_name().to_string_lossy().to_string();
-      if ty.is_dir() {
+    for (name, is_dir) in crate::util::fs::list_dir(&path).await? {
+      if is_dir {
         warn!("Ignoring legacy session directory {name:?}");
         continue;
       }

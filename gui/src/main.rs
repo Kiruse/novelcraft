@@ -19,31 +19,50 @@ use crate::titlebar::{ResizeHandles, TitleBar};
 fn main() {
   env_logger::init();
 
-  let config = match NovelCraftConfig::load_sync() {
-    Ok(config) => config,
-    Err(err) => {
-      warn!("Failed to load engine config, using defaults: {err}");
-      NovelCraftConfig::default()
-    }
-  };
-
-  engine::init_engine(config.clone());
-  state::BOOT_CONFIG.set(config).ok();
-
-  dioxus::LaunchBuilder::new()
-    .with_cfg(
-      dioxus::desktop::Config::new().with_window(
-        dioxus::desktop::WindowBuilder::new()
-          .with_title("NovelCraft")
-          .with_inner_size(dioxus::desktop::LogicalSize::new(1100., 800.))
-          .with_decorations(false),
-      ),
-    )
-    .launch(App);
+  let builder = dioxus::LaunchBuilder::new();
+  #[cfg(not(target_arch = "wasm32"))]
+  let builder = builder.with_cfg(
+    dioxus::desktop::Config::new().with_window(
+      dioxus::desktop::WindowBuilder::new()
+        .with_title("NovelCraft")
+        .with_inner_size(dioxus::desktop::LogicalSize::new(1100., 800.))
+        .with_decorations(false),
+    ),
+  );
+  builder.launch(App);
 }
 
 #[component]
 fn App() -> Element {
+  // The engine boots inside the runtime on ALL targets: the config load is
+  // async everywhere (tokio on desktop, OPFS on web), so nothing renders
+  // until it completes.
+  let mut booted = use_signal(|| false);
+
+  use_effect(move || {
+    spawn(async move {
+      let config = match NovelCraftConfig::load().await {
+        Ok(config) => config,
+        Err(err) => {
+          warn!("Failed to load engine config, using defaults: {err}");
+          NovelCraftConfig::default()
+        }
+      };
+      engine::init_engine(config.clone());
+      state::BOOT_CONFIG.set(config).ok();
+      engine::refresh_config();
+      engine::refresh_profiles();
+      engine::refresh_sessions();
+      booted.set(true);
+    });
+  });
+
+  if !*booted.read() {
+    return rsx! {
+      document::Stylesheet { href: asset!("/assets/tailwind.css") }
+    };
+  }
+
   rsx! {
     document::Stylesheet { href: asset!("/assets/tailwind.css") }
     div { class: "flex flex-col w-full h-full",

@@ -51,7 +51,7 @@ Those files are ALL there is — no page batches, no checkpoint files, no separa
 }
 ```
 
-- `created_at` / `updated_at` are RFC3339 strings (custom serde in `engine/src/util/mod.rs`)
+- `created_at` / `updated_at` are RFC3339 strings (custom serde in `engine/src/util/mod.rs`, applied via `serde(with)` attributes)
 - `modules` maps module IDs to their `GameplayModule` enum variant; module IDs **must** equal the toolset namespace (snake_case struct name with the `_module` suffix stripped) — tool-call replay resolves recorded calls by this key
 - `total_turns` counts every turn ever pushed, including turns since compressed away into the rolling summary
 - File version must be `2`; other versions are rejected (`SessionV2::deserialize_version`), and `NovelCraftEngine::list_sessions` skips such files with a warning (legacy session *directories* are ignored)

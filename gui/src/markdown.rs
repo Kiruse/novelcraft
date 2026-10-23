@@ -6,9 +6,11 @@
 //! - `#`..`######` headings
 //! - `>` blockquotes (contiguous groups; inner lines re-parsed as blocks)
 //! - `**bold**` and `*italic*`
-//! - double-quoted `"speech"` — the quote characters are kept and the whole
-//!   run renders as a single block element in white (via the `md-speech`
-//!   class) with emphasis nested inside it
+//! - double-quoted multi-word `"speech"` — the quote characters are kept and
+//!   the whole run renders as a single block element in white (via the
+//!   `md-speech` class) with emphasis nested inside it; single-word quotes
+//!   (scare quotes like `"alive"`) stay plain text
+//! - `- `/`* ` bullet lists and `1.`/`1)` ordered lists (flat, no nesting)
 //!
 //! Nothing has to be closed: a stream cut off mid-marker renders the
 //! pending style through end-of-text instead of leaking raw markers.
@@ -47,6 +49,8 @@ pub enum Block {
   Heading { level: u8, segments: Vec<Segment> },
   /// Contiguous `>` group — inner lines re-parsed as blocks.
   Quote(Vec<Block>),
+  /// Contiguous list group of same-flavored items (flat — no nesting).
+  List { ordered: bool, items: Vec<Vec<Segment>> },
   Paragraph(Vec<Segment>),
 }
 
@@ -56,26 +60,41 @@ pub fn parse(text: &str) -> Vec<Block> {
   let mut blocks = Vec::new();
   let mut paragraph: Vec<&str> = Vec::new();
   let mut quote: Vec<&str> = Vec::new();
+  let mut list: Option<(bool, Vec<String>)> = None;
 
   for line in text.lines() {
     let line = line.trim();
     if let Some(level) = heading_level(line) {
       flush_paragraph(&mut blocks, &mut paragraph);
+      flush_list(&mut blocks, &mut list);
       flush_quote(&mut blocks, &mut quote);
       let content = line[level as usize..].trim_start();
       blocks.push(Block::Heading { level, segments: parse_inline(content) });
     } else if let Some(content) = line.strip_prefix('>') {
       flush_paragraph(&mut blocks, &mut paragraph);
+      flush_list(&mut blocks, &mut list);
       quote.push(content.strip_prefix(' ').unwrap_or(content));
+    } else if let Some((ordered, content)) = list_item(line) {
+      flush_paragraph(&mut blocks, &mut paragraph);
+      match &mut list {
+        Some((known, items)) if *known == ordered => items.push(content.to_string()),
+        _ => {
+          flush_list(&mut blocks, &mut list);
+          list = Some((ordered, vec![content.to_string()]));
+        }
+      }
     } else if line.is_empty() {
       flush_paragraph(&mut blocks, &mut paragraph);
+      flush_list(&mut blocks, &mut list);
       flush_quote(&mut blocks, &mut quote);
     } else {
+      flush_list(&mut blocks, &mut list);
       flush_quote(&mut blocks, &mut quote);
       paragraph.push(line);
     }
   }
   flush_paragraph(&mut blocks, &mut paragraph);
+  flush_list(&mut blocks, &mut list);
   flush_quote(&mut blocks, &mut quote);
   blocks
 }
@@ -98,6 +117,36 @@ fn flush_quote(blocks: &mut Vec<Block>, quote: &mut Vec<&str>) {
   let inner = quote.join("\n");
   quote.clear();
   blocks.push(Block::Quote(parse(&inner)));
+}
+
+/// Flush the pending list group into a [`Block::List`].
+fn flush_list(blocks: &mut Vec<Block>, list: &mut Option<(bool, Vec<String>)>) {
+  let Some((ordered, items)) = list.take() else {
+    return;
+  };
+  blocks.push(Block::List {
+    ordered,
+    items: items.iter().map(|item| parse_inline(item)).collect(),
+  });
+}
+
+/// List marker of a line: `- ` or `* ` for unordered, digits followed by
+/// `.` or `)` and a space for ordered. Returns whether the item is ordered
+/// and its text.
+fn list_item(line: &str) -> Option<(bool, &str)> {
+  if let Some(rest) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+    return Some((false, rest));
+  }
+  let digits = line.chars().take_while(|ch| ch.is_ascii_digit()).count();
+  if digits == 0 || digits == line.len() {
+    return None;
+  }
+  let marker = line.as_bytes()[digits];
+  let rest = &line[digits + 1..];
+  if (marker == b'.' || marker == b')') && rest.starts_with(' ') {
+    return Some((true, rest[1..].trim_start()));
+  }
+  None
 }
 
 /// Heading level of a line: `#`..`######` followed by whitespace or EOL.
@@ -174,10 +223,16 @@ fn parse_inline(text: &str) -> Vec<Segment> {
           Some((run, remainder)) => (format!("\"{run}\""), remainder),
           None => (format!("\"{inner}"), ""),
         };
-        if !plain.is_empty() {
-          segments.push(Segment::Styled { style, text: std::mem::take(&mut plain) });
+        if is_speech(&run) {
+          if !plain.is_empty() {
+            segments.push(Segment::Styled { style, text: std::mem::take(&mut plain) });
+          }
+          segments.push(Segment::Speech(parse_emphasis(&run)));
+        } else {
+          // Single-word quotes are scare quotes, not dialog — their text
+          // stays plain content of the surrounding segment.
+          plain.push_str(&run);
         }
-        segments.push(Segment::Speech(parse_emphasis(&run)));
         rest = remainder;
       }
       Marker::Bold | Marker::Italic => {
@@ -198,6 +253,13 @@ fn parse_inline(text: &str) -> Vec<Segment> {
     segments.push(Segment::Styled { style, text: plain });
   }
   segments
+}
+
+/// Whether a quoted run (including its quote characters) renders as
+/// [`Segment::Speech`]: only multi-word content is dialog; single-word
+/// `"scare quotes"` stay plain text.
+fn is_speech(run: &str) -> bool {
+  run.trim_matches('"').split_whitespace().count() > 1
 }
 
 /// Split speech-run text into emphasis segments. Quotes inside the run are
@@ -324,6 +386,21 @@ mod tests {
   }
 
   #[test]
+  fn single_word_quotes_stay_plain() {
+    // Scare quotes are not dialog — no speech segment, text kept verbatim.
+    assert_eq!(segs("keep \"alive\" at all costs"), vec![plain("keep \"alive\" at all costs")]);
+    assert_eq!(segs("\"safety\""), vec![plain("\"safety\"")]);
+  }
+
+  #[test]
+  fn multi_word_quotes_stay_speech() {
+    assert_eq!(
+      segs("keep \"alive and well\" at all costs"),
+      vec![plain("keep "), speech(vec![plain("\"alive and well\"")]), plain(" at all costs")]
+    );
+  }
+
+  #[test]
   fn heading_requires_space_or_eol() {
     assert!(matches!(parse("# real").as_slice(), [Block::Heading { level: 1, .. }]));
     assert!(matches!(parse("### deep").as_slice(), [Block::Heading { level: 3, .. }]));
@@ -364,6 +441,50 @@ mod tests {
     let blocks = parse("## Partial tit");
     assert!(matches!(blocks.as_slice(), [Block::Heading { level: 2, .. }]));
     assert_eq!(segs("**still"), vec![styled(BOLD, "still")]);
-    assert_eq!(segs("said \"hi"), vec![plain("said "), speech(vec![plain("\"hi")])]);
+    assert_eq!(segs("said \"hello there"), vec![plain("said "), speech(vec![plain("\"hello there")])]);
+  }
+
+  #[test]
+  fn unordered_lists_group() {
+    let blocks = parse("intro\n- one\n* two\n\noutro");
+    assert_eq!(blocks.len(), 3);
+    let Block::List { ordered, items } = &blocks[1] else { panic!("expected list") };
+    assert!(!ordered);
+    assert_eq!(items.len(), 2);
+    let Segment::Styled { text, .. } = &items[0][0] else { panic!("expected styled segment") };
+    assert_eq!(text, "one");
+  }
+
+  #[test]
+  fn ordered_lists_group() {
+    let blocks = parse("1. first\n2) second");
+    assert_eq!(blocks.len(), 1);
+    let Block::List { ordered, items } = &blocks[0] else { panic!("expected list") };
+    assert!(ordered);
+    assert_eq!(items.len(), 2);
+  }
+
+  #[test]
+  fn ordered_marker_without_space_is_a_paragraph() {
+    assert!(matches!(parse("3.14 is pi").as_slice(), [Block::Paragraph(_)]));
+    assert!(matches!(parse("option 2)").as_slice(), [Block::Paragraph(_)]));
+  }
+
+  #[test]
+  fn list_flavors_and_neighbors_split() {
+    // Different flavors split into separate lists; plain text ends the list.
+    let blocks = parse("- a\n1. b\nplain\n- c");
+    assert_eq!(blocks.len(), 4);
+    assert!(matches!(&blocks[0], Block::List { ordered: false, items } if items.len() == 1));
+    assert!(matches!(&blocks[1], Block::List { ordered: true, items } if items.len() == 1));
+    assert!(matches!(&blocks[2], Block::Paragraph(_)));
+    assert!(matches!(&blocks[3], Block::List { ordered: false, items } if items.len() == 1));
+  }
+
+  #[test]
+  fn list_items_parse_inline() {
+    let blocks = parse("- **bold** item");
+    let Block::List { items, .. } = &blocks[0] else { panic!("expected list") };
+    assert_eq!(items[0], vec![styled(BOLD, "bold"), plain(" item")]);
   }
 }

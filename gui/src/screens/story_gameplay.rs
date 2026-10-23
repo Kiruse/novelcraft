@@ -20,15 +20,14 @@ const SIDEBAR_WIDTH_PX: f64 = 280.0;
 /// stay visible around it.
 const TEXT_CARD: &str =
   "w-full max-w-[600px] mx-auto p-3 rounded-md border border-black/90 bg-black/70";
-/// User prompt bubbles get a light tint for visual distinction.
+/// User prompt bubbles get a faint light tint for visual distinction.
 const PROMPT_CARD: &str =
-  "w-full max-w-[600px] mx-auto p-3 rounded-md border border-black/90 bg-white/25";
+  "w-full max-w-[600px] mx-auto p-3 rounded-md border border-black/90 bg-white/10";
 
 #[component]
 pub fn StoryGameplay(id: String) -> Element {
   let mut input = use_signal(String::new);
   let popover_open = use_signal(|| false);
-  let mut sidebar_open = use_signal(|| false);
   // Profile currently being edited, if the dialog is open.
   let mut editing_profile: Signal<Option<ProfileV1>> = use_signal(|| None);
   // Horizontal start position of the active swipe gesture, if any.
@@ -105,11 +104,6 @@ pub fn StoryGameplay(id: String) -> Element {
       },
 
       div { class: "relative w-full flex flex-row justify-center p-2",
-        button {
-          class: "absolute right-14 text-xl cursor-pointer hover:opacity-70",
-          onclick: move |_| sidebar_open.toggle(),
-          "\u{2630}"
-        }
         div { class: "text-3xl", { title_text } }
         CloseButton {}
       }
@@ -173,7 +167,7 @@ pub fn StoryGameplay(id: String) -> Element {
             { turn_content_ui(select_mode) }
           }
         }
-        { sidebar_open.read().then(|| rsx! { Sidebar {} }) }
+        Sidebar {}
       }
 
       { status_row_ui() }
@@ -977,7 +971,7 @@ fn PromptCard(text: String, editable: bool) -> Element {
 fn stream_card(stream: &StreamState) -> Element {
   rsx! {
     div { class: "w-full flex flex-col gap-3",
-      div { class: TEXT_CARD,
+      div { class: PROMPT_CARD,
         Markdown { text: stream.prompt.clone() }
       }
       { if stream.activity {

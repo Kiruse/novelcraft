@@ -14,7 +14,8 @@ use crate::game::profile::ProfileV1;
 use crate::game::state::GameState;
 use crate::game::state::Snapshot;
 use crate::game::turns::TurnV2;
-use crate::util::{deserialize, deserialize_timestamp, discard_channel, serialize, serialize_timestamp};
+use crate::util::fs::{deserialize, serialize};
+use crate::util::{deserialize_timestamp, discard_channel, serialize_timestamp};
 use crate::util::prompting::{PromptFormatter, PromptifyResult};
 
 /// The complete persisted state of a session, stored as a single file
@@ -131,12 +132,7 @@ impl SessionV2 {
   /// Delete the session file with the given `id` from the local filesystem.
   /// Deleting a nonexistent session is a no-op.
   pub async fn delete(id: &str) -> Result<(), EngineError> {
-    let path = Self::path(id)?;
-    if !path.exists() {
-      return Ok(());
-    }
-    tokio::fs::remove_file(&path).await?;
-    Ok(())
+    crate::util::fs::remove_file(&Self::path(id)?).await
   }
 
   /// Number of turns in the retained short-term history.

@@ -33,7 +33,7 @@ engine::save_config(config).await;
 
 | Method | Parameters | Returns | Description |
 |--------|-----------|---------|-------------|
-| `new` | `NovelCraftConfig` | `Self` | Construct the engine (once, before launch — `gui/src/main.rs`) |
+| `new` | `NovelCraftConfig` | `Self` | Construct the engine (once, at boot — the GUI's `App` boot gate) |
 | `set_config` | `NovelCraftConfig` | — | Swap config; re-contributes values into the cached agent loop |
 | `set_session` | `Option<SessionV2>` | — | Set the active session; rebuilds agent-loop toolsets from its modules |
 | `set_active_profile` | `Option<String>` | — | Update active profile (config + active session) |

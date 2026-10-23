@@ -1,4 +1,6 @@
+#[cfg(not(target_arch = "wasm32"))]
 use dioxus::desktop::tao::window::ResizeDirection;
+#[cfg(not(target_arch = "wasm32"))]
 use dioxus::desktop::use_window;
 use dioxus::prelude::*;
 
@@ -6,6 +8,7 @@ use dioxus::prelude::*;
 /// window is launched with native decorations disabled). The whole strip
 /// is a drag handle; double-click toggles maximize. The window control
 /// buttons stop propagation so they don't trigger the drag.
+#[cfg(not(target_arch = "wasm32"))]
 #[component]
 pub fn TitleBar() -> Element {
   // DesktopContext is a cheap Rc handle — clone one per event closure.
@@ -51,6 +54,7 @@ pub fn TitleBar() -> Element {
 /// Invisible edge & corner strips that restore window resizing, which the
 /// window manager suspends for undecorated windows. Rendered once, above
 /// all content.
+#[cfg(not(target_arch = "wasm32"))]
 #[component]
 pub fn ResizeHandles() -> Element {
   let w = use_window();
@@ -75,6 +79,7 @@ pub fn ResizeHandles() -> Element {
 
 /// (direction, fixed-position classes, cursor) for each of the 8 resize
 /// zones. Edges are 4px thick, corners 12px.
+#[cfg(not(target_arch = "wasm32"))]
 const HANDLES: [(ResizeDirection, &str, &str); 8] = [
   (ResizeDirection::North, "top-0 left-0 right-0 h-1", "cursor-ns-resize"),
   (ResizeDirection::South, "bottom-0 left-0 right-0 h-1", "cursor-ns-resize"),
@@ -85,3 +90,17 @@ const HANDLES: [(ResizeDirection, &str, &str); 8] = [
   (ResizeDirection::NorthEast, "top-0 right-0 w-3 h-3", "cursor-nesw-resize"),
   (ResizeDirection::SouthWest, "bottom-0 left-0 w-3 h-3", "cursor-nesw-resize"),
 ];
+
+/// Web builds render nothing — the browser provides its own window chrome.
+#[cfg(target_arch = "wasm32")]
+#[component]
+pub fn TitleBar() -> Element {
+  rsx! {}
+}
+
+/// Web builds render nothing — the browser provides its own resize frame.
+#[cfg(target_arch = "wasm32")]
+#[component]
+pub fn ResizeHandles() -> Element {
+  rsx! {}
+}

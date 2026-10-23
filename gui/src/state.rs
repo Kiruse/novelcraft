@@ -133,9 +133,9 @@ mod tests {
   }
 }
 
-/// The config the engine booted with. Set before launch — the config &
-/// profiles queries lazily seed themselves from it on first read inside
-/// the Dioxus runtime.
+/// The config the engine booted with. Set during the `App` boot gate —
+/// the config & profiles queries lazily seed themselves from it on first
+/// read inside the Dioxus runtime.
 pub static BOOT_CONFIG: OnceLock<NovelCraftConfig> = OnceLock::new();
 
 pub static CONFIG: GlobalSignal<Query<NovelCraftConfig>> = GlobalSignal::new(|| {

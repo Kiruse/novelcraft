@@ -54,6 +54,13 @@ body {
     padding-left: 0.75rem;
     border-left: 2px solid var(--color-nc-label);
   }
+  & ul, & ol {
+    margin: 0.375rem 0;
+    padding-left: 1.25rem;
+  }
+  & ul { list-style: disc; }
+  & ol { list-style: decimal; }
+  & li { margin: 0.125rem 0; }
   & .md-speech { display: block; color: var(--md-speech-color); }
 }
 
