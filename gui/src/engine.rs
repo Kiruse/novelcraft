@@ -11,7 +11,7 @@ use novelcraft_engine::game::session::SessionV2;
 use novelcraft_engine::AgentMessageChunk;
 use tokio::sync::Mutex;
 
-use crate::state::{Profiles, Query, CONFIG, PREMISE_PAGE, PROFILES, REASONING, SESSION, SESSIONS, STREAM, TURN, TURN_INDEX};
+use crate::state::{Profiles, Query, CONFIG, CONTEXT_USAGE, PREMISE_PAGE, PROFILES, REASONING, SESSION, SESSIONS, STREAM, TURN, TURN_INDEX};
 use crate::toast::{push_toast, Toast};
 
 static ENGINE: OnceLock<Arc<Mutex<NovelCraftEngine>>> = OnceLock::new();
@@ -62,6 +62,15 @@ pub async fn refresh_profiles_async() {
 #[allow(dead_code)]
 pub fn refresh_profiles() {
   spawn(refresh_profiles_async());
+}
+
+pub async fn refresh_context_usage_async() {
+  let res = engine().lock().await.context_usage();
+  CONTEXT_USAGE.write().publish(res.ok_or("no active session".to_string()));
+}
+
+pub fn refresh_context_usage() {
+  spawn(refresh_context_usage_async());
 }
 
 pub async fn refresh_session_async() {

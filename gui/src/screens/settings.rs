@@ -55,6 +55,7 @@ pub fn Settings() -> Element {
   let mut dm = use_signal(ModelFields::default);
   let mut suggestions = use_signal(ModelFields::default);
   let mut summarizer = use_signal(ModelFields::default);
+  let mut context_length = use_signal(String::new);
 
   // Populate the fields from the config query as soon as (and whenever)
   // it publishes a value.
@@ -63,6 +64,7 @@ pub fn Settings() -> Element {
     steps.set(config.max_agent_steps.to_string());
     system_prompt.set(config.system_prompt.clone());
     threshold.set(config.summary_threshold.to_string());
+    context_length.set(config.context_length.to_string());
     dm.set(ModelFields::from_config(&config.models[ModelPurpose::DungeonMaster]));
     suggestions.set(ModelFields::from_config(&config.models[ModelPurpose::Suggestions]));
     summarizer.set(ModelFields::from_config(&config.models[ModelPurpose::Summarizer]));
@@ -80,6 +82,11 @@ pub fn Settings() -> Element {
       .trim()
       .parse()
       .unwrap_or(config.summary_threshold);
+    config.context_length = context_length
+      .read()
+      .trim()
+      .parse()
+      .unwrap_or(config.context_length);
     config.system_prompt = system_prompt.read().clone();
     config.models[ModelPurpose::DungeonMaster] = dm.read().clone().into_config();
     config.models[ModelPurpose::Suggestions] = suggestions.read().clone().into_config();
@@ -110,6 +117,13 @@ pub fn Settings() -> Element {
           class: INPUT_CLASS,
           value: "{threshold}",
           oninput: move |ev: FormEvent| threshold.set(ev.value()),
+        }
+      }
+      Field { label: "Context Window (tokens)",
+        input {
+          class: INPUT_CLASS,
+          value: "{context_length}",
+          oninput: move |ev: FormEvent| context_length.set(ev.value()),
         }
       }
       Field { label: "System Prompt",

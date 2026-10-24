@@ -9,11 +9,12 @@ use uuid::Uuid;
 
 use crate::config::{ModelPurpose, NovelCraftConfig};
 use crate::error::EngineError;
+use serde::{Deserialize, Serialize};
 use crate::game::module::story::{StoryModule, StoryState};
 use crate::game::profile::ProfileV1;
 use crate::game::session::SessionV2;
 use crate::game::state::{GameState, GameStateView};
-use crate::game::turns::TurnV2;
+use crate::game::turns::{TurnUsage, TurnV2};
 use crate::util::prompting::{PromptFormatter, Promptify};
 
 /// Per-turn system message injected immediately before the latest user
@@ -166,6 +167,19 @@ impl NovelCraftEngine {
     self.session.as_ref()?.try_turn(index).cloned()
   }
 
+  /// How much of the dungeon master model's context window the last
+  /// completed turn filled: the input tokens of its final LLM request
+  /// against the configured `context_length`. `None` if there is no
+  /// active session or no turn has completed yet.
+  pub fn context_usage(&self) -> Option<ContextUsage> {
+    let session = self.session.as_ref()?;
+    let usage = session.try_turn(session.turn_count().checked_sub(1)?)?.usage?;
+    Some(ContextUsage {
+      input_tokens: usage.input_tokens,
+      context_length: self.config.context_length,
+    })
+  }
+
   /// Append a new profile (seeded with the default character fields), make
   /// it the active one, and persist. Returns the created profile.
   pub async fn create_profile(&mut self) -> Result<ProfileV1, EngineError> {
@@ -295,7 +309,7 @@ impl NovelCraftEngine {
     let prev_msg_len = conv.messages.len();
     let gamestate = self.gamestate()?;
 
-    self.agent_loop
+    let response = self.agent_loop
       .as_mut()
       .unwrap()
       .run(
@@ -306,6 +320,10 @@ impl NovelCraftEngine {
 
     self.session_mut()?.update_turn(|mut turn| {
       turn.assimilate(&conv.messages[prev_msg_len..])?;
+      turn.usage = Some(TurnUsage {
+        input_tokens: response.last_step.input_tokens,
+        output_tokens: response.usage.output_tokens,
+      });
       Ok(turn)
     }).await?;
 
@@ -337,7 +355,7 @@ impl NovelCraftEngine {
     let prev_msg_len = conv.messages.len();
     let gamestate = self.gamestate()?;
 
-    self.agent_loop
+    let response = self.agent_loop
       .as_mut()
       .unwrap()
       .run(
@@ -348,6 +366,10 @@ impl NovelCraftEngine {
 
     self.session_mut()?.update_turn(|mut turn| {
       turn.assimilate(&conv.messages[prev_msg_len..])?;
+      turn.usage = Some(TurnUsage {
+        input_tokens: response.last_step.input_tokens,
+        output_tokens: response.usage.output_tokens,
+      });
       Ok(turn)
     }).await?;
 
@@ -565,6 +587,26 @@ fn build_agent_loop(
         .values()
         .map(|m| m.clone().toolset())
     ))
+}
+
+/// Context-window fill of the last completed turn (see
+/// [`NovelCraftEngine::context_usage`]).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ContextUsage {
+  /// Prompt tokens of the last turn's final LLM request.
+  pub input_tokens: u64,
+  /// Assumed context window of the dungeon master model (config).
+  pub context_length: u64,
+}
+
+impl ContextUsage {
+  /// Fill ratio, clamped to 0.0..=1.0.
+  pub fn ratio(&self) -> f64 {
+    if self.context_length == 0 {
+      return 0.0;
+    }
+    (self.input_tokens as f64 / self.context_length as f64).min(1.0)
+  }
 }
 
 #[cfg(test)]

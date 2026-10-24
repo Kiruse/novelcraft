@@ -11,6 +11,7 @@ use crate::util::prompting::{PromptFormatter, PromptifyResult};
 pub mod story;
 pub mod npcs;
 pub mod player;
+pub mod locations;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GameplayModule {
@@ -21,6 +22,11 @@ pub enum GameplayModule {
 
   /// NPCs module provides persistency for NPCs
   Npcs(npcs::NpcsModule),
+
+  /// Locations module provides persistency for locations (places of
+  /// interest); planned to be augmented with traveling & navigation
+  /// capabilities.
+  Locations(locations::LocationsModule),
 
   /// Player module manages player-relevant state. Initial state
   /// is populated from profiles + story module.
@@ -33,23 +39,26 @@ impl GameplayModule {
     HashMap::from([
       (story::StoryModule::ID.to_string(), GameplayModule::Story(Default::default())),
       (npcs::NpcsModule::ID.to_string(), GameplayModule::Npcs(Default::default())),
+      (locations::LocationsModule::ID.to_string(), GameplayModule::Locations(Default::default())),
       (player::PlayerModule::ID.to_string(), GameplayModule::Player(Default::default())),
     ])
   }
 
   pub fn as_toolset(&self) -> &dyn AgentToolset<GameStateView> {
     match self {
-      Self::Story(module)  => module,
-      Self::Npcs(module)   => module,
-      Self::Player(module) => module,
+      Self::Story(module)     => module,
+      Self::Npcs(module)      => module,
+      Self::Locations(module) => module,
+      Self::Player(module)    => module,
     }
   }
 
   pub fn id(&self) -> &'static str {
     match self {
-      Self::Story(_)  => story::StoryModule::ID,
-      Self::Npcs(_)   => npcs::NpcsModule::ID,
-      Self::Player(_) => player::PlayerModule::ID,
+      Self::Story(_)     => story::StoryModule::ID,
+      Self::Npcs(_)      => npcs::NpcsModule::ID,
+      Self::Locations(_) => locations::LocationsModule::ID,
+      Self::Player(_)    => player::PlayerModule::ID,
     }
   }
 
@@ -67,17 +76,19 @@ impl GameplayModule {
   /// Retrieve agentic context of this module as key => value pairs.
   pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
     match self {
-      Self::Story(module)  => module.context(state, f).await,
-      Self::Npcs(module)   => module.context(state, f).await,
-      Self::Player(module) => module.context(state, f).await,
+      Self::Story(module)     => module.context(state, f).await,
+      Self::Npcs(module)      => module.context(state, f).await,
+      Self::Locations(module) => module.context(state, f).await,
+      Self::Player(module)    => module.context(state, f).await,
     }
   }
 
   pub(crate) fn toolset(self) -> Toolset<GameStateView> {
     Toolset::Immutable(match self {
-      Self::Npcs(module)   => Box::new(module),
-      Self::Player(module) => Box::new(module),
-      Self::Story(module)  => Box::new(module),
+      Self::Npcs(module)      => Box::new(module),
+      Self::Locations(module) => Box::new(module),
+      Self::Player(module)    => Box::new(module),
+      Self::Story(module)     => Box::new(module),
     })
   }
 }

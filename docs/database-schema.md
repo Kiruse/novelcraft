@@ -42,12 +42,13 @@ Those files are ALL there is — no page batches, no checkpoint files, no separa
   "modules": {
     "story": { "Story": {} },
     "npcs": { "Npcs": {} },
+    "locations": { "Locations": {} },
     "player": { "Player": {} }
   },
   "profile": "profile-uuid-or-absent",
   "total_turns": 12,
   "snapshot": { "story": { "..." : "..." } },
-  "turns": [ { "prompt": "What do I see in the tavern?", "responses": [ ... ], "edits": [ [ ["npcs", "Mira", "mood"], "curious" ] ] } ]
+  "turns": [ { "prompt": "What do I see in the tavern?", "responses": [ ... ], "edits": [ [ ["npcs", "Mira", "mood"], "curious" ] ], "usage": { "input_tokens": 4211, "output_tokens": 387 } } ]
 }
 ```
 
@@ -72,12 +73,14 @@ The gamestate **as it was just before the first retained turn**. Re-anchored whe
   },
   "story": { "timeline": "- [x] arrive\n- [ ] find the mayor\n" },
   "npcs": {},
+  "locations": {},
   "player": {}
 }
 ```
 
 - Each entry is one gameplay module's JSON object; missing modules are seeded as `{}` on load (`GameState::new`)
 - `turn.edits` — manual sidebar overrides made on the last page (keypath with module ID prefix → string value; empty string = delete), re-applied after that turn's tool calls during replay
+- `turn.usage` — LLM usage of the last completed agent run on the turn: `input_tokens` is the FULL prompt of the final request (the context-window fill the GUI renders), `output_tokens` sums all of the turn's completions
 - `story.summary` is written ONLY by the engine (`StoryModule::write_summary` during compression). Agents never touch it; they maintain `chapters` via the `begin_chapter` (titles & closes the active chapter, opens a fresh untitled one) and `note_events` (appends bullets to the active chapter's notes, duplicates ignored) tools. Chapters bootstrap lazily — there is always an active, untitled last chapter. The story premise is NOT gamestate — it lives on the session (`exposition`) and is injected into the system prompt
 - Loading = `GameState::new(snapshot, module_ids, profile)` + `GameState::replay(turns)` — every recorded tool call is re-applied on top of the snapshot
 
@@ -118,6 +121,7 @@ The last `2 × summary_threshold` turns of the conversation (default threshold 5
     "summarizer": { "type": "open_ai", "base_url": "http://localhost:8888/v1", "api_key": "", "model": "..." }
   },
   "summary_threshold": 50,
+  "context_length": 8192,
   "profiles": [
     { "id": "profile-uuid", "name": "Kira", "fields": { "Class": "Rogue" }, "created_at": "...", "updated_at": "..." }
   ],
@@ -126,7 +130,7 @@ The last `2 × summary_threshold` turns of the conversation (default threshold 5
 ```
 
 - `models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — **all three keys are required**; a missing `summarizer` key makes the whole file fail to deserialize (existing users migrate manually). `ModelConfig` is internally tagged (`"type": "open_ai"`)
-- `summary_threshold` is `#[serde(default)]` (`DEFAULT_SUMMARY_THRESHOLD` = 50), so configs predating the memory rewrite still deserialize
+- `summary_threshold` is `#[serde(default)]` (`DEFAULT_SUMMARY_THRESHOLD` = 50), and `context_length` defaults to 8192 (`DEFAULT_CONTEXT_LENGTH`), so configs predating the memory rewrite still deserialize
 - Profiles live **inside** config.json — there is no separate profiles store
 
 ---

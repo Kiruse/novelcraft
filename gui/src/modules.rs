@@ -69,6 +69,7 @@ impl DefaultModuleContext {
   pub fn new(module_id: &str) -> Self {
     let title = match module_id {
       "npcs" => "NPCs".to_string(),
+      "locations" => "Locations".to_string(),
       "player" => "Player".to_string(),
       "story" => "Story".to_string(),
       other => other.to_string(),

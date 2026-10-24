@@ -39,6 +39,7 @@ novelcraft/
 │               ├── mod.rs            # GameplayModule enum (Story/Npcs/Player/Memory), default_set(), toolset/context glue
 │               ├── story.rs          # story — timeline TODO list (manage_timeline tool)
 │               ├── npcs.rs           # npcs — NPC persistence
+│               ├── locations.rs      # locations — location persistence (planned: traveling & navigation)
 │               ├── player.rs         # player — player-relevant state
 │               └── story.rs          # story — timeline TODO list, rolling summary / chapters, SUMMARIZER_PERSONA
 ├── gui/                              # Rust binary crate (novelcraft-gui, binary name: novelcraft)
@@ -91,7 +92,7 @@ Pure Rust library with all business logic. No UI framework coupling.
   - `turns.rs` — `TurnV2` (`system`/`prompt`/`responses`), `AgentResponse` (content + tool calls + tool responses), `TurnV2::to_conversation` (rebuilds the agent-loop conversation from retained turns); `Snapshot` (module ID → JSON state map) lives in `state.rs`
   - `state.rs` — `GameState` (per-module `RwLock`ed JSON state + dirty flags), `ModuleState::set` (auto-creates missing keys along the keypath), `GameState::replay` (re-applies recorded tool calls; errors on unknown modules), `GameStateView` (the only writer, scoped to one module)
   - `profile.rs` — `ProfileV1` (`id`, `name`, `fields`, timestamps; `Promptify` impl for system-prompt injection)
-  - `module/` — `GameplayModule` enum + one file per module. IDs (`story`, `npcs`, `player`) **must** equal the module's toolset namespace — the kiruklaw `#[toolset]` macro derives it from the snake_case struct name, with `#[toolset(strip_suffix = "module")]` stripping the `_module` suffix, and replay resolves recorded calls by it. `story.rs` also defines `SUMMARIZER_PERSONA`, `StoryState`/`ChapterV2`, and the `manage_timeline`/`begin_chapter`/`note_events` tools
+  - `module/` — `GameplayModule` enum + one file per module. IDs (`story`, `npcs`, `locations`, `player`) **must** equal the module's toolset namespace — the kiruklaw `#[toolset]` macro derives it from the snake_case struct name, with `#[toolset(strip_suffix = "module")]` stripping the `_module` suffix, and replay resolves recorded calls by it. `story.rs` also defines `SUMMARIZER_PERSONA`, `StoryState`/`ChapterV2`, and the `manage_timeline`/`begin_chapter`/`note_events` tools
 
 ### `gui/` — Rust Binary Crate (`novelcraft-gui`, binary name: `novelcraft`)
 

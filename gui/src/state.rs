@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use dioxus::prelude::*;
 use novelcraft_engine::config::NovelCraftConfig;
+use novelcraft_engine::game::engine::ContextUsage;
 use novelcraft_engine::game::turns::TurnV2;
 use novelcraft_engine::game::profile::ProfileV1;
 use novelcraft_engine::game::session::SessionV2;
@@ -151,6 +152,7 @@ pub static PROFILES: GlobalSignal<Query<Profiles>> = GlobalSignal::new(|| {
     .unwrap_or(Query::Empty)
 });
 pub static SESSIONS: GlobalSignal<Query<Vec<SessionV2>>> = GlobalSignal::new(|| Query::Empty);
+pub static CONTEXT_USAGE: GlobalSignal<Query<ContextUsage>> = GlobalSignal::new(|| Query::Empty);
 pub static SESSION: GlobalSignal<Query<SessionV2>> = GlobalSignal::new(|| Query::Empty);
 /// View position within the gameplay screen: `-1` is the premise page
 /// (virtual page 0, before the first turn), `0..` are turn indices.

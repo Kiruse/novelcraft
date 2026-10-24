@@ -36,6 +36,9 @@ to retrieve necessary knowledge.
 /// Default number of turns between memory compressions.
 pub const DEFAULT_SUMMARY_THRESHOLD: usize = 50;
 
+/// Default assumed context window (in tokens) of the dungeon master model.
+pub const DEFAULT_CONTEXT_LENGTH: u64 = 8192;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NovelCraftConfig {
   /// Max agent loop steps. Defaults to 10.
@@ -49,6 +52,11 @@ pub struct NovelCraftConfig {
   /// `summary_threshold` turns are compressed into the rolling summary.
   #[serde(default = "NovelCraftConfig::default_summary_threshold")]
   pub summary_threshold: usize,
+  /// Assumed context window (in tokens) of the dungeon master model, used
+  /// to render how much of the window the conversation is filling. The
+  /// server does not report this portably, so it is set by hand.
+  #[serde(default = "NovelCraftConfig::default_context_length")]
+  pub context_length: u64,
   /// User profiles.
   pub profiles: Vec<ProfileV1>,
   /// Active user profile ID.
@@ -58,6 +66,9 @@ pub struct NovelCraftConfig {
 impl NovelCraftConfig {
   fn default_summary_threshold() -> usize {
     DEFAULT_SUMMARY_THRESHOLD
+  }
+  fn default_context_length() -> u64 {
+    DEFAULT_CONTEXT_LENGTH
   }
   pub async fn load() -> Result<NovelCraftConfig, EngineError> {
     deserialize(&Self::default_path()?).await
@@ -87,6 +98,7 @@ impl Default for NovelCraftConfig {
       system_prompt: DEFAULT_SYSTEM_PROMPT.trim().to_string(),
       models: Models::default(),
       summary_threshold: Self::default_summary_threshold(),
+      context_length: Self::default_context_length(),
       profiles: vec![],
       active_profile: None,
     }

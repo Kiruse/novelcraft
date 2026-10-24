@@ -75,7 +75,7 @@ impl NpcsModule {
 
 /// Normalize raw tool input into note items: trimmed, `- ` prefixes and
 /// bare dashes stripped, empty lines dropped.
-fn normalize_notes(note: &str) -> Vec<String> {
+pub(crate) fn normalize_notes(note: &str) -> Vec<String> {
   note
     .lines()
     .map(str::trim)
@@ -164,7 +164,7 @@ impl AgentToolset<GameStateView> for NpcsModule {
       return Err(EngineError::validation("note must not be empty").into());
     }
 
-    let keypath = Keypath::Notes(name.clone()).to_keypath();
+    let keypath = Keypath::Notes(name.clone()).into_keypath();
     let existing = state
       .get::<String>(&Self::ID.to_string(), &keypath)
       .await
@@ -197,7 +197,7 @@ impl AgentToolset<GameStateView> for NpcsModule {
       return Err(EngineError::validation("note must not be empty").into());
     }
 
-    let keypath = Keypath::Notes(name.clone()).to_keypath();
+    let keypath = Keypath::Notes(name.clone()).into_keypath();
     let existing = state
       .get::<String>(&Self::ID.to_string(), &keypath)
       .await
@@ -270,7 +270,7 @@ impl AgentToolset<GameStateView> for NpcsModule {
     name: String,
     apparel: String,
   ) -> Result<String, anyhow::Error> {
-    state.set(&Keypath::Apparel(name.clone()).to_keypath(), &apparel).await?;
+    state.set(&Keypath::Apparel(name.clone()).into_keypath(), &apparel).await?;
     Ok(format!("Apparel of {name} successfully updated."))
   }
 }
@@ -307,7 +307,7 @@ enum Keypath {
 }
 
 impl Keypath {
-  fn to_keypath(self) -> Vec<String> {
+  fn into_keypath(self) -> Vec<String> {
     match self {
       Self::Apparel(name) => vec![name, "apparel".to_string()],
       Self::Notes(name) => vec![name, "notes".to_string()],

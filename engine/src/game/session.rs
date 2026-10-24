@@ -101,6 +101,7 @@ impl SessionV2 {
   pub async fn load(id: impl Into<String>, profiles: &[ProfileV1]) -> Result<SessionV2, EngineError> {
     let path = Self::path(&id.into())?;
     let mut res: SessionV2 = deserialize(&path).await?;
+    res.seed_missing_modules();
     res.rebuild_gamestate(profiles).await?;
     Ok(res)
   }
@@ -126,7 +127,19 @@ impl SessionV2 {
   /// session only carries persisted data (metadata, snapshot, turns).
   pub async fn load_metadata(id: impl Into<String>) -> Result<SessionV2, EngineError> {
     let path = Self::path(&id.into())?;
-    deserialize(&path).await
+    let mut res: SessionV2 = deserialize(&path).await?;
+    res.seed_missing_modules();
+    Ok(res)
+  }
+
+  /// Seed any gameplay modules missing from this session's module set —
+  /// sessions created before a module existed carry an outdated set; the
+  /// DM's toolset must stay complete. Missing module states are empty, so
+  /// this is safe for snapshot & replay (state keys are seeded lazily).
+  pub(crate) fn seed_missing_modules(&mut self) {
+    for (id, module) in GameplayModule::default_set() {
+      self.modules.entry(id).or_insert(module);
+    }
   }
 
   /// Delete the session file with the given `id` from the local filesystem.
@@ -339,6 +352,7 @@ async fn summarize(model: &ModelConfig, transcript: &str) -> Result<String, Engi
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::game::module::locations::LocationsModule;
 
   #[test]
   fn fresh_session_seeds_module_state() {
@@ -406,6 +420,19 @@ mod tests {
     assert!(session.should_compress(50)); // 101 > 100
     session.turns.truncate(99);
     assert!(session.should_compress(49));
+  }
+
+  #[test]
+  fn deserialization_seeds_missing_default_modules() {
+    // A session created before the locations module existed:
+    let mut session = SessionV2::default();
+    session.modules.remove(LocationsModule::ID);
+    let json = serde_json::to_value(&session).unwrap();
+    assert!(!json["modules"].as_object().unwrap().contains_key("locations"));
+
+    let mut loaded: SessionV2 = serde_json::from_value(json).unwrap();
+    loaded.seed_missing_modules();
+    assert!(loaded.modules.contains_key("locations"));
   }
 
   #[tokio::test]

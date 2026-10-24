@@ -19,6 +19,20 @@ pub struct TurnV2 {
   /// after the turn's tool calls during [`crate::game::state::GameState::replay`].
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub edits: Vec<(Vec<String>, String)>,
+  /// LLM usage reported by the last completed agent run on this turn.
+  /// `input_tokens` is the FULL prompt of the final request — i.e. how
+  /// much of the model's context window the conversation filled.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub usage: Option<TurnUsage>,
+}
+
+/// Token usage of a completed turn (see [`TurnV2::usage`]).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct TurnUsage {
+  /// Prompt tokens of the turn's FINAL LLM request.
+  pub input_tokens: u64,
+  /// Sum of completion tokens across all of the turn's LLM requests.
+  pub output_tokens: u64,
 }
 
 impl TurnV2 {

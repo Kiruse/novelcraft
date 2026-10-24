@@ -26,7 +26,7 @@ impl StoryModule {
   /// chapters via tools instead.
   pub(crate) async fn write_summary(state: &GameState, summary: String) -> Result<(), EngineError> {
     state.view(Self::id())
-      .set(&Keypath::Summary.to_keypath(), &summary)
+      .set(&Keypath::Summary.into_keypath(), &summary)
       .await
   }
 
@@ -35,8 +35,8 @@ impl StoryModule {
     let Some(module) = state.get(&Self::id()) else {
       return Ok(Default::default());
     };
-    let summary = module.get::<String>(&Keypath::Summary.to_keypath()).await.transpose()?.unwrap_or_default();
-    let chapters = module.get::<Vec<ChapterV2>>(&Keypath::Chapters.to_keypath()).await.transpose()?.unwrap_or_default();
+    let summary = module.get::<String>(&Keypath::Summary.into_keypath()).await.transpose()?.unwrap_or_default();
+    let chapters = module.get::<Vec<ChapterV2>>(&Keypath::Chapters.into_keypath()).await.transpose()?.unwrap_or_default();
     Ok(StoryState { summary, chapters })
   }
 
@@ -44,7 +44,7 @@ impl StoryModule {
   /// state: there is always an active (last) chapter. The active chapter is
   /// untitled until the agent closes it via `begin_chapter`.
   async fn read_chapters(ctx: &GameStateView) -> Result<Vec<ChapterV2>, EngineError> {
-    let mut chapters = ctx.get::<Vec<ChapterV2>>(&Self::id(), &Keypath::Chapters.to_keypath())
+    let mut chapters = ctx.get::<Vec<ChapterV2>>(&Self::id(), &Keypath::Chapters.into_keypath())
       .await
       .transpose()?
       .unwrap_or_default();
@@ -60,7 +60,7 @@ impl StoryModule {
   /// system prompt.
   pub async fn context(&self, state: GameState, f: &mut PromptFormatter) -> PromptifyResult {
     let Some(module) = state.get(&Self::id()) else { return Ok(()) };
-    let timeline = module.get::<String>(&Keypath::Timeline.to_keypath())
+    let timeline = module.get::<String>(&Keypath::Timeline.into_keypath())
       .await
       .transpose()
       .map_err(|err| PromptifyError::generic(err.to_string()))?
@@ -108,7 +108,7 @@ impl AgentToolset<GameStateView> for StoryModule {
   /// never be unchecked or removed — attempts to do so are silently ignored.
   /// @contents The new contents of the timeline (items to add or check off).
   async fn manage_timeline(&self, ctx: GameStateView, contents: String) -> Result<String, anyhow::Error> {
-    let keypath = Keypath::Timeline.to_keypath();
+    let keypath = Keypath::Timeline.into_keypath();
     let existing = ctx.get::<String>(&Self::id(), &keypath)
       .await
       .transpose()?
@@ -141,15 +141,13 @@ impl AgentToolset<GameStateView> for StoryModule {
     active.title = title;
     chapters.push(ChapterV2::default());
 
-    ctx.set(&Keypath::Chapters.to_keypath(), &chapters).await?;
+    ctx.set(&Keypath::Chapters.into_keypath(), &chapters).await?;
     Ok("Began a new chapter.".to_string())
   }
 
   /// Append event bullets to the current chapter's notes. Note down
   /// important events as they happen, one bullet point per event, each line
-  /// starting with "- ". The notes merge with the existing record: bullets
-  /// already noted are ignored, new ones are appended at the end — the
-  /// record never shrinks, so you may re-submit earlier notes safely.
+  /// starting with "- ". DO NOT repeat existing chapter notes.
   /// @notes The event bullets to record.
   async fn note_events(&self, ctx: GameStateView, notes: String) -> Result<String, anyhow::Error> {
     let new_list = BulletList::parse(&notes)?;
@@ -161,7 +159,7 @@ impl AgentToolset<GameStateView> for StoryModule {
     let existing = BulletList::parse(&last.notes)?;
     last.notes = existing.merge(&new_list).to_string();
 
-    ctx.set(&Keypath::Chapters.to_keypath(), &chapters).await?;
+    ctx.set(&Keypath::Chapters.into_keypath(), &chapters).await?;
     Ok("Chapter notes updated.".to_string())
   }
 }
@@ -197,7 +195,7 @@ enum Keypath {
 }
 
 impl Keypath {
-  fn to_keypath(&self) -> Vec<String> {
+  fn into_keypath(&self) -> Vec<String> {
     match self {
       Self::Timeline => vec!["timeline".to_string()],
       Self::Summary  => vec!["summary".to_string()],
@@ -237,7 +235,7 @@ mod tests {
     // Uncheck (`intro`) and remove (`the road`) attempts are ignored.
     module.manage_timeline(view.clone(), "[ ] intro".to_string()).await.unwrap();
 
-    let timeline = view.get::<String>(&StoryModule::id().to_string(), &Keypath::Timeline.to_keypath())
+    let timeline = view.get::<String>(&StoryModule::id().to_string(), &Keypath::Timeline.into_keypath())
       .await
       .transpose()
       .unwrap()

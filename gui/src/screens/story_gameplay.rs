@@ -7,7 +7,7 @@ use novelcraft_engine::game::turns::TurnV2;
 use crate::comps::{Button, BtnVariant, CloseButton, Field, Loading, Markdown, INPUT_CLASS};
 use crate::engine;
 use crate::modules::{module_context, EditingLeaf, StatePath};
-use crate::state::{StreamState, PREMISE_PAGE, PROFILES, REASONING, SESSION, STREAM, TURN, TURN_INDEX};
+use crate::state::{Query, StreamState, CONTEXT_USAGE, PREMISE_PAGE, PROFILES, REASONING, SESSION, STREAM, TURN, TURN_INDEX};
 
 /// Swipe distance (in logical pixels) required to flip to the adjacent page.
 const SWIPE_THRESHOLD: f64 = 60.0;
@@ -459,6 +459,7 @@ fn Sidebar() -> Element {
         let res = engine::module_state_async(id.clone()).await.map_err(|err| err.to_string());
         module_states.write().insert(id, res);
       }
+      engine::refresh_context_usage();
     });
   });
 
@@ -585,6 +586,29 @@ fn Sidebar() -> Element {
               }
             } }
         }
+      }
+      { context_ui() }
+    }
+  }
+}
+
+/// Glanceable context-window fill of the last completed turn: raw token
+/// counts against the configured window, plus a proportional bar. Hidden
+/// until the first turn has completed.
+fn context_ui() -> Element {
+  let Query::Recent(usage) = &*CONTEXT_USAGE.read() else { return rsx! {} };
+  let pct = (usage.ratio() * 100.0).round() as u64;
+  let over = usage.input_tokens > usage.context_length;
+  rsx! {
+    div { class: "flex flex-col gap-1 text-sm",
+      div { class: "flex flex-row justify-between",
+        span { "Context" }
+        span { class: if over { "text-nc-dangerfg" } else { "text-nc-text/70" },
+          "{usage.input_tokens} / {usage.context_length} tokens ({pct}%)"
+        }
+      }
+      div { class: "h-1 w-full rounded overflow-hidden bg-nc-text/10",
+        div { class: "h-full bg-nc-label", style: "width: {pct}%" }
       }
     }
   }

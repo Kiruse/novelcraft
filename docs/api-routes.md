@@ -48,6 +48,7 @@ engine::save_config(config).await;
 | `turn` | `index` | `Option<TurnV2>` | Retained turn by window-relative index |
 | `turn_count` | — | `Option<usize>` | Retained turn count of the active session |
 | `story_state` | — | `Result<StoryState>` | Read long-term story state: rolling summary, chapters |
+| `context_usage` | — | `Option<ContextUsage>` | Context-window fill of the last completed turn (final-request input tokens vs the configured `context_length`) |
 | `save` | — | `Result<()>` | Persist the active session + config |
 
 ## `SessionV2` Methods (`engine/src/game/session.rs`)
@@ -84,6 +85,7 @@ Each module is a `#[toolset(strip_suffix = "module")] impl AgentToolset<GameStat
 | Module | ID | Tools | Purpose |
 |--------|----|-------|---------|
 | `NpcsModule` | `npcs` | NPC CRUD (e.g. `update_apparel`) | NPC persistence (name, personality, physique, apparel) |
+| `LocationsModule` | `locations` | `upsert_location`, `update_description`, `rename_location`, `add_note`, `remove_note` | Location persistence (name, description, notes); planned to be augmented with traveling & navigation |
 | `PlayerModule` | `player` | — | Player-relevant state, initialized from the profile |
 | `StoryModule` | `story` | `manage_timeline(contents)`, `begin_chapter(title)`, `note_events(notes)` | Story: `timeline` (TODO list of markdown task items `- [ ]`/`- [x]`; the parser tolerates plain `- ` bullets, normalizing them to unchecked items; updates merge — append new items, check off, ignore uncheck/remove), `summary` (engine-written only), `chapters` (agent-managed; `begin_chapter` titles & closes the active chapter and opens a fresh untitled one, `note_events` appends bullets (duplicates ignored), validated by `BulletList`) |
 
