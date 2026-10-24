@@ -1,0 +1,73 @@
+name: Bundle
+
+# Builds & bundles the desktop app for Windows & Linux. macOS is
+# deliberately skipped — code signing & notarization require a paid Apple
+# developer account; Apple users are served by the web deployment.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux
+          - os: windows-latest
+            artifact: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      # What `just css` does locally.
+      - name: Compile stylesheet
+        shell: bash
+        working-directory: gui
+        run: |
+          bun install --frozen-lockfile
+          bunx @tailwindcss/cli -i input.css -o assets/tailwind.css --minify
+
+      # Native deps of the desktop renderer (wry/tao) & the build itself.
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libxdo-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev
+
+      # dioxus-cli (dx) is a heavy build from source; prefer a prebuilt
+      # binary via cargo-binstall and fall back to a source install.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
+      - name: Install dioxus-cli
+        shell: bash
+        run: cargo binstall -y --locked "dioxus-cli@0.7" || cargo install --locked --version "0.7.*" dioxus-cli
+
+      - name: Bundle
+        shell: bash
+        working-directory: gui
+        run: dx bundle --platform desktop
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: novelcraft-${{ matrix.artifact }}
+          path: target/dx/novelcraft/bundle/**/*
+          if-no-files-found: error

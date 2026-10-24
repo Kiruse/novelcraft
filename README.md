@@ -27,7 +27,7 @@ All commands are managed by the root `justfile`. Run `just` with no arguments to
 ```bash
 just dev        # Run the app with hot-reload (Tailwind watcher + dx serve --platform desktop)
 just build      # Bundle the app for the current platform (just css + dx bundle --platform desktop)
-just build-web  # Build the web (wasm32) bundle (just css + dx build --platform web)
+just build-web  # Build the web (wasm32) release bundle for deployment (just css + dx build --platform web --release)
 just css        # Compile the Tailwind stylesheet once (minified)
 just check      # Cargo check (entire workspace)
 just check-gui  # Cargo check the GUI for desktop AND web (wasm32) targets
@@ -39,6 +39,14 @@ just clippy     # Cargo clippy
 > native TLS/websocket stack and fails on `openssl-sys`. Use `just check-gui` (which
 > negates the defaults and enables `dioxus/web` for the wasm pass) or
 > `dx build --platform web`.
+
+## Releases
+
+Tag pushes (`v*`) and manual dispatches trigger the
+[bundle workflow](.github/workflows/bundle.yml), which builds installers for
+Windows (NSIS/MSI) and Linux (AppImage/deb) on GitHub-hosted runners.
+macOS is deliberately skipped for now — signing & notarization require a
+paid Apple developer account; Apple users are served by the web deployment.
 
 ## Documentation
 

@@ -26,10 +26,11 @@ build:
     just css
     cd gui && dx bundle --platform desktop
 
-# Build the web (wasm32) bundle (under target/dx/novelcraft/debug/web).
+# Build the web (wasm32) release bundle for deployment (under
+# target/dx/novelcraft/release/web).
 build-web:
     just css
-    cd gui && dx build --platform web
+    cd gui && dx build --platform web --release
 
 # ── Check ────────────────────────────────────────────────────
 

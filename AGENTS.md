@@ -367,7 +367,7 @@ All build and development commands are in the root `justfile`.
 | `just dev` | Run the app with hot-reload (Tailwind watcher + `dx serve --platform desktop`) |
 | `just css` | Compile the Tailwind stylesheet once (minified) |
 | `just build` | Bundle the app for the current platform (`just css` + `dx bundle --platform desktop`) |
-| `just build-web` | Build the web (wasm32) bundle (`just css` + `dx build --platform web`) |
+| `just build-web` | Build the web (wasm32) release bundle for deployment (`just css` + `dx build --platform web --release`) |
 | `just llama` | Serve a local GGUF model on `:8888` via llama.cpp (`DEFAULT_HOST`) |
 | `just check` | Cargo check (entire workspace) |
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |

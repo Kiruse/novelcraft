@@ -1,7 +1,8 @@
 # Web Target (wasm32)
 
-The web build is fully working: `dx build --platform web` compiles, bundles
-(wasm-bindgen) and emits `target/dx/novelcraft/debug/web/public`. Desktop is
+The web build is fully working: `dx build --platform web --release` compiles,
+bundles (wasm-bindgen) and emits `target/dx/novelcraft/release/web/public` —
+the deployable static site. Desktop is
 unaffected; storage paths resolve identically on both targets.
 
 ## Architecture
@@ -42,7 +43,7 @@ header on whatever serves the model.
 ## Useful commands
 
 ```bash
-just build-web                     # full wasm build (just css + dx build --platform web)
+just build-web                     # release wasm build (just css + dx build --platform web --release)
 dx serve --platform web            # hot-reload web dev
 just check-gui                     # checks the GUI for desktop AND web (wasm32) targets
 ```

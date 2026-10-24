@@ -1,9 +1,9 @@
 [application]
 # Display name of the app (window title & bundle name).
 name = "NovelCraft"
-# App identifier for bundling.
-identifier = "dev.novelcraft.app"
 
 [bundle]
+# App identifier for bundling (reverse-DNS).
+identifier = "dev.novelcraft.app"
 publisher = "NovelCraft"
 category = "Game"
