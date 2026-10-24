@@ -37,6 +37,7 @@ Those files are ALL there is — no page batches, no checkpoint files, no separa
   "id": "session-uuid",
   "title": "Session Title",
   "exposition": "Brief story exposition serving as the starting point",
+  "creative_direction": "Optional author-authored style & behavior guidance",
   "created_at": "2026-01-01T00:00:00+00:00",
   "updated_at": "2026-01-01T00:00:00+00:00",
   "modules": {

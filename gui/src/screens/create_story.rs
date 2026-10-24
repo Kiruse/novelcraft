@@ -27,6 +27,7 @@ struct Inspiration {
 pub fn CreateStory() -> Element {
   let mut title = use_signal(String::new);
   let mut premise = use_signal(String::new);
+  let mut direction = use_signal(String::new);
   let mut tags: Signal<Option<Result<Vec<String>, String>>> = use_signal(|| None);
   let inspirations: Signal<Option<Result<Vec<Inspiration>, String>>> = use_signal(|| None);
   let mut selected: Signal<BTreeSet<String>> = use_signal(BTreeSet::new);
@@ -50,11 +51,12 @@ pub fn CreateStory() -> Element {
       return;
     }
     let exposition = premise.read().trim().to_string();
+    let direction = direction.read().trim().to_string();
 
     let nav = navigator();
     spawn(async move {
       // Failures are toasted by the engine layer.
-      if let Ok(session) = engine::create_session(title_text, exposition).await {
+      if let Ok(session) = engine::create_session(title_text, exposition, direction).await {
         nav.push(Route::StoryOverview { id: session.id });
       }
     });
@@ -79,6 +81,15 @@ pub fn CreateStory() -> Element {
           placeholder: "Describe the premise of your story ...",
           value: "{premise}",
           oninput: move |ev: FormEvent| premise.set(ev.value()),
+        }
+      }
+      Field { label: "Creative Direction",
+        textarea {
+          class: INPUT_CLASS,
+          rows: 3,
+          placeholder: "Optional — guide the storyteller's style & behavior (e.g. tone, pacing, content boundaries) ...",
+          value: "{direction}",
+          oninput: move |ev: FormEvent| direction.set(ev.value()),
         }
       }
       Button { label: "Create", variant: BtnVariant::Primary, disabled: !valid, on_click: submit }

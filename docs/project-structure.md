@@ -113,7 +113,7 @@ Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind 
   - `mod.rs` — `Route` enum, `go_back()`
   - `home.rs` — Home screen (session launcher; cards render the rolling story summary — falling back to the premise — via `Markdown`)
   - `settings.rs` — Settings screen (Max Agent Steps, Summary Threshold (turns), System Prompt, three model groups: Dungeon Master / Suggestions / Summarizer)
-  - `create_story.rs` — Vignette creation form (title + premise) + Get Inspired section (debounced tag-filtered fetches); submits via `engine::create_session`
+  - `create_story.rs` — Vignette creation form (title + premise + optional creative direction, appended to the DM persona for this story) + Get Inspired section (debounced tag-filtered fetches); submits via `engine::create_session`
   - `story_overview.rs` — Session overview (banner placeholder, title/exposition, Play + Delete buttons; Delete opens a screen-local `ConfirmDialog` modal, then `engine::delete_session` removes the file and clears the engine's active session if it was the one deleted)
   - `story_gameplay.rs` — Gameplay screen (turn cards with swipe, streaming cards, ☰ sidebar — premise, effective prompt, one collapsible section per active module via `ModuleContext`, tool calls of the viewed turn — chat bar, status row, profile popover & dialog)
 

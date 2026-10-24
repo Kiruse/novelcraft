@@ -30,6 +30,10 @@ pub struct SessionV2 {
   pub title: String,
   /// Brief story exposition serving as the starting point of the story.
   pub exposition: String,
+  /// Author-authored style & behavior guidance for the dungeon master —
+  /// appended to the persona in the system prompt of this story only.
+  #[serde(default)]
+  pub creative_direction: String,
   #[serde(serialize_with = "serialize_timestamp", deserialize_with = "deserialize_timestamp")]
   #[serde(rename = "created_at")]
   pub created_at: DateTime<Utc>,
@@ -64,6 +68,7 @@ impl Default for SessionV2 {
       id: id.clone(),
       title: String::new(),
       exposition: String::new(),
+      creative_direction: String::new(),
       created_at: Utc::now(),
       updated_at: Utc::now(),
       modules,

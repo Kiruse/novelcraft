@@ -60,7 +60,7 @@ async fn prompt_commits_streamed_content() {
 
   let mut engine = NovelCraftEngine::new(config);
   let session = engine
-    .create_session("Prompt Stream Test".to_string(), "A premise.".to_string())
+    .create_session("Prompt Stream Test".to_string(), "A premise.".to_string(), String::new())
     .await
     .unwrap();
   engine.set_session(Some(session));
@@ -112,7 +112,7 @@ async fn prompt_executes_namespaced_tool_calls() {
 
   let mut engine = NovelCraftEngine::new(config);
   let session = engine
-    .create_session("Tool Round Trip".to_string(), "A premise.".to_string())
+    .create_session("Tool Round Trip".to_string(), "A premise.".to_string(), String::new())
     .await
     .unwrap();
   engine.set_session(Some(session));

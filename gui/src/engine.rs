@@ -158,10 +158,14 @@ pub fn jump_to_end() {
 
 /// Create a new session, make it the engine's active session and publish
 /// it to the session query. Toasts on failure.
-pub async fn create_session(title: String, exposition: String) -> Result<SessionV2, EngineError> {
+pub async fn create_session(
+  title: String,
+  exposition: String,
+  creative_direction: String,
+) -> Result<SessionV2, EngineError> {
   let engine = engine();
   let mut eng = engine.lock().await;
-  match eng.create_session(title, exposition).await {
+  match eng.create_session(title, exposition, creative_direction).await {
     Ok(session) => {
       eng.set_session(Some(session.clone()));
       *SESSION.write() = Query::Recent(session.clone());

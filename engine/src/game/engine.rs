@@ -143,10 +143,12 @@ impl NovelCraftEngine {
     &mut self,
     title: String,
     exposition: String,
+    creative_direction: String,
   ) -> Result<SessionV2, EngineError> {
     let mut session = SessionV2 {
       title,
       exposition,
+      creative_direction,
       ..Default::default()
     };
     session.set_profile(self.profile().map(|p| Arc::new(p.clone())));
@@ -467,6 +469,13 @@ impl NovelCraftEngine {
     f.writeline(&self.config.system_prompt)?;
     f.newline()?;
 
+    let direction = self.session().map(|s| s.creative_direction.clone()).unwrap_or_default();
+    if !direction.trim().is_empty() {
+      f.write("# Creative direction")?;
+      f.indented(|f| f.write(&direction))?;
+      f.newline()?;
+    }
+
     let exposition = self.session().map(|s| s.exposition.clone()).unwrap_or_default();
     if !exposition.trim().is_empty() {
       f.write("# Story premise")?;
@@ -661,5 +670,20 @@ mod tests {
     inject_tool_reminder(&mut c);
 
     assert_eq!(c.messages.len(), 1);
+  }
+
+  #[tokio::test]
+  async fn creative_direction_joins_the_persona() {
+    let mut engine = NovelCraftEngine::new(NovelCraftConfig::default());
+    let mut session = SessionV2::default();
+    session.creative_direction = "Never use em dashes.".to_string();
+    session.exposition = "A tavern, a storm, a stranger.".to_string();
+    engine.set_session(Some(session));
+
+    let prompt = engine.effective_prompt().await.unwrap();
+    assert!(prompt.contains("# Creative direction"));
+    assert!(prompt.contains("Never use em dashes."));
+    // Appended to the persona, before the premise & module contexts.
+    assert!(prompt.find("# Creative direction").unwrap() < prompt.find("# Story premise").unwrap());
   }
 }
