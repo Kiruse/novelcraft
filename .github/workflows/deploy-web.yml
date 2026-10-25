@@ -1,0 +1,59 @@
+name: Deploy web
+
+# Builds the web (wasm32) release bundle and deploys it to Cloudflare
+# Pages. Requires two repository secrets:
+#   CLOUDFLARE_API_TOKEN  — token with "Cloudflare Pages — Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID — the Pages project's account ID
+# and a Cloudflare Pages project named after PAGES_PROJECT_NAME below
+# (create once: `wrangler pages project create <name>` or via dashboard).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PAGES_PROJECT_NAME: novelcraft
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      # What `just css` does locally.
+      - name: Compile stylesheet
+        shell: bash
+        working-directory: gui
+        run: |
+          bun install --frozen-lockfile
+          bunx @tailwindcss/cli -i input.css -o assets/tailwind.css --minify
+
+      # dioxus-cli (dx) is a heavy build from source; prefer a prebuilt
+      # binary via cargo-binstall and fall back to a source install.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
+      - name: Install dioxus-cli
+        shell: bash
+        run: cargo binstall -y --locked "dioxus-cli@0.7" || cargo install --locked --version "0.7.*" dioxus-cli
+
+      - name: Build web bundle
+        shell: bash
+        working-directory: gui
+        run: dx build --platform web --release
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy target/dx/novelcraft/release/web/public --project-name=${{ env.PAGES_PROJECT_NAME }} --branch=main --commit-dirty=true

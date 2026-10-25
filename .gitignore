@@ -1,3 +1,6 @@
+# CloudFlare Wranger
+.wrangler/
+
 # Cargo
 target/
 

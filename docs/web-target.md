@@ -40,6 +40,29 @@ cross-origin. `llama-server` sends `Access-Control-Allow-Origin: *` by
 default, so local dev works out of the box; hosted deployments need the
 header on whatever serves the model.
 
+## Deployment
+
+`just build-web` emits the deployable static site to
+`target/dx/novelcraft/release/web/public` (index.html + content-hashed
+assets). It deploys to any static host with three caveats:
+
+- **Domain root** — asset references are absolute-root (`/assets/…`), so the
+  site must be served from the root of its domain (Cloudflare Pages projects
+  are by default). Subpath hosting would require a `base_path` in
+  `gui/Dioxus.toml` and a rebuild.
+- **SPA fallback** — the router uses history routing, so deep links need a
+  catch-all rewrite to `index.html` (Cloudflare Pages: enable
+  "Single-page application" handling / a `_redirects` file with
+  `/* /index.html 200`).
+- **`.wasm` MIME** — must be served as `application/wasm` (standard on all
+  mainstream hosts).
+
+CI/CD: pushes to `main` build & deploy via
+`.github/workflows/deploy-web.yml` (GitHub Actions + `wrangler pages
+deploy`; needs `CLOUDFLARE_API_TOKEN` & `CLOUDFLARE_ACCOUNT_ID` secrets and
+a one-time Pages project). The web title is set under `[web.app]` in
+`gui/Dioxus.toml`.
+
 ## Useful commands
 
 ```bash

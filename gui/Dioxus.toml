@@ -2,6 +2,10 @@
 # Display name of the app (window title & bundle name).
 name = "NovelCraft"
 
+[web.app]
+# Browser tab title of the web deployment.
+title = "NovelCraft"
+
 [bundle]
 # App identifier for bundling (reverse-DNS).
 identifier = "dev.novelcraft.app"

@@ -48,6 +48,22 @@ Windows (NSIS/MSI) and Linux (AppImage/deb) on GitHub-hosted runners.
 macOS is deliberately skipped for now — signing & notarization require a
 paid Apple developer account; Apple users are served by the web deployment.
 
+## Web Deployment
+
+Pushes to `main` (and manual dispatches) trigger the
+[deploy workflow](.github/workflows/deploy-web.yml), which builds the web
+(wasm32) release bundle and publishes it to Cloudflare Pages. One-time
+setup:
+
+```bash
+bunx wrangler pages project create novelcraft   # or via the CF dashboard
+```
+
+Then set two repository secrets: `CLOUDFLARE_API_TOKEN` (with
+"Cloudflare Pages — Edit" permission) and `CLOUDFLARE_ACCOUNT_ID`.
+The app must be hosted at the domain root (Pages projects are by default);
+see [docs/web-target.md](docs/web-target.md) for details.
+
 ## Documentation
 
 See the [`docs/`](docs/) directory for comprehensive documentation on architecture, data persistence, the game agent loop, and GUI conventions.
