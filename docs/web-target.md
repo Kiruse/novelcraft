@@ -69,6 +69,51 @@ deploy`; needs `CLOUDFLARE_API_TOKEN` & `CLOUDFLARE_ACCOUNT_ID` secrets and
 a one-time Pages project). The web title is set under `[web.app]` in
 `gui/Dioxus.toml`. Live deployment: https://novelcraft.quest
 
+## Browser support & debugging
+
+`createWritable()` (the OPFS write path) is **Baseline only since September
+2025** — Chromium-only before that. Use a Firefox/Safari from ~September
+2025 or later; older versions fail at the first session write (surfaced as
+a "Session creation failed" toast).
+
+Firefox DevTools has **no OPFS viewer** — absence in the Storage panel
+proves nothing. Inspect OPFS from the console instead:
+
+```js
+const root = await navigator.storage.getDirectory();
+for await (const [name, handle] of root.entries()) console.log(name, handle.kind);
+// …then descend: await root.getDirectoryHandle("data"), etc.
+```
+
+Logs: `env_logger` has no console backend on wasm; the web build installs
+`console_log` (info and up) instead, so `log` facade messages appear in the
+browser console.
+
+## Debugging panics on wasm
+
+Rust panics **abort** the wasm instance: the app freezes and the browser
+console shows only a bare `RuntimeError: unreachable` — no message, no
+stack. `console_error_panic_hook` (wired in `gui/src/main.rs`) installs a
+panic hook that logs the real message & stack trace before the abort, so
+always check the console after a repro.
+
+Also mind wasm-hostile constructs, which panic at runtime on the web:
+
+- **`tokio::spawn`** — there is no tokio runtime; dioxus tasks run on the
+  JS microtask queue. Use `wasm_bindgen_futures::spawn_local` (see
+  `util::discard_channel`, which cfg-splits the drainer).
+- **`tokio::time` & `std::time::Instant`** — both panic on wasm ("time not
+  implemented on this platform"): there is no timer driver and std has no
+  clock. GUI code sleeps via `crate::time::sleep` (tokio native / gloo
+  timers on web, see `gui/src/time.rs`); instant/elapsed measurement uses
+  the `web-time` crate (kiruklaw-agent-loop).
+- **`tokio::fs` / threads / process APIs** — gated out by the storage seam
+  and feature trimming.
+
+Do not open the built `public/index.html` from disk (`file://`) — browsers
+block asset fetches over file URLs; serve it (`dx serve --platform web`) or
+use the deployment.
+
 ## Useful commands
 
 ```bash

@@ -20,9 +20,18 @@ where D: Deserializer<'de>
     .to_utc())
 }
 
+/// A channel whose messages are silently drained in the background (e.g.
+/// LLM calls whose chunks nobody consumes). The drainer runs on tokio
+/// (native) or the JS microtask queue (web) — `tokio::spawn` would panic
+/// on wasm, where no tokio runtime exists.
 pub(crate) fn discard_channel<T: Send + 'static>() -> Sender<T> {
   let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+  #[cfg(not(target_arch = "wasm32"))]
   tokio::spawn(async move {
+    while rx.recv().await.is_some() {}
+  });
+  #[cfg(target_arch = "wasm32")]
+  wasm_bindgen_futures::spawn_local(async move {
     while rx.recv().await.is_some() {}
   });
   tx

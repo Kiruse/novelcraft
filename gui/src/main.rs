@@ -6,6 +6,7 @@ mod markdown;
 mod modules;
 mod screens;
 mod state;
+mod time;
 mod titlebar;
 mod toast;
 
@@ -17,7 +18,18 @@ use crate::screens::Route;
 use crate::titlebar::{ResizeHandles, TitleBar};
 
 fn main() {
+  // env_logger has no console backend on wasm — logs would vanish. The
+  // console_log crate forwards the `log` facade to the browser console.
+  #[cfg(not(target_arch = "wasm32"))]
   env_logger::init();
+  #[cfg(target_arch = "wasm32")]
+  console_log::init_with_level(log::Level::Info).ok();
+
+  // On wasm, panics abort the instance and otherwise surface in the
+  // browser console as a bare "RuntimeError: unreachable" — the hook
+  // logs the actual panic message & stack first.
+  #[cfg(target_arch = "wasm32")]
+  console_error_panic_hook::set_once();
 
   let builder = dioxus::LaunchBuilder::new();
   #[cfg(not(target_arch = "wasm32"))]

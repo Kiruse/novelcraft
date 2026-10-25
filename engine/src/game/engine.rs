@@ -120,8 +120,10 @@ impl NovelCraftEngine {
   pub async fn list_sessions() -> Result<Vec<SessionV2>, EngineError> {
     let path = SessionV2::root()?;
     crate::util::fs::ensure_dir(&path).await?;
+    let entries = crate::util::fs::list_dir(&path).await?;
+    info!("list_sessions: {} entries in {}", entries.len(), path.display());
     let mut result = Vec::new();
-    for (name, is_dir) in crate::util::fs::list_dir(&path).await? {
+    for (name, is_dir) in entries {
       if is_dir {
         warn!("Ignoring legacy session directory {name:?}");
         continue;
@@ -132,6 +134,7 @@ impl NovelCraftEngine {
         Err(err) => warn!("Skipping session {sid}: {err}"),
       }
     }
+    info!("list_sessions: {} sessions loaded", result.len());
     result.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
     Ok(result)
   }

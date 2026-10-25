@@ -12,14 +12,18 @@ pub fn StoryOverview(id: String) -> Element {
   use_hook(engine::refresh_sessions);
 
   let nav = navigator();
-  let session = SESSIONS
+  // `None` while the sessions query hasn't resolved yet, `Some(None)` once
+  // the list is loaded but doesn't contain this id (deleted / never
+  // persisted).
+  let session: Option<Option<_>> = SESSIONS
     .read()
     .value()
-    .and_then(|sessions| sessions.iter().find(|session| session.id == id).cloned());
+    .map(|sessions| sessions.iter().find(|session| session.id == id).cloned());
 
   let mut confirm_delete = use_signal(|| false);
   let title_for_dialog = session
     .as_ref()
+    .and_then(|session| session.as_ref())
     .map(|session| session.title.trim().to_string())
     .filter(|title| !title.is_empty());
   let play_id = id.clone();
@@ -29,7 +33,8 @@ pub fn StoryOverview(id: String) -> Element {
       BannerPlaceholder {}
       { match session {
           None => rsx! { Loading { text: "Loading ..." } },
-          Some(session) =>
+          Some(None) => rsx! { div { class: "text-nc-dangerfg", "Story not found — it may not have been saved." } },
+          Some(Some(session)) =>
             rsx! {
               div { class: "flex flex-col gap-1 w-full",
                 div { class: "text-2xl", { session.title.clone() } }

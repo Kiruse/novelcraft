@@ -166,7 +166,9 @@ pub(crate) async fn list_dir(path: &Path) -> Result<Vec<(String, bool)>, EngineE
   let Some(dir) = dir_handle(path, false).await? else {
     return Ok(Vec::new());
   };
-  let iterator = dir.values();
+  // NOTE: `entries()`, not `values()` — values() yields the raw handle,
+  // while entries() yields the `[name, handle]` pairs parsed below.
+  let iterator = dir.entries();
   let mut entries = Vec::new();
   loop {
     let promise = iterator.next().map_err(|err| js_error("values", err))?;

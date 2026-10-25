@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dioxus::prelude::*;
-use tokio::time::Duration;
+use std::time::Duration;
+
+use crate::time;
 
 /// Toast notifications, rendered as a fixed overlay in the bottom-right
 /// corner. Any async task may raise a toast via [push_toast].
@@ -86,7 +88,7 @@ pub fn push_toast(mut toast: Toast) {
 
   if toast.duration != Duration::ZERO {
     spawn(async move {
-      tokio::time::sleep(toast.duration).await;
+      time::sleep(toast.duration).await;
       dismiss_toast(toast.id);
     });
   }

@@ -7,7 +7,8 @@ css:
     cd gui && bunx @tailwindcss/cli -i input.css -o assets/tailwind.css --minify
 
 # Run the app with hot-reload (Tailwind watcher + Dioxus dev server).
-dev:
+# Platform: desktop (default) or web — `just dev` / `just dev web`.
+dev platform="desktop":
     #!/usr/bin/env bash
     set -euo pipefail
     cd gui
@@ -15,7 +16,7 @@ dev:
     trap cleanup EXIT
     bunx @tailwindcss/cli -i input.css -o assets/tailwind.css --watch &
     TW_PID=$!
-    dx serve --platform desktop
+    dx serve --platform {{platform}}
 llama:
   llama serve --port 8888 -hf ggml-org/gemma-4-26B-A4B-it-GGUF:Q4_0
 
@@ -26,8 +27,7 @@ build:
     just css
     cd gui && dx bundle --platform desktop
 
-# Build the web (wasm32) release bundle for deployment (under
-# target/dx/novelcraft/release/web).
+# Build the web (wasm32) release bundle (target/dx/novelcraft/release/web).
 build-web:
     just css
     cd gui && dx build --platform web --release

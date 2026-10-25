@@ -150,7 +150,7 @@ async fn refetch_inspirations(
   mut inspirations: Signal<Option<Result<Vec<Inspiration>, String>>>,
 ) {
   let generation = *inspirations_gen.read();
-  tokio::time::sleep(INSPIRATIONS_DEBOUNCE).await;
+  crate::time::sleep(INSPIRATIONS_DEBOUNCE).await;
   if *inspirations_gen.read() != generation {
     return;
   }

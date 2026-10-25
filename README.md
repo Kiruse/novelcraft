@@ -25,7 +25,7 @@ There is no server, no database, and no authentication — all data lives as loo
 All commands are managed by the root `justfile`. Run `just` with no arguments to list available recipes.
 
 ```bash
-just dev        # Run the app with hot-reload (Tailwind watcher + dx serve --platform desktop)
+just dev        # Run the app with hot-reload (Tailwind watcher + dx serve; platform: desktop, or `just dev web`)
 just build      # Bundle the app for the current platform (just css + dx bundle --platform desktop)
 just build-web  # Build the web (wasm32) release bundle for deployment (just css + dx build --platform web --release)
 just css        # Compile the Tailwind stylesheet once (minified)

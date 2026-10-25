@@ -364,7 +364,7 @@ All build and development commands are in the root `justfile`.
 
 | Recipe | Purpose |
 |--------|---------|
-| `just dev` | Run the app with hot-reload (Tailwind watcher + `dx serve --platform desktop`) |
+| `just dev [platform]` | Run the app with hot-reload (Tailwind watcher + `dx serve`); platform is `desktop` (default) or `web` |
 | `just css` | Compile the Tailwind stylesheet once (minified) |
 | `just build` | Bundle the app for the current platform (`just css` + `dx bundle --platform desktop`) |
 | `just build-web` | Build the web (wasm32) release bundle for deployment (`just css` + `dx build --platform web --release`) |
@@ -401,5 +401,7 @@ All build and development commands are in the root `justfile`.
 | `dioxus` (features: desktop, router) | UI framework — rsx components, signals, router; renders in the system WebView via `wry` |
 | `@tailwindcss/cli` + `tailwindcss` (npm, via bun — see `gui/package.json`) | Tailwind CSS v4 toolchain; compiles `gui/input.css` → `gui/assets/tailwind.css` |
 | `reqwest` (version 0.12, json feature) | Inspiration REST client (streaming not used; json feature) |
+| `gloo-timers` (wasm target) + `gui/src/time.rs` | Platform-split sleeping — tokio native, JS timers on web (`tokio::time` panics on wasm) |
 | `log` | Logging facade (explicit imports — a glob `use log::*` collides with the Dioxus prelude) |
+| `console_log` (wasm target) | Forwards the `log` facade to the browser console on web (`env_logger` has no wasm backend) |
 | `chrono` | Local-time formatting of session timestamps (used by `screens/home.rs`) |
