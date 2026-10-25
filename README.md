@@ -64,6 +64,9 @@ Then set two repository secrets: `CLOUDFLARE_API_TOKEN` (with
 The app must be hosted at the domain root (Pages projects are by default);
 see [docs/web-target.md](docs/web-target.md) for details.
 
+The live deployment serves at **https://novelcraft.quest** — deep links
+(e.g. `/settings`) work out of the box via Pages' default SPA handling.
+
 ## Documentation
 
 See the [`docs/`](docs/) directory for comprehensive documentation on architecture, data persistence, the game agent loop, and GUI conventions.
