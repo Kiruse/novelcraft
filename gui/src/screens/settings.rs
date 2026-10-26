@@ -79,6 +79,7 @@ pub fn Settings() -> Element {
   rsx! {
     Screen { title: "Settings", closable: true,
       Field { label: "Max Agent Steps",
+        hint: "The agent may produce reasoning & game logic steps before generating story for you. This limits how many steps it may take to avoid an infinite loop.",
         input {
           class: INPUT_CLASS,
           value: "{steps}",
@@ -86,6 +87,7 @@ pub fn Settings() -> Element {
         }
       }
       Field { label: "Summary Threshold (turns)",
+        hint: "The agent maintains a rolling summary of the recent story to improve recall on an endless conversation.",
         input {
           class: INPUT_CLASS,
           value: "{threshold}",
@@ -93,6 +95,7 @@ pub fn Settings() -> Element {
         }
       }
       Field { label: "Context Window (tokens)",
+        hint: "LLMs can only fit a certain number of input + output tokens called context window. This value is dependent on model, but cannot be easily retrieved from servers, so it is only for your own estimate and has no effect on prompt construction.",
         input {
           class: INPUT_CLASS,
           value: "{context_length}",

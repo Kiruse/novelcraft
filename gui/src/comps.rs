@@ -91,6 +91,9 @@ pub fn Chip(props: ChipProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 pub struct FieldProps {
   label: String,
+  /// Optional explanatory text, rendered as a `?` hint next to the label.
+  #[props(default)]
+  hint: Option<String>,
   children: Element,
 }
 
@@ -99,8 +102,60 @@ pub struct FieldProps {
 pub fn Field(props: FieldProps) -> Element {
   rsx! {
     div { class: "flex flex-col gap-1 w-full",
-      div { class: "text-nc-label", { props.label } }
+      div { class: "flex flex-row items-center gap-1.5",
+        div { class: "text-nc-label", { props.label } }
+        { props.hint.map(|hint| rsx! { Hint { text: hint } }) }
+      }
       { props.children }
+    }
+  }
+}
+
+/// Small `?` in the highlight color with a hover tooltip. Pure CSS
+/// (`group-hover`) — native `title` tooltips are unreliable in the
+/// WebKit webviews the app renders in.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum HintAttachment {
+  /// Tooltip opens below the marker. The default: above-the-marker
+  /// tooltips clip at the tops of scroll containers (the Settings
+  /// screen's first field).
+  #[default]
+  Bottom,
+  /// Tooltip opens above the marker.
+  Top,
+  /// Tooltip opens to the left of the marker.
+  Left,
+  /// Tooltip opens to the right of the marker.
+  Right,
+}
+
+#[derive(Props, Clone, PartialEq)]
+pub struct HintProps {
+  text: String,
+  /// Which side of the marker the tooltip opens on.
+  #[props(default)]
+  attachment: HintAttachment,
+}
+
+#[component]
+pub fn Hint(props: HintProps) -> Element {
+  // Statically spelled-out class strings — the Tailwind scanner needs
+  // the literals to compile the utilities.
+  let position = match props.attachment {
+    HintAttachment::Bottom => "top-full left-1/2 -translate-x-1/2 mt-1",
+    HintAttachment::Top => "bottom-full left-1/2 -translate-x-1/2 mb-1",
+    HintAttachment::Left => "right-full top-1/2 -translate-y-1/2 mr-1",
+    HintAttachment::Right => "left-full top-1/2 -translate-y-1/2 ml-1",
+  };
+
+  rsx! {
+    span { class: "relative group inline-flex items-center cursor-help",
+      span { class: "text-nc-label text-xs font-bold rounded-full border border-nc-label/60 w-4 h-4 flex items-center justify-center shrink-0", "?" }
+      span {
+        class: "absolute hidden group-hover:block group-hover:z-50 {position} w-64 p-2 rounded-sm \
+                bg-nc-bg border border-nc-border shadow-lg text-nc-text text-xs font-normal text-left normal-case",
+        { props.text }
+      }
     }
   }
 }
