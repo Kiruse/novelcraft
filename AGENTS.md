@@ -67,7 +67,7 @@ novelcraft/
 │       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded query refreshes, turn navigation
 │       ├── state.rs            # Global reactive state — Query<T> (Empty/Error/Stale/Recent), GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs            # Toast notifications (global signal + fixed overlay component)
-│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, Loading, Markdown, SettingsGear, CloseButton)
+│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, ModelFields/ModelGroup, Loading, Markdown, SettingsGear, CloseButton)
 │       ├── markdown.rs         # Markdown-like parser for streamed agent output (subset, unit tested)
 │       ├── modules.rs          # ModuleContext trait — per-module sidebar rendering & state edits (default tree editor + memory impl)
 │       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
@@ -76,6 +76,7 @@ novelcraft/
 │       └── screens/            # Route enum (Routable, mod.rs) + one component module per screen
 │           ├── mod.rs          # Route enum + go_back()
 │           ├── home.rs         # Session list
+│           ├── onboarding.rs   # First-boot onboarding (2 steps: local-first pitch, BYO-LLM config) — NOT a route; gated by config.onboarded
 │           ├── settings.rs     # Engine config editor (models, system prompt, summary threshold)
 │           ├── create_story.rs # New vignette + inspiration browser (debounced tag-filtered fetches)
 │           ├── story_overview.rs # Session detail + Play/Delete (with confirm dialog) buttons
@@ -107,8 +108,8 @@ novelcraft/
 | GUI Entry | `gui/src/main.rs` | Launch config (desktop-only window settings), `App` component (boot gate: async config load → engine construction → `BOOT_CONFIG` stash → query seeding, then stylesheet link, toast overlay, router) |
 | GUI Engine Bridge | `gui/src/engine.rs` | `OnceLock<Arc<Mutex<NovelCraftEngine>>>` — the single seam to the engine; async ops + generation-guarded query refreshes + window-relative turn navigation |
 | GUI State | `gui/src/state.rs` | `Query<T>` (Empty/Error/Stale/Recent) + `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`, `StreamState` |
-| GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`) |
-| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` |
+| GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `onboarding.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); onboarding is NOT a route — `App` renders it instead of the router while `config.onboarded` is false |
+| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `ModelFields` + `ModelGroup` model config editor, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` |
 | GUI Toasts | `gui/src/toast.rs` | `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay |
 | GUI Styling | `gui/input.css` + `gui/assets/tailwind.css` | Tailwind v4: `@theme` design tokens (`nc-*` colors) → compiled stylesheet (build artifact; `just css` / `just dev`) |
 | GUI Text Input | (none — WebView native) | Native `<input>`/`<textarea>`; the platform WebView provides IME, selection & clipboard handling |
@@ -126,7 +127,7 @@ There is no action system. Navigation goes through the Dioxus Router: `navigator
 
 Models are configured in Rust, persisted to disk as JSON, and held in the engine config.
 
-- **Engine side**: `NovelCraftConfig` (defined in `engine/src/config.rs`, persisted at `{configDir}/NovelCraft/config.json`) holds `max_agent_steps`, `system_prompt`, `models: Models` — an `exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>` keyed by **all three** `ModelPurpose` variants (`DungeonMaster`, `Suggestions`, `Summarizer`) — plus `summary_threshold`, `context_length`, `profiles`, and `active_profile`.
+- **Engine side**: `NovelCraftConfig` (defined in `engine/src/config.rs`, persisted at `{configDir}/NovelCraft/config.json`) holds `max_agent_steps`, `system_prompt`, `models: Models` — an `exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>` keyed by **all three** `ModelPurpose` variants (`DungeonMaster`, `Suggestions`, `Summarizer`) — plus `summary_threshold`, `context_length`, `profiles`, `active_profile`, and `onboarded` (first-boot onboarding done; `#[serde(default = true)]` so pre-existing config files skip onboarding, fresh `Default` configs start `false`).
 - Each `ModelConfig` (re-exported from `kiruklaw-agent-loop`, internally tagged) is `ModelConfig::OpenAi { base_url, api_key, model }`, where `model` is the actual LLM API model identifier.
 - **Because `Models` is exhaustive, `config.json` must contain a `summarizer` key.** The `Summarizer` purpose was added in the memory rewrite — existing users migrate their local config manually. `summary_threshold` is `#[serde(default)]` (defaults to `DEFAULT_SUMMARY_THRESHOLD` = 50), and `context_length` defaults to `DEFAULT_CONTEXT_LENGTH` = 8192 (the assumed DM context window, rendered by the GUI's sidebar context meter), so older configs still deserialize.
 - `NovelCraftConfig::contribute()` pushes `max_agent_steps`, `system_prompt` (the DM persona), and the Dungeon Master model into the `AgentLoop`. The loop is also built with `hide_tool_history` enabled: tool calls & results from earlier rounds are stripped from each request (module contexts and the rolling summary re-inject the relevant state; the narrative text reflects their outcomes) — a token-usage optimization. It also requests reasoning (`reasoning: { effort: "medium" }`, the OpenRouter-unified parameter; models without reasoning support ignore it) so the DM plans its tool calls before narrating. The Summarizer model is used only by the one-shot memory-compression call, without reasoning.

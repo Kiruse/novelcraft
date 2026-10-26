@@ -1,5 +1,6 @@
 pub mod create_story;
 pub mod home;
+pub mod onboarding;
 pub mod settings;
 pub mod story_gameplay;
 pub mod story_overview;

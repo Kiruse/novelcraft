@@ -61,6 +61,11 @@ pub struct NovelCraftConfig {
   pub profiles: Vec<ProfileV1>,
   /// Active user profile ID.
   pub active_profile: Option<String>,
+  /// Whether the first-boot onboarding was completed. Fresh configs start
+  /// as `false`; config files predating the field default to `true` so
+  /// existing users are not re-onboarded.
+  #[serde(default = "NovelCraftConfig::default_onboarded")]
+  pub onboarded: bool,
 }
 
 impl NovelCraftConfig {
@@ -69,6 +74,9 @@ impl NovelCraftConfig {
   }
   fn default_context_length() -> u64 {
     DEFAULT_CONTEXT_LENGTH
+  }
+  fn default_onboarded() -> bool {
+    true
   }
   pub async fn load() -> Result<NovelCraftConfig, EngineError> {
     deserialize(&Self::default_path()?).await
@@ -101,11 +109,12 @@ impl Default for NovelCraftConfig {
       context_length: Self::default_context_length(),
       profiles: vec![],
       active_profile: None,
+      onboarded: false,
     }
   }
 }
 
-#[derive(Debug, Copy, Clone, Finite, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Finite, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPurpose {
   DungeonMaster,

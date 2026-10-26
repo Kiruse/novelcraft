@@ -1,51 +1,10 @@
 use dioxus::prelude::*;
-use novelcraft_engine::config::{DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose};
+use novelcraft_engine::config::ModelPurpose;
 
-use crate::comps::{Button, BtnVariant, Field, FieldGroup, Screen, INPUT_CLASS};
+use crate::comps::{Button, BtnVariant, Field, ModelFields, ModelGroup, Screen, INPUT_CLASS};
 use crate::engine;
 use crate::state::{Query, CONFIG};
 use crate::toast::{push_toast, Toast};
-
-/// Editable fields of a single model config.
-#[derive(Debug, Clone, PartialEq)]
-struct ModelFields {
-  base_url: String,
-  api_key: String,
-  model: String,
-}
-
-impl Default for ModelFields {
-  fn default() -> Self {
-    Self {
-      base_url: DEFAULT_HOST.to_string(),
-      api_key: String::new(),
-      model: DEFAULT_MODEL.to_string(),
-    }
-  }
-}
-
-impl ModelFields {
-  fn from_config(config: &ModelConfig) -> Self {
-    let ModelConfig::OpenAi {
-      base_url,
-      api_key,
-      model,
-    } = config;
-    Self {
-      base_url: base_url.clone(),
-      api_key: api_key.clone(),
-      model: model.clone(),
-    }
-  }
-
-  fn into_config(self) -> ModelConfig {
-    ModelConfig::OpenAi {
-      base_url: self.base_url.trim().to_string(),
-      api_key: self.api_key.clone(),
-      model: self.model.trim().to_string(),
-    }
-  }
-}
 
 #[component]
 pub fn Settings() -> Element {
@@ -103,6 +62,20 @@ pub fn Settings() -> Element {
     });
   };
 
+  // Flip the onboarding gate back on — saving republishes CONFIG, which
+  // swaps the router for the onboarding screen in the App gate.
+  let reset_onboarding = move |_| {
+    let mut config = CONFIG.read().value().cloned().unwrap_or_default();
+    config.onboarded = false;
+
+    spawn(async move {
+      if let Err(err) = engine::save_config(config).await {
+        error!("Failed to reset onboarding: {err}");
+        push_toast(Toast::error("Failed to reset onboarding"));
+      }
+    });
+  };
+
   rsx! {
     Screen { title: "Settings", closable: true,
       Field { label: "Max Agent Steps",
@@ -136,60 +109,12 @@ pub fn Settings() -> Element {
       }
       div { class: "flex flex-col gap-2 w-full",
         div { class: "text-xl", "Models" }
-        ModelGroup { label: ModelPurpose::DungeonMaster.as_str(), fields: dm }
-        ModelGroup { label: ModelPurpose::Suggestions.as_str(), fields: suggestions }
-        ModelGroup { label: ModelPurpose::Summarizer.as_str(), fields: summarizer }
+        ModelGroup { purpose: ModelPurpose::DungeonMaster, models: [dm, suggestions, summarizer] }
+        ModelGroup { purpose: ModelPurpose::Suggestions, models: [dm, suggestions, summarizer] }
+        ModelGroup { purpose: ModelPurpose::Summarizer, models: [dm, suggestions, summarizer] }
       }
       Button { label: "Save", variant: BtnVariant::Primary, on_click: save }
-    }
-  }
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct ModelGroupProps {
-  label: String,
-  fields: Signal<ModelFields>,
-}
-
-#[component]
-fn ModelGroup(props: ModelGroupProps) -> Element {
-  let mut fields = props.fields;
-
-  let set_base_url = move |ev: FormEvent| {
-    fields.write().base_url = ev.value();
-  };
-  let set_api_key = move |ev: FormEvent| {
-    fields.write().api_key = ev.value();
-  };
-  let set_model = move |ev: FormEvent| {
-    fields.write().model = ev.value();
-  };
-
-  rsx! {
-    FieldGroup { label: props.label,
-      Field { label: "Base URL",
-        input {
-          class: INPUT_CLASS,
-          placeholder: DEFAULT_HOST,
-          value: "{fields.read().base_url}",
-          oninput: set_base_url,
-        }
-      }
-      Field { label: "API Key",
-        input {
-          class: INPUT_CLASS,
-          r#type: "password",
-          value: "{fields.read().api_key}",
-          oninput: set_api_key,
-        }
-      }
-      Field { label: "Model",
-        input {
-          class: INPUT_CLASS,
-          value: "{fields.read().model}",
-          oninput: set_model,
-        }
-      }
+      Button { label: "Reset Onboarding", variant: BtnVariant::Secondary, on_click: reset_onboarding }
     }
   }
 }

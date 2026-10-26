@@ -126,12 +126,14 @@ The last `2 × summary_threshold` turns of the conversation (default threshold 5
   "profiles": [
     { "id": "profile-uuid", "name": "Kira", "fields": { "Class": "Rogue" }, "created_at": "...", "updated_at": "..." }
   ],
-  "active_profile": "profile-uuid-or-null"
+  "active_profile": "profile-uuid-or-null",
+  "onboarded": true
 }
 ```
 
 - `models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — **all three keys are required**; a missing `summarizer` key makes the whole file fail to deserialize (existing users migrate manually). `ModelConfig` is internally tagged (`"type": "open_ai"`)
 - `summary_threshold` is `#[serde(default)]` (`DEFAULT_SUMMARY_THRESHOLD` = 50), and `context_length` defaults to 8192 (`DEFAULT_CONTEXT_LENGTH`), so configs predating the memory rewrite still deserialize
+- `onboarded` defaults to `true` when absent (config files predating onboarding never see the first-boot flow); fresh `NovelCraftConfig::default()` starts `false` so new installs onboard
 - Profiles live **inside** config.json — there is no separate profiles store
 
 ---

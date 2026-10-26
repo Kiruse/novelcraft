@@ -26,23 +26,24 @@ gui/
 ├── package.json             # Tailwind toolchain (@tailwindcss/cli, tailwindcss) — bun
 ├── input.css                # Tailwind source: @theme tokens, base rules
 ├── assets/tailwind.css      # Compiled stylesheet (build artifact, do not edit)
-└── src/
-    ├── main.rs              # Entry point — engine init, BOOT_CONFIG, launch, App
-    ├── engine.rs            # Engine bridge — all engine access & query refreshes
-    ├── state.rs             # Global reactive state — Query<T>, GlobalSignals
-    ├── toast.rs             # Toast notifications (global signal + overlay component)
-    ├── comps.rs             # Shared components (Screen, Button, Chip, Field, …)
-    ├── markdown.rs          # Markdown-like parser (streaming-safe subset, unit tested)
-    ├── titlebar.rs          # Window chrome — custom title bar + resize handles
-    ├── api.rs               # Inspiration REST client (get_json)
-    ├── error.rs             # GuiError (thiserror): Engine/Api variants
-    └── screens/             # One module per screen + Route enum (mod.rs)
-        ├── mod.rs           # Route enum (Routable) + go_back()
-        ├── home.rs          # Session list
-        ├── settings.rs      # Engine config editor (models, system prompt, summary threshold)
-        ├── create_story.rs  # New vignette + inspiration browser
-        ├── story_overview.rs# Session detail + Play/Delete (with confirm dialog) buttons
-        └── story_gameplay.rs# Game view — turns, streaming, chat bar, module sidebar
+    └── src/
+        ├── main.rs              # Entry point — engine init, BOOT_CONFIG, launch, App
+        ├── engine.rs            # Engine bridge — all engine access & query refreshes
+        ├── state.rs             # Global reactive state — Query<T>, GlobalSignals
+        ├── toast.rs             # Toast notifications (global signal + overlay component)
+        ├── comps.rs             # Shared components (Screen, Button, Chip, Field, …)
+        ├── markdown.rs          # Markdown-like parser (streaming-safe subset, unit tested)
+        ├── titlebar.rs          # Window chrome — custom title bar + resize handles
+        ├── api.rs               # Inspiration REST client (get_json)
+        ├── error.rs             # GuiError (thiserror): Engine/Api variants
+        └── screens/             # One module per screen + Route enum (mod.rs)
+            ├── mod.rs           # Route enum (Routable) + go_back()
+            ├── home.rs          # Session list
+            ├── onboarding.rs    # First-boot onboarding (local-first pitch, BYO-LLM config) — not a route
+            ├── settings.rs      # Engine config editor (models, system prompt, summary threshold)
+            ├── create_story.rs  # New vignette + inspiration browser
+            ├── story_overview.rs# Session detail + Play/Delete (with confirm dialog) buttons
+            └── story_gameplay.rs# Game view — turns, streaming, chat bar, module sidebar
 ```
 
 ## Architecture
@@ -70,6 +71,10 @@ pub enum Route {
 - Navigate with `navigator().push(Route::…)` — never `window.dispatch_action` (that was gpui; no action system exists anymore).
 - "Back" is `go_back(from: Route)` (`screens/mod.rs`): gameplay returns to its story's overview, everything else to home. It is invoked by the shared `CloseButton` component, which reads the current route with `use_route::<Route>()`.
 - Screens are remounted on every navigation, which replaces the old `enter()`/`exit()` lifecycle — per-screen state lives in `use_signal` and resets naturally. Mount-time side effects use `use_hook(|| …)` + `spawn`.
+
+### Onboarding
+
+First-boot onboarding (`gui/src/screens/onboarding.rs`) is deliberately **not a route**: while `config.onboarded` is `false`, the `App` component (`gui/src/main.rs`) renders `Onboarding` instead of the router — there is nothing to navigate back to, and no deep link can escape it. Two steps: (1) the local-first pitch — open source (with a link to `github.com/kiruse/novelcraft`), everything on-device, online features strictly opt-in; (2) bring-your-own-LLM config reusing the shared `ModelGroup` components (pre-filled with the recommended OpenRouter defaults from `DEFAULT_HOST`/`DEFAULT_MODEL`, any OpenAI-compatible endpoint accepted). "Start Playing" writes the models into the config, sets `onboarded: true`, and calls `engine::save_config` — the republished `CONFIG` flips the App gate, which then mounts the router. Existing config files predating the field carry `onboarded: true` via `#[serde(default)]`, so they never re-onboard. The Settings screen exposes a "Reset Onboarding" button that saves the config with `onboarded: false`, re-entering the flow the same way.
 
 ### Global State — Signals
 
@@ -170,10 +175,11 @@ Each toast schedules its own dismissal task (default 5s). Toast variants (Info/S
 
 | Component | Purpose |
 |-----------|---------|
-| `Screen` | Standard layout: centered title bar (gear → settings, or × when `closable`) + a full-width scrollable area (`flex-1 min-h-0 w-full overflow-y-auto`) containing a centered max-w-160 content column — the scrollbar sits at the window edge, not at the column |
+| `Screen` | Standard layout: centered title bar (gear → settings, or × when `closable`, or nothing when `plain`) + a full-width scrollable area (`flex-1 min-h-0 w-full overflow-y-auto`) containing a centered max-w-160 content column — the scrollbar sits at the window edge, not at the column |
 | `Button` | Full-width button; variants `Primary`/`Secondary`/`DangerPrimary`/`DangerSecondary`, `disabled` flag, `on_click` handler |
 | `Chip` | Rounded tag pill with `selected` toggle styling |
 | `Field` / `FieldGroup` | Labeled input row / bordered group with heading |
+| `ModelFields` / `ModelGroup` | Editable model-config state (`base_url`/`api_key`/`model` ↔ `ModelConfig`) and its bordered field group — shared by Settings and Onboarding; takes the `ModelPurpose` plus all three field signals (indexed by `purpose_index`) so each field carries an "apply everywhere" adornment (copy icon) that spreads its value to the other two usages; defaults to `DEFAULT_HOST`/`DEFAULT_MODEL` |
 | `Loading` | Pulsing text (`animate-pulse`) |
 | `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `- `/`* ` bullet & `1.`/`1)` ordered lists (flat), `**bold**`, `*italic*`; multi-word double-quoted `"speech"` renders as one block on its own line in white (emphasis inside a quote nests within the speech element) — single-word quotes stay plain text while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
 | `SettingsGear` / `CloseButton` | Top-bar icon buttons |

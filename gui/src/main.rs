@@ -14,7 +14,9 @@ use dioxus::prelude::*;
 use log::warn;
 use novelcraft_engine::config::NovelCraftConfig;
 
+use crate::screens::onboarding::Onboarding;
 use crate::screens::Route;
+use crate::state::{Query, CONFIG};
 use crate::titlebar::{ResizeHandles, TitleBar};
 
 fn main() {
@@ -75,12 +77,25 @@ fn App() -> Element {
     };
   }
 
+  // First-boot onboarding replaces the router entirely — there is nothing
+  // to navigate back to until it is completed. Saving the config with
+  // `onboarded: true` republishes CONFIG, which mounts the router below.
+  let onboarded = matches!(&*CONFIG.read(), Query::Recent(config) if config.onboarded);
+  // The custom title bar is absent on web (titlebar.rs stubs to nothing),
+  // leaving content flush against the browser chrome — pad it slightly.
+  let top_pad = if cfg!(target_arch = "wasm32") { "pt-2" } else { "" };
+
   rsx! {
     document::Stylesheet { href: asset!("/assets/tailwind.css") }
-    div { class: "flex flex-col w-full h-full",
+    div { class: "flex flex-col w-full h-full {top_pad}",
       TitleBar {}
       div { class: "flex-1 min-h-0",
-        Router::<Route> {}
+        { if onboarded {
+            rsx! { Router::<Route> {} }
+          } else {
+            rsx! { Onboarding {} }
+          }
+        }
       }
     }
     ResizeHandles {}
