@@ -55,7 +55,7 @@ novelcraft/
 │       ├── toast.rs                  # Toast notifications (global signal + overlay component)
 │       ├── comps.rs                  # Shared components (Screen, Button, Chip, Field, ...)
 │       ├── titlebar.rs               # Window chrome — custom title bar (drag/min/max/close) + resize handles
-│       ├── api.rs                    # Inspiration REST client (API_BASE_URL, get_json)
+│       ├── api.rs                    # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves; /chat/* excluded)
 │       ├── error.rs                  # GuiError (Engine/Api variants)
 │       └── screens/
 │           ├── mod.rs                # Route enum (Routable) + go_back()
@@ -107,7 +107,7 @@ Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind 
 - `modules.rs` — `ModuleContext` trait for per-module sidebar rendering & state edits: `module_context(id)` resolves custom impls (memory) with a generic tree-editor fallback; sidebar iterates the session's active modules. `set_path` handles object keys & decimal array indices
 - `markdown.rs` — Markdown-like parser tuned for streaming agent output (`parse` → `Vec<Block>`; inline `Segment` tree — plain/bold/italic runs, and double-quoted `"speech"` as a container segment nesting emphasis so a quote renders as one block; unterminated constructs render as-if closed). Subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`, `"speech"` (own line, white). Unit tested
 - `titlebar.rs` — Custom window chrome (`TitleBar`, `ResizeHandles`) for the undecorated window
-- `api.rs` — Inspiration REST client (`API_BASE_URL`, `get_json`)
+- `api.rs` — Typed client for the Novelcraft social API, mirroring the OpenAPI spec in `docs/api.json` (inspirations, auth, quills, saves; `/chat/*` excluded — the inference provider is the user's choice). Shared instance behind `api::client()`; schema + request types mirror the spec's `components/schemas`
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
 - `screens/` — `Route` enum (`mod.rs`, Dioxus Router) + one component module per screen
   - `mod.rs` — `Route` enum, `go_back()`

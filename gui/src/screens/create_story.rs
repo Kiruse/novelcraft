@@ -2,26 +2,16 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use dioxus::prelude::*;
-use serde::Deserialize;
 
-use crate::api::get_json;
+use crate::api::{Inspiration, client};
 use crate::comps::{Button, BtnVariant, Chip, Field, Loading, Markdown, Screen, INPUT_CLASS};
 use crate::engine;
-use crate::error::GuiError;
 use crate::screens::Route;
 use crate::toast::{push_toast, Toast};
 
 /// Grace period after the last tag toggle before inspirations are
 /// refetched, so rapid chip clicks coalesce into a single request.
 const INSPIRATIONS_DEBOUNCE: Duration = Duration::from_millis(300);
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-struct Inspiration {
-  title: String,
-  premise: String,
-  /// Tags this inspiration is filed under.
-  tags: Vec<String>,
-}
 
 #[component]
 pub fn CreateStory() -> Element {
@@ -165,23 +155,14 @@ async fn refetch_inspirations(
   }
 }
 
-/// The service OR-filters by the comma-joined selected tags via the `tags`
-/// query param (an empty selection matches everything).
+/// The service AND-filters by the comma-joined selected tags via the
+/// `tags` query param (an empty selection matches everything).
 async fn fetch_inspirations_api(selected: &[String]) -> Result<Vec<Inspiration>, String> {
-  let query: Vec<(String, String)> = if selected.is_empty() {
-    vec![]
-  } else {
-    vec![("tags".to_string(), selected.join(","))]
-  };
-  get_json::<Vec<Inspiration>>("/inspirations", &query)
-    .await
-    .map_err(|e: GuiError| e.to_string())
+  client().list_inspirations(selected).await.map_err(|e| e.to_string())
 }
 
 async fn fetch_tags() -> Result<Vec<String>, String> {
-  get_json::<Vec<String>>("/inspirations/tags", &[])
-    .await
-    .map_err(|e: GuiError| e.to_string())
+  client().list_inspiration_tags().await.map_err(|e| e.to_string())
 }
 
 #[component]

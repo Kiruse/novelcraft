@@ -13,7 +13,7 @@ Text input (including IME) is handled natively by the WebView — the GUI ships 
 - **dioxus** 0.7 (features: `desktop`, `router`) — UI framework: components, signals, router
 - **Tailwind CSS v4** — styling; compiled via `@tailwindcss/cli` (see [Styling](#styling))
 - **novelcraft-engine** (path) — Business logic library: memory-managed sessions, game agent loop, config/profile persistence
-- **reqwest** — REST client for the inspiration service
+- **reqwest** — REST client for the Novelcraft social API (`gui/src/api.rs`, spec in `docs/api.json`)
 - **chrono** — Local-time formatting of session timestamps (Home screen session cards)
 - **dx** (dioxus-cli) — dev server (`dx serve`), bundler (`dx bundle`), hot-reload
 
@@ -34,7 +34,7 @@ gui/
         ├── comps.rs             # Shared components (Screen, Button, Chip, Field, …)
         ├── markdown.rs          # Markdown-like parser (streaming-safe subset, unit tested)
         ├── titlebar.rs          # Window chrome — custom title bar + resize handles
-        ├── api.rs               # Inspiration REST client (get_json)
+        ├── api.rs               # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves; /chat/* excluded)
         ├── error.rs             # GuiError (thiserror): Engine/Api variants
         └── screens/             # One module per screen + Route enum (mod.rs)
             ├── mod.rs           # Route enum (Routable) + go_back()

@@ -94,23 +94,28 @@ session.save().await?;                                     // meta + snapshot + 
 
 **No transactions**: each save writes whole files. Consumers drive sequential operations.
 
-### Inspiration REST Client
+### NovelCraft API Client
 
-The Create Story screen's "Get Inspired" data is fetched from a REST inspiration service — GUI-only, with the HTTP plumbing in the reusable `gui/src/api.rs` module (the engine is not involved):
+The Create Story screen's "Get Inspired" data is fetched from the Novelcraft social API — GUI-only, with a typed `reqwest` client in the reusable `gui/src/api.rs` module (the engine is not involved):
 
-- `gui/src/api.rs`:
-  - `const API_BASE_URL: &str = "http://localhost:8000"` — hardcoded base URL (TODO: replace once the service gets a proper domain)
-  - `get_json<T: DeserializeOwned>(path, query)` — awaits a `reqwest` GET of `{API_BASE_URL}{path}` with the `query` params (comma-joined values are the caller's choice), applies `error_for_status()`, and decodes the JSON; every failure maps to `GuiError::Api(String)`. Must be called from within an async (tokio) context — the Dioxus runtime provides one
+- `gui/src/api.rs` — a 1:1 mirror of the OpenAPI spec in `docs/api.json` (the `/chat/*` endpoints are intentionally absent — the inference provider is the user's choice, so the app never calls them):
+  - `const API_BASE_URL: &str = "https://novelcraft-api.onrender.com"` — hardcoded base URL (TODO: replace once the API gets a proper domain)
+  - `ApiClient` — typed client holding a pooled `reqwest::Client`, the base URL, and the current bearer access token (`set_access_token`/`access_token`; `#[derive(Clone)]` shares it via `Arc`). Authenticated methods error early (`"Not signed in"`) when no token is set. Clones are cheap and share the token
+  - `pub fn client() -> &'static ApiClient` — process-wide shared instance (connection pooling)
+  - Endpoint groups: `list_inspirations(tags)` / `list_inspiration_tags()` (public); auth (`register`, `login`, `refresh`, `logout`, `me`, `set_username`, `clear_username`, `forgot_password`, `reset_password`); quills (`quills_balance`, `claim_quills`, `quills_history` — keyset-paginated via `from_id`/`limit`); saves (`list_saves`, `push_save`, `save_blob`, `write_save`, `delete_save` — opaque `application/octet-stream` blobs in slots 1-3)
+  - Schema + request types (`Inspiration`, `TokenPair`, `UserResponse`, `SaveMeta`, `RegisterRequest`, …) mirror the spec's `components/schemas`; RFC3339 timestamps stay `String` (parsing/formatting is the display's concern)
+  - Every non-2xx response carries the uniform error body `{"error": "<safe public message>"}` — the client surfaces it as `GuiError::Api(format!("{status}: {message}"))`; every failure maps to `GuiError::Api(String)`. Must be called from within an async context — the Dioxus runtime provides one
 - `gui/src/screens/create_story.rs`:
-  - `Inspiration { title, premise, tags }` — screen-local serde type (`tags` holds tag strings); `premise` is markdown, rendered with the shared `Markdown` component
-  - `GET /inspirations/tags` → `Vec<String>` (plain tags; rendered as-is for now — formatting/localization is the GUI's concern, not implemented yet) and `GET /inspirations?tags=a,b` → `Vec<Inspiration>`
-  - `fetch_tags()` / `fetch_inspirations(selected)` — wrappers over `api::get_json`; `fetch_inspirations` passes the selected tags comma-joined as the `tags` query param — the service OR-filters server-side (an empty selection omits the param, matching everything)
+  - Imports `Inspiration` from `api.rs` (no screen-local serde type); `premise` is markdown, rendered with the shared `Markdown` component
+  - `fetch_tags()` / `fetch_inspirations_api(selected)` — thin wrappers over `api::client()`; the selected tags are passed as a slice and joined into the `tags` query param — the service AND-filters server-side (an inspiration must carry all selected tags; an empty selection omits the param, matching everything)
 
 `reqwest = { version = "0.12", features = ["json"] }` is a GUI dependency for this client (streaming is not used).
 
 ```rust
-let tags = fetch_tags().await?;
-let inspirations = fetch_inspirations(&selected).await?;
+use crate::api::{client, Inspiration};
+
+let tags = client().list_inspiration_tags().await?;
+let inspirations = client().list_inspirations(&selected).await?;
 ```
 
 ## Logging
