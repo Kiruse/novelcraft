@@ -29,7 +29,7 @@ pub fn StoryOverview(id: String) -> Element {
   let play_id = id.clone();
 
   rsx! {
-    Screen { title: "Story Overview", closable: true,
+    Screen { title: "Story Overview", navback: true,
       BannerPlaceholder {}
       { match session {
           None => rsx! { Loading { text: "Loading ..." } },

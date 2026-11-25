@@ -67,7 +67,7 @@ novelcraft/
 │       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded query refreshes, turn navigation
 │       ├── state.rs            # Global reactive state — Query<T> (Empty/Error/Stale/Recent), GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs            # Toast notifications (global signal + fixed overlay component)
-│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, ModelFields/ModelGroup, Loading, Markdown, SettingsGear, CloseButton)
+│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, ModelFields/ModelGroup, Loading, Markdown, SettingsGear, NavBack)
 │       ├── markdown.rs         # Markdown-like parser for streamed agent output (subset, unit tested)
 │       ├── modules.rs          # ModuleContext trait — per-module sidebar rendering & state edits (default tree editor + memory impl)
 │       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
@@ -109,7 +109,7 @@ novelcraft/
 | GUI Engine Bridge | `gui/src/engine.rs` | `OnceLock<Arc<Mutex<NovelCraftEngine>>>` — the single seam to the engine; async ops + generation-guarded query refreshes + window-relative turn navigation |
 | GUI State | `gui/src/state.rs` | `Query<T>` (Empty/Error/Stale/Recent) + `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`, `StreamState` |
 | GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `onboarding.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); onboarding is NOT a route — `App` renders it instead of the router while `config.onboarded` is false |
-| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `ModelFields` + `ModelGroup` model config editor, `Loading`, `SettingsGear`, `CloseButton`), `INPUT_CLASS` |
+| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `ModelFields` + `ModelGroup` model config editor, `Loading`, `SettingsGear`, `NavBack`), `INPUT_CLASS` |
 | GUI Toasts | `gui/src/toast.rs` | `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay |
 | GUI Styling | `gui/input.css` + `gui/assets/tailwind.css` | Tailwind v4: `@theme` design tokens (`nc-*` colors) → compiled stylesheet (build artifact; `just css` / `just dev`) |
 | GUI Text Input | (none — WebView native) | Native `<input>`/`<textarea>`; the platform WebView provides IME, selection & clipboard handling |

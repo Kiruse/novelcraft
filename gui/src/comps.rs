@@ -2,11 +2,10 @@ use dioxus::prelude::*;
 use novelcraft_engine::config::{DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose};
 
 use crate::markdown::{self, Block, Segment};
-use crate::screens::{go_back, Route};
+use crate::screens::{Route, go_back};
 
 /// Shared class list for text inputs.
-pub const INPUT_CLASS: &str =
-  "w-full min-w-0 px-3 py-2 bg-transparent border border-nc-border rounded-sm text-nc-text \
+pub const INPUT_CLASS: &str = "w-full min-w-0 px-3 py-2 bg-transparent border border-nc-border rounded-sm text-nc-text \
    focus:border-nc-label focus:outline-none placeholder:text-nc-text/40 resize-none";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,6 +114,7 @@ pub fn Field(props: FieldProps) -> Element {
 /// (`group-hover`) — native `title` tooltips are unreliable in the
 /// WebKit webviews the app renders in.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[allow(unused)]
 pub enum HintAttachment {
   /// Tooltip opens below the marker. The default: above-the-marker
   /// tooltips clip at the tops of scroll containers (the Settings
@@ -422,17 +422,18 @@ fn render_segments(segments: &[Segment]) -> Element {
   }
 }
 
-/// Standard screen layout: centered top bar with title + (gear, close, or
-/// nothing), above a centered, scrollable content column.
+/// Standard screen layout: centered top bar with title + (back arrow left
+/// of the title, gear, or nothing), above a centered, scrollable content
+/// column.
 #[derive(Props, Clone, PartialEq)]
 pub struct ScreenProps {
   title: String,
-  /// Hide the corner control entirely — for screens that must not be
+  /// Hide the title-bar control entirely — for screens that must not be
   /// exited (onboarding).
   #[props(default)]
   plain: bool,
   #[props(default)]
-  closable: bool,
+  navback: bool,
   children: Element,
 }
 
@@ -440,15 +441,16 @@ pub struct ScreenProps {
 pub fn Screen(props: ScreenProps) -> Element {
   rsx! {
     div { class: "flex flex-col items-center w-full h-full",
-      div { class: "relative w-full flex flex-row justify-center",
-        h1 { class: "text-3xl", { props.title } }
-        { if props.plain {
+      div { class: "relative w-full flex flex-row justify-center items-center",
+        { if props.plain || props.navback {
             rsx! {}
-          } else if props.closable {
-            rsx! { CloseButton {} }
           } else {
             rsx! { SettingsGear {} }
           }
+        }
+        div { class: "relative",
+          { if props.navback { rsx! { NavBack {} } } else { rsx! {} } }
+          h1 { class: "text-3xl", { props.title } }
         }
       }
       // Full-width scroller — the scrollbar sits at the window edge; the
@@ -486,15 +488,26 @@ pub fn SettingsGear() -> Element {
   }
 }
 
-
+/// Back arrow rendered to the immediate left of the screen title — walks
+/// the router history one step back.
 #[component]
-pub fn CloseButton() -> Element {
+pub fn NavBack() -> Element {
   let route = use_route::<Route>();
   rsx! {
     button {
-      class: "absolute right-4 text-xl cursor-pointer hover:opacity-70",
+      class: "absolute right-full h-full mr-2 p-1 cursor-pointer text-nc-text hover:opacity-70",
       onclick: move |_| go_back(route.clone()),
-      "\u{00d7}"
+      svg {
+        class: "w-7 h-5",
+        view_box: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        stroke_width: "2",
+        stroke_linecap: "round",
+        stroke_linejoin: "round",
+        path { d: "M27 12H5" }
+        path { d: "M12 19l-7-7 7-7" }
+      }
     }
   }
 }

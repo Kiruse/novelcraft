@@ -77,7 +77,7 @@ pub fn Settings() -> Element {
   };
 
   rsx! {
-    Screen { title: "Settings", closable: true,
+    Screen { title: "Settings", navback: true,
       Field { label: "Max Agent Steps",
         hint: "The agent may produce reasoning & game logic steps before generating story for you. This limits how many steps it may take to avoid an infinite loop.",
         input {

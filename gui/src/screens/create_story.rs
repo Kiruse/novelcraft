@@ -55,7 +55,7 @@ pub fn CreateStory() -> Element {
   let valid = !title.read().trim().is_empty() && !premise.read().trim().is_empty();
 
   rsx! {
-    Screen { title: "Create Vignette", closable: true,
+    Screen { title: "Create Vignette", navback: true,
       Field { label: "Title",
         input {
           class: INPUT_CLASS,
