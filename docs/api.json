@@ -1023,6 +1023,39 @@
           }
         ]
       }
+    },
+    "/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Stream the account's events over SSE",
+        "description": "A server-sent event stream of the account's events; only the authenticated user's events are delivered. Today the only event is `quills` — the balance changed — with the new balance as the `data` payload (rounded to 2 decimals, like every other balance response). Delivery is best-effort: reconnecting clients should re-fetch the balance, and since every event carries full state, a missed event self-heals on the next one.",
+        "operationId": "eventsStream",
+        "responses": {
+          "200": {
+            "description": "The event stream — see the operation description.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {

@@ -102,14 +102,22 @@ The Create Story screen's "Get Inspired" data is fetched from the Novelcraft soc
   - `const API_BASE_URL: &str = "https://novelcraft-api.onrender.com"` — hardcoded base URL (TODO: replace once the API gets a proper domain)
   - `ApiClient` — typed client holding a pooled `reqwest::Client`, the base URL, and the current bearer access token (`set_access_token`/`access_token`; `#[derive(Clone)]` shares it via `Arc`). Authenticated methods error early (`"Not signed in"`) when no token is set. Clones are cheap and share the token
   - `pub fn client() -> &'static ApiClient` — process-wide shared instance (connection pooling)
-  - Endpoint groups: `list_inspirations(tags)` / `list_inspiration_tags()` (public); auth (`register`, `login`, `refresh`, `logout`, `me`, `set_username`, `clear_username`, `forgot_password`, `reset_password`); quills (`quills_balance`, `claim_quills`, `quills_history` — keyset-paginated via `from_id`/`limit`); saves (`list_saves`, `push_save`, `save_blob`, `write_save`, `delete_save` — opaque `application/octet-stream` blobs in slots 1-3)
+  - Endpoint groups: `list_inspirations(tags)` / `list_inspiration_tags()` (public); auth (`register`, `login`, `refresh`, `logout`, `me`, `set_username`, `clear_username`, `forgot_password`, `reset_password`); quills (`quills_balance`, `claim_quills`, `quills_history` — keyset-paginated via `from_id`/`limit`); saves (`list_saves`, `push_save`, `save_blob`, `write_save`, `delete_save` — opaque `application/octet-stream` blobs in slots 1-3); events (`events_stream()` — the account's SSE event stream, see below)
   - Schema + request types (`Inspiration`, `TokenPair`, `UserResponse`, `SaveMeta`, `RegisterRequest`, …) mirror the spec's `components/schemas`; RFC3339 timestamps stay `String` (parsing/formatting is the display's concern)
   - Every non-2xx response carries the uniform error body `{"error": "<safe public message>"}` — the client surfaces it as `GuiError::Api(format!("{status}: {message}"))`; every failure maps to `GuiError::Api(String)`. Must be called from within an async context — the Dioxus runtime provides one
 - `gui/src/screens/create_story.rs`:
   - Imports `Inspiration` from `api.rs` (no screen-local serde type); `premise` is markdown, rendered with the shared `Markdown` component
   - `fetch_tags()` / `fetch_inspirations_api(selected)` — thin wrappers over `api::client()`; the selected tags are passed as a slice and joined into the `tags` query param — the service AND-filters server-side (an inspiration must carry all selected tags; an empty selection omits the param, matching everything)
 
-`reqwest = { version = "0.12", features = ["json"] }` is a GUI dependency for this client (streaming is not used).
+`reqwest = { version = "0.12", features = ["json", "stream"] }` is a GUI dependency for this client; SSE parsing uses `sse-core` — the same crate (and feature set: `default-features = false, features = ["std", "stream"]`) the engine's agent loop parses LLM streams with, so the stack shares one build.
+
+#### Events stream
+
+`GET /events` streams the account's events over SSE (today the only event is `quills` — the balance changed — with the new balance as the data payload). The client mirrors the engine's agent-loop pattern:
+
+- `ApiClient::events_stream()` — sends the request eagerly (bearer-authenticated, `Accept: text/event-stream`), maps non-2xx responses through the uniform error shape, and returns an `EventStream`
+- `EventStream` — wraps the response's byte stream in `sse_core::SseStream` (no `Send` bounds — the web target's fetch streams aren't `Send`); `next_event()` yields `AccountEvent`s and returns `None` once the server closes the stream — callers reconnect (re-fetching the balance first, per the endpoint's best-effort delivery)
+- `AccountEvent` — `Quills { quills }` (the `quills` kind; the bare balance, or leniently the full balance response) and `Unknown { event, data }` (any unrecognized kind, preserved as-is so a server-side extension can't wedge the stream)
 
 ```rust
 use crate::api::{client, Inspiration};

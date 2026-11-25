@@ -1,8 +1,13 @@
 use dioxus::prelude::*;
 use novelcraft_engine::config::{DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose};
 
+use crate::api;
+use crate::auth::{self, AUTH};
+use crate::error::GuiError;
+use crate::events::QUILLS;
 use crate::markdown::{self, Block, Segment};
 use crate::screens::{Route, go_back};
+use crate::toast::{Toast, push_toast};
 
 /// Shared class list for text inputs.
 pub const INPUT_CLASS: &str = "w-full min-w-0 px-3 py-2 bg-transparent border border-nc-border rounded-sm text-nc-text \
@@ -423,17 +428,20 @@ fn render_segments(segments: &[Segment]) -> Element {
 }
 
 /// Standard screen layout: centered top bar with title + (back arrow left
-/// of the title, gear, or nothing), above a centered, scrollable content
-/// column.
+/// of the title, gear, or nothing) and the UserBox at the rightmost
+/// position, above a centered, scrollable content column.
 #[derive(Props, Clone, PartialEq)]
 pub struct ScreenProps {
   title: String,
-  /// Hide the title-bar control entirely — for screens that must not be
+  /// Hide the title-bar controls entirely — for screens that must not be
   /// exited (onboarding).
   #[props(default)]
   plain: bool,
   #[props(default)]
   navback: bool,
+  /// Hide the UserBox (e.g. on the login screen itself).
+  #[props(default)]
+  nouserbox: bool,
   children: Element,
 }
 
@@ -442,16 +450,20 @@ pub fn Screen(props: ScreenProps) -> Element {
   rsx! {
     div { class: "flex flex-col items-center w-full h-full",
       div { class: "relative w-full flex flex-row justify-center items-center",
-        { if props.plain || props.navback {
-            rsx! {}
-          } else {
-            rsx! { SettingsGear {} }
-          }
-        }
         div { class: "relative",
           { if props.navback { rsx! { NavBack {} } } else { rsx! {} } }
           h1 { class: "text-3xl", { props.title } }
         }
+        { if props.plain {
+            rsx! {}
+          } else {
+            rsx! {
+              div { class: "absolute right-4 flex flex-row items-center gap-1",
+                { if props.navback { rsx! {} } else { rsx! { SettingsGear {} } } }
+                { if props.nouserbox { rsx! {} } else { rsx! { QuillsBox {} UserBox {} } } }
+              }
+            }
+          } }
       }
       // Full-width scroller — the scrollbar sits at the window edge; the
       // content column is centered inside it.
@@ -469,7 +481,7 @@ pub fn SettingsGear() -> Element {
   let nav = navigator();
   rsx! {
     button {
-      class: "group absolute right-4 p-1 cursor-pointer text-nc-text hover:opacity-70",
+      class: "group p-1 cursor-pointer text-nc-text hover:opacity-70",
       onclick: move |_| {
         nav.push(Route::Settings {});
       },
@@ -508,6 +520,112 @@ pub fn NavBack() -> Element {
         path { d: "M27 12H5" }
         path { d: "M12 19l-7-7 7-7" }
       }
+    }
+  }
+}
+
+/// Quill balance next to the title bar's `UserBox`: the live balance from
+/// the shared account-event stream ([`crate::events::QUILLS`], rendered as
+/// an em dash while the first seed is in flight). Clicking claims the
+/// daily free quills — a success toast on success, an informational toast
+/// when the daily claim was already used (HTTP 409).
+#[component]
+pub fn QuillsBox() -> Element {
+  let signed_in = AUTH.read().user.is_some();
+  let mut claiming = use_signal(|| false);
+
+  let claim = move |_| {
+    claiming.set(true);
+    spawn(async move {
+      match api::client().claim_quills().await {
+        Ok(balance) => {
+          *QUILLS.write() = Some(balance.quills);
+          push_toast(Toast::success("Claimed the daily quills"));
+        }
+        Err(GuiError::ApiStatus { status: 409, .. }) => {
+          push_toast(Toast::info("Daily quills already claimed today"));
+        }
+        Err(err) => push_toast(Toast::error(format!(
+          "Failed to claim the daily quills: {err}"
+        ))),
+      }
+      claiming.set(false);
+    });
+  };
+
+  if !signed_in {
+    return rsx! {};
+  }
+
+  rsx! {
+    button {
+      class: "px-2 py-1 text-sm rounded-sm border border-nc-border cursor-pointer \
+              hover:border-nc-label disabled:opacity-50 disabled:cursor-default",
+      title: "Claim the daily free quills",
+      disabled: *claiming.read(),
+      onclick: claim,
+      { match *QUILLS.read() {
+          Some(quills) => rsx! { "{quills:.2} quills" },
+          None => rsx! { "— quills" },
+      } }
+    }
+  }
+}
+
+/// Account control at the rightmost of the title bar: a plain login button
+/// when signed out, or the username (falling back to the email) opening a
+/// popover with account options — logout, for now.
+#[component]
+pub fn UserBox() -> Element {
+  let mut open = use_signal(|| false);
+  let nav = navigator();
+  let state = AUTH.read().clone();
+
+  let logout = move |_| {
+    spawn(async move {
+      auth::logout().await;
+    });
+  };
+
+  rsx! {
+    div { class: "relative",
+      { if let Some(user) = state.user {
+          let label = user.username.clone().unwrap_or_else(|| user.email.clone());
+          rsx! {
+            button {
+              class: "max-w-40 px-2 py-1 text-sm rounded-sm border border-nc-border cursor-pointer hover:border-nc-label truncate",
+              onclick: move |_| open.toggle(),
+              { label.clone() }
+            }
+            { if *open.read() {
+                rsx! {
+                  // Click-away catcher behind the popover.
+                  div {
+                    class: "fixed inset-0 z-40 cursor-default",
+                    onclick: move |_| open.set(false),
+                  }
+                  div { class: "absolute right-0 top-full mt-1 z-50 flex flex-col gap-2 w-56 p-3 rounded-sm border border-nc-border bg-nc-bg shadow-lg",
+                    div { class: "flex flex-col w-full",
+                      div { class: "truncate", { label.clone() } }
+                      div { class: "text-sm text-nc-label truncate", { user.email.clone() } }
+                    }
+                    Button { label: "Log out", variant: BtnVariant::Secondary, on_click: logout }
+                  }
+                }
+              } else { rsx! {} } }
+          }
+        } else {
+          rsx! {
+            button {
+              class: "px-2 py-1 text-sm rounded-sm border border-nc-border cursor-pointer hover:border-nc-label disabled:opacity-50",
+              disabled: state.restoring,
+              onclick: move |_| {
+                nav.push(Route::Login {});
+              },
+              "Log in"
+            }
+          }
+        } }
     }
   }
 }

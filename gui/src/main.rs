@@ -1,7 +1,9 @@
 mod api;
+mod auth;
 mod comps;
 mod engine;
 mod error;
+mod events;
 mod markdown;
 mod modules;
 mod screens;
@@ -67,6 +69,13 @@ fn App() -> Element {
       engine::refresh_config();
       engine::refresh_profiles();
       engine::refresh_sessions();
+      // Restore a persisted social-API session (if any) in the background —
+      // the UserBox flips from the login button to the username once it
+      // completes.
+      spawn(auth::restore());
+      // The shared account-event stream supervisor — once a user signs in
+      // it keeps the live quill balance flowing into the QUILLS signal.
+      events::spawn_supervisor();
       booted.set(true);
     });
   });

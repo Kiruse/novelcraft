@@ -51,15 +51,17 @@ novelcraft/
 │   └── src/
 │       ├── main.rs                   # Entry point — config load, engine construction, BOOT_CONFIG stash, launch, App
 │       ├── engine.rs                 # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded refreshes, window-relative turn navigation
+│       ├── auth.rs                   # Social-API auth — AUTH signal, boot-time session restore, login/register/logout, random usernames
 │       ├── state.rs                  # Global reactive state — Query<T>, GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs                  # Toast notifications (global signal + overlay component)
 │       ├── comps.rs                  # Shared components (Screen, Button, Chip, Field, ...)
 │       ├── titlebar.rs               # Window chrome — custom title bar (drag/min/max/close) + resize handles
-│       ├── api.rs                    # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves; /chat/* excluded)
+│       ├── api.rs                    # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves, events; /chat/* excluded)
 │       ├── error.rs                  # GuiError (Engine/Api variants)
 │       └── screens/
 │           ├── mod.rs                # Route enum (Routable) + go_back()
 │           ├── home.rs               # Session list
+│           ├── login.rs              # Login / account creation (mode toggle; optional username → random fallback)
 │           ├── settings.rs           # Engine config editor (three model groups, system prompt, summary threshold)
 │           ├── create_story.rs       # New vignette + inspiration browser (debounced tag-filtered fetches)
 │           ├── story_overview.rs     # Session detail (title/exposition) + Play/Delete buttons
@@ -99,19 +101,21 @@ Pure Rust library with all business logic. No UI framework coupling.
 Dioxus 0.7 GUI rendered in the system WebView (via `wry`); styled with Tailwind CSS v4. Depends on `novelcraft-engine` as a library. Desktop is the primary target; Android/iOS are supported compile targets.
 
 **`gui/src/`**
-- `main.rs` — Binary entry point — loads `NovelCraftConfig` (falls back to defaults), constructs the engine (`engine::init_engine`), stashes `BOOT_CONFIG`, `dioxus::LaunchBuilder` + undecorated window config, `App` component (stylesheet link, title bar, router, toast overlay)
+- `main.rs` — Binary entry point — loads `NovelCraftConfig` (falls back to defaults), constructs the engine (`engine::init_engine`), stashes `BOOT_CONFIG`, `dioxus::LaunchBuilder` + undecorated window config, `App` component (stylesheet link, title bar, router, toast overlay; boots `auth::restore()` in the background)
 - `engine.rs` — Engine bridge — `OnceLock<Arc<Mutex<NovelCraftEngine>>>`; async engine operations (`play_session`, `create_session`, `switch_profile`, `save_config`, `effective_prompt_async`, `module_state_async`/`set_module_state_async`, `set_last_prompt_async`, `prompt`/`regenerate` streaming), generation-guarded query refreshes, window-relative turn navigation (`load_turn`/`goto`/`navigate`/`jump_to_end`)
+- `auth.rs` — Social-API auth state — `AUTH` global signal (`AuthState`: user, restoring, refresh token); boot-time session restore, `login`/`register`/`logout` flows; the refresh token persists at `{configDir}/NovelCraft/auth.json` via the engine's cfg-split storage seam; `random_username()` (adjective.animal.NNN fallback) and `valid_username()` (API constraint)
 - `state.rs` — Global reactive state — `Query<T>` (Empty/Error/Stale/Recent), `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`/`StreamState` types
 - `toast.rs` — `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay component
-- `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `Markdown`, `SettingsGear`, `NavBack`), `INPUT_CLASS` constant
+- `comps.rs` — Shared components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `Loading`, `Markdown`, `SettingsGear`, `NavBack`, `UserBox`), `INPUT_CLASS` constant
 - `modules.rs` — `ModuleContext` trait for per-module sidebar rendering & state edits: `module_context(id)` resolves custom impls (memory) with a generic tree-editor fallback; sidebar iterates the session's active modules. `set_path` handles object keys & decimal array indices
 - `markdown.rs` — Markdown-like parser tuned for streaming agent output (`parse` → `Vec<Block>`; inline `Segment` tree — plain/bold/italic runs, and double-quoted `"speech"` as a container segment nesting emphasis so a quote renders as one block; unterminated constructs render as-if closed). Subset: paragraphs, `#` headings, `>` blockquotes, `**bold**`, `*italic*`, `"speech"` (own line, white). Unit tested
 - `titlebar.rs` — Custom window chrome (`TitleBar`, `ResizeHandles`) for the undecorated window
-- `api.rs` — Typed client for the Novelcraft social API, mirroring the OpenAPI spec in `docs/api.json` (inspirations, auth, quills, saves; `/chat/*` excluded — the inference provider is the user's choice). Shared instance behind `api::client()`; schema + request types mirror the spec's `components/schemas`
+- `api.rs` — Typed client for the Novelcraft social API, mirroring the OpenAPI spec in `docs/api.json` (inspirations, auth, quills, saves, events; `/chat/*` excluded — the inference provider is the user's choice). Shared instance behind `api::client()`; schema + request types mirror the spec's `components/schemas`
 - `error.rs` — `GuiError` (via `thiserror`): `Engine` (wraps `EngineError`) and `Api` (message string) variants
 - `screens/` — `Route` enum (`mod.rs`, Dioxus Router) + one component module per screen
   - `mod.rs` — `Route` enum, `go_back()`
   - `home.rs` — Home screen (session launcher; cards render the rolling story summary — falling back to the premise — via `Markdown`)
+  - `login.rs` — Login / account creation screen (mode toggle via the "New here? Create new account!" link; invite code required, optional username falling back to a random `adjective.animal.NNN`)
   - `settings.rs` — Settings screen (Max Agent Steps, Summary Threshold (turns), System Prompt, three model groups: Dungeon Master / Suggestions / Summarizer)
   - `create_story.rs` — Vignette creation form (title + premise + optional creative direction, appended to the DM persona for this story) + Get Inspired section (debounced tag-filtered fetches); submits via `engine::create_session`
   - `story_overview.rs` — Session overview (banner placeholder, title/exposition, Play + Delete buttons; Delete opens a screen-local `ConfirmDialog` modal, then `engine::delete_session` removes the file and clears the engine's active session if it was the one deleted)

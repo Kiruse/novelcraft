@@ -8,12 +8,12 @@ High-level overview for AI agents working on the NovelCraft project. For compreh
 
 ## Architecture Overview
 
-NovelCraft is a **Rust/Cargo workspace desktop app** built with **Dioxus** (rendered in the system WebView) — fully offline-first, single-user, no server.
+NovelCraft is a **Rust/Cargo workspace desktop app** built with **Dioxus** (rendered in the system WebView) — offline-first, single-user; the optional social API (auth, quills, saves) is the only server dependency.
 
 - **Engine** (`engine/`, crate `novelcraft-engine`) — pure Rust library crate with all business logic. Owns the game agent loop (built on the `kiruklaw-agent-loop` crate), memory-managed sessions (short-term turn window + long-term memory module), and config/profile persistence. LLM transport (HTTP streaming, SSE parsing) lives inside `kiruklaw-agent-loop`. No UI framework coupling.
 - **GUI** (`gui/`, crate `novelcraft-gui`, binary `novelcraft`) — **Dioxus 0.7** app rendered in the platform's system WebView (via `wry`; desktop is primary, Android/iOS are supported compile targets). Components are rsx functions, state is signals, styling is Tailwind CSS v4. Depends on `novelcraft-engine` as a library. Entry point is `gui/src/main.rs`.
 - **Filesystem persistence** — all data (session metadata, retained history, state snapshots, config incl. profiles) stored as JSON files under the platform data/config directories (desktop) or the OPFS root via the cfg-split storage seam in `engine/src/util/fs.rs` + `engine/src/util/fs/opfs.rs` (web; paths become logical namespaces, see [Web Target](./docs/web-target.md)). Path resolution is centralized in `engine/src/paths.rs`.
-- **No server, no auth, no database** — single-user desktop application with loose JSON files
+- **Offline-first core, optional social API** — all game data lives as loose JSON files; the only server is the social API (`gui/src/api.rs`, `docs/api.json`), used for account auth (login/register/logout via `gui/src/auth.rs`), inspirations, quills & saves — every feature works without an account
 - **LLM calls** go through the engine — the Dungeon Master agent runs a `kiruklaw` `AgentLoop` whose tool calls operate on per-module gamestate; chunks stream to the GUI through a tokio mpsc channel of `AgentMessageChunk`s. Memory compression uses a ONE-SHOT `kiruklaw_agent_loop::prompt` call with the `Summarizer` model. No event bus or pub/sub.
 - **No `AppState`** — the engine is a single `NovelCraftEngine` value (`engine/src/game/engine.rs`) owning the config and the active session. The GUI holds it behind `OnceLock<Arc<Mutex<NovelCraftEngine>>>` (`gui/src/engine.rs`).
 - **Build orchestration** is via a root `justfile` — single Cargo workspace (the GUI's `package.json` covers only its Tailwind toolchain)
@@ -63,20 +63,23 @@ novelcraft/
 │   ├── input.css               # Tailwind source: @theme tokens, base rules
 │   ├── assets/tailwind.css     # Compiled stylesheet (build artifact, do not edit)
 │   └── src/
-│       ├── main.rs             # Entry point — config load, engine construction, BOOT_CONFIG stash, launch, App (stylesheet, toasts, router)
+│       ├── main.rs             # Entry point — config load, engine construction, BOOT_CONFIG stash, launch, App (stylesheet, toasts, router; boots auth::restore + events::spawn_supervisor)
 │       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded query refreshes, turn navigation
+│       ├── auth.rs             # Social-API auth — AUTH signal, boot-time session restore, login/register/logout, random usernames
+│       ├── events.rs           # Shared account-event stream (GET /events) — supervisor task + QUILLS signal (live balance)
 │       ├── state.rs            # Global reactive state — Query<T> (Empty/Error/Stale/Recent), GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs            # Toast notifications (global signal + fixed overlay component)
-│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, ModelFields/ModelGroup, Loading, Markdown, SettingsGear, NavBack)
+│       ├── comps.rs            # Shared components (Screen, Button, Chip, Field, FieldGroup, ModelFields/ModelGroup, Loading, Markdown, SettingsGear, NavBack, QuillsBox, UserBox)
 │       ├── markdown.rs         # Markdown-like parser for streamed agent output (subset, unit tested)
 │       ├── modules.rs          # ModuleContext trait — per-module sidebar rendering & state edits (default tree editor + memory impl)
 │       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
-│       ├── api.rs              # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves; /chat/* excluded)
-│       ├── error.rs            # GuiError (thiserror): Engine/Api variants
+│       ├── api.rs              # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves, events; /chat/* excluded)
+│       ├── error.rs            # GuiError (thiserror): Engine/Api/ApiStatus variants
 │       └── screens/            # Route enum (Routable, mod.rs) + one component module per screen
 │           ├── mod.rs          # Route enum + go_back()
 │           ├── home.rs         # Session list
 │           ├── onboarding.rs   # First-boot onboarding (2 steps: local-first pitch, BYO-LLM config) — NOT a route; gated by config.onboarded
+│           ├── login.rs        # Login / account creation (mode toggle; optional username → random adjective.animal.NNN fallback)
 │           ├── settings.rs     # Engine config editor (models, system prompt, summary threshold)
 │           ├── create_story.rs # New vignette + inspiration browser (debounced tag-filtered fetches)
 │           ├── story_overview.rs # Session detail + Play/Delete (with confirm dialog) buttons
@@ -105,11 +108,12 @@ novelcraft/
 | Path Resolution | `engine/src/paths.rs` | `data_dir()`, `config_dir()`, `sessions_dir()` — single source of truth for filesystem paths |
 | Engine Utilities | `engine/src/util/` | `mod.rs` (RFC3339 timestamp serde, `discard_channel`), `fs.rs` (cfg-split file I/O — native `tokio::fs` vs web OPFS), `fs/opfs.rs` (web-only OPFS primitives), `prompting.rs` (`PromptFormatter`, `Promptify`) |
 | Markdown Utilities | `engine/src/markdown/` | `todo.rs` (`TodoItem`, `TodoList`, `TodoListDiff`), `bullets.rs` (`BulletList` — chapter-notes validation) |
-| GUI Entry | `gui/src/main.rs` | Launch config (desktop-only window settings), `App` component (boot gate: async config load → engine construction → `BOOT_CONFIG` stash → query seeding, then stylesheet link, toast overlay, router) |
+| GUI Entry | `gui/src/main.rs` | Launch config (desktop-only window settings), `App` component (boot gate: async config load → engine construction → `BOOT_CONFIG` stash → query seeding, then stylesheet link, toast overlay, router; boots auth::restore) |
 | GUI Engine Bridge | `gui/src/engine.rs` | `OnceLock<Arc<Mutex<NovelCraftEngine>>>` — the single seam to the engine; async ops + generation-guarded query refreshes + window-relative turn navigation |
+| GUI Auth | `gui/src/auth.rs` | Social-API session management — `AUTH` global signal, boot-time `restore`, `login`/`register`/`logout`, random username generator |
 | GUI State | `gui/src/state.rs` | `Query<T>` (Empty/Error/Stale/Recent) + `GlobalSignal`s (`CONFIG`, `PROFILES`, `SESSIONS`, `SESSION`, `TURN`/`TURN_INDEX`, `STREAM`), `Profiles`, `StreamState` |
-| GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `onboarding.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); onboarding is NOT a route — `App` renders it instead of the router while `config.onboarded` is false |
-| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `ModelFields` + `ModelGroup` model config editor, `Loading`, `SettingsGear`, `NavBack`), `INPUT_CLASS` |
+| GUI Screens | `gui/src/screens/` | `Route` enum (Dioxus Router) + `go_back()` (`mod.rs`) + one component module per screen (`home.rs`, `onboarding.rs`, `login.rs`, `settings.rs`, `create_story.rs`, `story_overview.rs`, `story_gameplay.rs`); onboarding is NOT a route — `App` renders it instead of the router while `config.onboarded` is false |
+| GUI Components | `gui/src/comps.rs` | Shared rsx components (`Screen`, `Button`, `Chip`, `Field`, `FieldGroup`, `ModelFields` + `ModelGroup` model config editor, `Loading`, `SettingsGear`, `NavBack`, `UserBox`), `INPUT_CLASS` |
 | GUI Toasts | `gui/src/toast.rs` | `Toast`/`ToastVariant`, `push_toast`/`dismiss_toast`, `Toasts` overlay |
 | GUI Styling | `gui/input.css` + `gui/assets/tailwind.css` | Tailwind v4: `@theme` design tokens (`nc-*` colors) → compiled stylesheet (build artifact; `just css` / `just dev`) |
 | GUI Text Input | (none — WebView native) | Native `<input>`/`<textarea>`; the platform WebView provides IME, selection & clipboard handling |
@@ -401,7 +405,9 @@ All build and development commands are in the root `justfile`.
 | `novelcraft-engine` (path) | Business logic library |
 | `dioxus` (features: desktop, router) | UI framework — rsx components, signals, router; renders in the system WebView via `wry` |
 | `@tailwindcss/cli` + `tailwindcss` (npm, via bun — see `gui/package.json`) | Tailwind CSS v4 toolchain; compiles `gui/input.css` → `gui/assets/tailwind.css` |
-| `reqwest` (version 0.12, json feature) | Inspiration REST client (streaming not used; json feature) |
+| `reqwest` (version 0.12, json+stream features) | Social-API REST client (`gui/src/api.rs`); `stream` backs the SSE event stream |
+| `sse-core` (default-features = false, features = std, stream) | SSE parsing for the account event stream — the same crate & feature set the engine's agent loop (kiruklaw) uses, so the stack shares one build |
+| `futures-util` / `bytes` | `StreamExt`/`Bytes` for the SSE stream plumbing in `gui/src/api.rs` |
 | `gloo-timers` (wasm target) + `gui/src/time.rs` | Platform-split sleeping — tokio native, JS timers on web (`tokio::time` panics on wasm) |
 | `log` | Logging facade (explicit imports — a glob `use log::*` collides with the Dioxus prelude) |
 | `console_log` (wasm target) | Forwards the `log` facade to the browser console on web (`env_logger` has no wasm backend) |

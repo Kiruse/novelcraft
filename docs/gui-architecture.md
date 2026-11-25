@@ -13,8 +13,9 @@ Text input (including IME) is handled natively by the WebView — the GUI ships 
 - **dioxus** 0.7 (features: `desktop`, `router`) — UI framework: components, signals, router
 - **Tailwind CSS v4** — styling; compiled via `@tailwindcss/cli` (see [Styling](#styling))
 - **novelcraft-engine** (path) — Business logic library: memory-managed sessions, game agent loop, config/profile persistence
-- **reqwest** — REST client for the Novelcraft social API (`gui/src/api.rs`, spec in `docs/api.json`)
+- **reqwest** — REST client for the Novelcraft social API (`gui/src/api.rs`, spec in `docs/api.json`); SSE parsing via **sse-core** — the same crate the engine's agent loop uses, so the stack shares one build
 - **chrono** — Local-time formatting of session timestamps (Home screen session cards)
+- **uuid** (v4) — Entropy for the random usernames assigned to fresh accounts (`auth::random_username`)
 - **dx** (dioxus-cli) — dev server (`dx serve`), bundler (`dx bundle`), hot-reload
 
 ### Crate Layout
@@ -29,17 +30,19 @@ gui/
     └── src/
         ├── main.rs              # Entry point — engine init, BOOT_CONFIG, launch, App
         ├── engine.rs            # Engine bridge — all engine access & query refreshes
+        ├── auth.rs              # Social-API auth state — AUTH signal, session restore, login/register/logout, random usernames
         ├── state.rs             # Global reactive state — Query<T>, GlobalSignals
         ├── toast.rs             # Toast notifications (global signal + overlay component)
         ├── comps.rs             # Shared components (Screen, Button, Chip, Field, …)
         ├── markdown.rs          # Markdown-like parser (streaming-safe subset, unit tested)
         ├── titlebar.rs          # Window chrome — custom title bar + resize handles
-        ├── api.rs               # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves; /chat/* excluded)
+        ├── api.rs               # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves, events; /chat/* excluded)
         ├── error.rs             # GuiError (thiserror): Engine/Api variants
         └── screens/             # One module per screen + Route enum (mod.rs)
             ├── mod.rs           # Route enum (Routable) + go_back()
             ├── home.rs          # Session list
             ├── onboarding.rs    # First-boot onboarding (local-first pitch, BYO-LLM config) — not a route
+            ├── login.rs         # Login / account creation (mode toggle; optional username)
             ├── settings.rs      # Engine config editor (models, system prompt, summary threshold)
             ├── create_story.rs  # New vignette + inspiration browser
             ├── story_overview.rs# Session detail + Play/Delete (with confirm dialog) buttons
@@ -61,6 +64,8 @@ pub enum Route {
   Settings {},
   #[route("/create")]
   CreateStory {},
+  #[route("/login")]
+  Login {},
   #[route("/story/:id")]
   StoryOverview { id: String },
   #[route("/play/:id")]
@@ -75,6 +80,15 @@ pub enum Route {
 ### Onboarding
 
 First-boot onboarding (`gui/src/screens/onboarding.rs`) is deliberately **not a route**: while `config.onboarded` is `false`, the `App` component (`gui/src/main.rs`) renders `Onboarding` instead of the router — there is nothing to navigate back to, and no deep link can escape it. Two steps: (1) the local-first pitch — open source (with a link to `github.com/kiruse/novelcraft`), everything on-device, online features strictly opt-in; (2) bring-your-own-LLM config reusing the shared `ModelGroup` components (pre-filled with the recommended OpenRouter defaults from `DEFAULT_HOST`/`DEFAULT_MODEL`, any OpenAI-compatible endpoint accepted). "Start Playing" writes the models into the config, sets `onboarded: true`, and calls `engine::save_config` — the republished `CONFIG` flips the App gate, which then mounts the router. Existing config files predating the field carry `onboarded: true` via `#[serde(default)]`, so they never re-onboard. The Settings screen exposes a "Reset Onboarding" button that saves the config with `onboarded: false`, re-entering the flow the same way.
+
+### Auth — Social API Account
+
+The social API account is managed by `gui/src/auth.rs` — a GUI-side concern, kept out of the engine:
+
+- **State** — the `AUTH` global signal (`AuthState`: `user: Option<UserResponse>`, `restoring: bool`, `refresh_token: Option<String>`). The access token lives in the pooled `ApiClient` (`api::client()`); the refresh token is kept in the signal (logout revokes it) and persisted to `{configDir}/NovelCraft/auth.json` via the engine's cfg-split storage seam (`novelcraft_engine::paths::config_dir` + `novelcraft_engine::util::fs::{serialize, deserialize}` — desktop files / web OPFS).
+- **Restore** — the App boot gate spawns `auth::restore()`: a stored refresh token is rotated (`POST /auth/refresh`, single-use — the new pair is persisted), then `GET /auth/me` publishes the user. Failures (expired/revoked session) just leave the user logged out; the stored token is discarded. Never blocks boot.
+- **Login screen** — the `/login` route (`gui/src/screens/login.rs`) toggles between login and registration via the "New here? Create new account!" link. Registration requires an invite code (`POST /auth/register` takes no username); the username is optional — when omitted, `auth::random_username()` picks a random `adjective.animal.NNN` name (entropy from a fresh UUID) and both are assigned right after registration via `PUT /auth/username`. Client-side validation mirrors the API's constraint (1-30 chars of `[A-Za-z0-9._-]`). Success navigates to Home.
+- **Logout** — `auth::logout()` revokes the refresh token (`POST /auth/logout`, best-effort) and clears the local session & stored token regardless of the outcome.
 
 ### Global State — Signals
 
@@ -175,7 +189,7 @@ Each toast schedules its own dismissal task (default 5s). Toast variants (Info/S
 
 | Component | Purpose |
 |-----------|---------|
-| `Screen` | Standard layout: centered title bar (back arrow left of the title when `navback`, gear → settings, or nothing when `plain`) + a full-width scrollable area (`flex-1 min-h-0 w-full overflow-y-auto`) containing a centered max-w-160 content column — the scrollbar sits at the window edge, not at the column |
+| `Screen` | Standard layout: centered title bar (back arrow left of the title when `navback`, gear → settings, or nothing when `plain`) with the `UserBox` at the rightmost position (`nouserbox` hides it), above a full-width scrollable area (`flex-1 min-h-0 w-full overflow-y-auto`) containing a centered max-w-160 content column — the scrollbar sits at the window edge, not at the column |
 | `Button` | Full-width button; variants `Primary`/`Secondary`/`DangerPrimary`/`DangerSecondary`, `disabled` flag, `on_click` handler |
 | `Chip` | Rounded tag pill with `selected` toggle styling |
 | `Field` / `FieldGroup` | Labeled input row / bordered group with heading; `Field` takes an optional `hint` (explanatory text) rendered as a `?` next to the label |
@@ -183,7 +197,8 @@ Each toast schedules its own dismissal task (default 5s). Toast variants (Info/S
 | `ModelFields` / `ModelGroup` | Editable model-config state (`base_url`/`api_key`/`model` ↔ `ModelConfig`) and its bordered field group — shared by Settings and Onboarding; takes the `ModelPurpose` plus all three field signals (indexed by `purpose_index`) so each field carries an "apply everywhere" adornment (copy icon) that spreads its value to the other two usages; defaults to `DEFAULT_HOST`/`DEFAULT_MODEL` |
 | `Loading` | Pulsing text (`animate-pulse`) |
 | `Markdown` | Renders markdown-like text (see `gui/src/markdown.rs`) via plain rsx nodes — streaming-safe subset: paragraphs, `#` headings, `>` blockquotes, `- `/`* ` bullet & `1.`/`1)` ordered lists (flat), `**bold**`, `*italic*`; multi-word double-quoted `"speech"` renders as one block on its own line in white (emphasis inside a quote nests within the speech element) — single-word quotes stay plain text while other text renders at 80% opacity (`text-nc-text/80` root + `.markdown`/`.md-speech` rules in `input.css`). Unterminated markers render as-if closed, so streamed agent output never leaks raw syntax. Used for agent responses, turn system/prompt bubbles, inspiration premises and session expositions |
-| `SettingsGear` / `NavBack` | Top-bar icon buttons (gear on the right; `NavBack` is the back arrow anchored to the left of the title) |
+| `SettingsGear` / `NavBack` | Top-bar icon buttons (gear pushing to Settings; `NavBack` is the back arrow anchored to the left of the title) |
+| `UserBox` | Account control at the rightmost of the title bar (rendered by `Screen` unless `plain`/`nouserbox`, and by the gameplay screen's own header). Signed out: a "Log in" button (disabled while the boot-time session restore is in flight) pushing to the `Login` route. Signed in: the username (falling back to the email) opening a popover — a click-away catcher closes it — listing the account (username + email) with a "Log out" button calling `auth::logout` |
 
 `INPUT_CLASS` is the shared text-input styling constant.
 

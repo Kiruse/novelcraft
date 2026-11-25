@@ -1,5 +1,6 @@
 pub mod create_story;
 pub mod home;
+pub mod login;
 pub mod onboarding;
 pub mod settings;
 pub mod story_gameplay;
@@ -9,6 +10,7 @@ use dioxus::prelude::*;
 
 use crate::screens::create_story::CreateStory;
 use crate::screens::home::Home;
+use crate::screens::login::Login;
 use crate::screens::settings::Settings;
 use crate::screens::story_gameplay::StoryGameplay;
 use crate::screens::story_overview::StoryOverview;
@@ -21,6 +23,8 @@ pub enum Route {
   Settings {},
   #[route("/create")]
   CreateStory {},
+  #[route("/login")]
+  Login {},
   #[route("/story/:id")]
   StoryOverview { id: String },
   #[route("/play/:id")]

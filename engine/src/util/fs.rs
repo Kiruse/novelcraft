@@ -78,13 +78,13 @@ pub(crate) async fn list_dir(path: &Path) -> Result<Vec<(String, bool)>, EngineE
 }
 
 /// Read & parse a JSON file.
-pub(crate) async fn deserialize<T: DeserializeOwned>(path: &Path) -> Result<T, EngineError> {
+pub async fn deserialize<T: DeserializeOwned>(path: &Path) -> Result<T, EngineError> {
   let raw = read(path).await?;
   serde_json::from_str(&raw).map_err(|e| EngineError::parse(format!("Parse error: {}", e)))
 }
 
 /// Write a JSON file (pretty-printed), creating parent directories.
-pub(crate) async fn serialize(path: &Path, obj: &impl Serialize) -> Result<(), EngineError> {
+pub async fn serialize(path: &Path, obj: &impl Serialize) -> Result<(), EngineError> {
   if let Some(parent) = path.parent() {
     ensure_dir(parent).await?;
   }

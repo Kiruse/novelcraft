@@ -4,7 +4,9 @@ use dioxus::prelude::*;
 use novelcraft_engine::game::profile::ProfileV1;
 use novelcraft_engine::game::turns::TurnV2;
 
-use crate::comps::{Button, BtnVariant, Field, Loading, Markdown, NavBack, INPUT_CLASS};
+use crate::comps::{
+  Button, BtnVariant, Field, Loading, Markdown, NavBack, QuillsBox, UserBox, INPUT_CLASS,
+};
 use crate::engine;
 use crate::modules::{module_context, EditingLeaf, StatePath};
 use crate::state::{Query, StreamState, CONTEXT_USAGE, PREMISE_PAGE, PROFILES, REASONING, SESSION, STREAM, TURN, TURN_INDEX};
@@ -108,6 +110,7 @@ pub fn StoryGameplay(id: String) -> Element {
           NavBack {}
           div { class: "text-3xl", { title_text } }
         }
+        div { class: "absolute right-4 flex items-center gap-1", QuillsBox {} UserBox {} }
       }
 
       div { class: "flex flex-row flex-1 min-h-0 w-full",

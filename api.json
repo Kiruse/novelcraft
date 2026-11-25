@@ -1,0 +1,1573 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Novelcraft API",
+    "description": "NovelCraft social API & freemium-based PAYG inference.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/inspirations": {
+      "get": {
+        "tags": [
+          "inspirations"
+        ],
+        "summary": "All inspirations, optionally filtered by tags",
+        "description": "Returns every inspiration sorted by title; with `tags`, only those tagged with **all** of the comma-separated tags.",
+        "operationId": "listInspirations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tags",
+            "description": "Comma-separated tags; an inspiration must carry **all** of them.",
+            "schema": {
+              "description": "Comma-separated tags; an inspiration must carry **all** of them.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Inspiration"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/inspirations/tags": {
+      "get": {
+        "tags": [
+          "inspirations"
+        ],
+        "summary": "Every tag in use",
+        "description": "Flat, sorted, deduped — derived from stored rows.",
+        "operationId": "listInspirationTags",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register a new account with an invite code",
+        "description": "Creates the account and returns the initial token pair. The invite code is matched case-insensitively; a duplicate email does not burn a use.",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log in with email and password",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Rotate a refresh token into a fresh pair",
+        "description": "The presented refresh token is burned (single-use).",
+        "operationId": "refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revoke a refresh token",
+        "description": "Best-effort: unknown tokens answer 204 as well.",
+        "operationId": "logout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "no content"
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The current user",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/username": {
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Set or change the username",
+        "description": "1-30 chars of [A-Za-z0-9._-], stored case-sensitive, unique case-insensitively.",
+        "operationId": "setUsername",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetUsernameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Clear the username (releases it)",
+        "operationId": "clearUsername",
+        "responses": {
+          "204": {
+            "description": "no content"
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/forgot-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request a password-reset email",
+        "description": "Always answers 202 — the response never reveals whether the account exists.",
+        "operationId": "forgotPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/reset-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Complete a password reset",
+        "description": "Single-use token; revokes all of the user's sessions.",
+        "operationId": "resetPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "no content"
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/quills": {
+      "get": {
+        "tags": [
+          "quills"
+        ],
+        "summary": "The current quill balance",
+        "operationId": "quillsBalance",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/quills/claim": {
+      "post": {
+        "tags": [
+          "quills"
+        ],
+        "summary": "Claim the daily free quills",
+        "description": "Grants 10.00 quills once per UTC calendar day.",
+        "operationId": "quillsClaim",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/quills/history": {
+      "get": {
+        "tags": [
+          "quills"
+        ],
+        "summary": "The earn/spend ledger, newest first",
+        "description": "Stateless keyset pagination: `from_id` anchors the page at the entry with exactly that id, so pages never shift when new entries arrive; the next page is anchored at the last id in `result` while `has_more` is true.",
+        "operationId": "quillsHistory",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from_id",
+            "description": "First row of the page (keyset anchor): the returned entries start at\n exactly this id and walk backwards. Absent = newest entries first.",
+            "schema": {
+              "description": "First row of the page (keyset anchor): the returned entries start at\n exactly this id and walk backwards. Absent = newest entries first.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/chat/models": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "The supported inference models",
+        "description": "OpenAI-shaped list of every model the completions endpoint accepts. Public — anonymous clients may render model pickers.",
+        "operationId": "chatModels",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/completions": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Create a chat completion (OpenAI-compatible proxy)",
+        "description": "Proxies to OpenRouter and settles the cost in quills: 1.00 quill is held before generation, the hold converts into the actual usage cost plus a 50% margin once OpenRouter reports it, and the difference is refunded. Requires a balance of at least 1.00 quills; the balance may go slightly negative by design. Pass `stream: true` for an SSE passthrough. Set the `X-Chat-Session` header to accumulate an agent loop's rounds into a single ledger record.",
+        "operationId": "chatCompletions",
+        "requestBody": {
+          "description": "The curated subset of the OpenAI chat request we accept. Unknown fields\n are ignored (serde default) — compatibility stays loose on read, tight\n on forward.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": true
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiErrorBody"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/saves": {
+      "get": {
+        "tags": [
+          "saves"
+        ],
+        "summary": "The occupied save slots",
+        "description": "Metadata of every occupied slot, ascending by slot number.",
+        "operationId": "savesList",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "saves"
+        ],
+        "summary": "Push a save into the first free slot",
+        "description": "Stores the request body as an opaque (end-to-end encrypted) save blob in the lowest free slot (1, then 2, then 3) and reports which slot it landed in. When all three slots are occupied the push is rejected; overwrite a slot explicitly with `PUT /saves/{slot}` instead.",
+        "operationId": "savesPush",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Metadata of one occupied save slot — everything a sync client needs to\n decide which side is newer; the blobs themselves are opaque.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveMeta"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/saves/{slot}": {
+      "get": {
+        "tags": [
+          "saves"
+        ],
+        "summary": "Fetch a saved blob",
+        "description": "The raw end-to-end-encrypted blob stored in the slot.",
+        "operationId": "savesGet",
+        "responses": {
+          "200": {
+            "description": "byte stream",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "saves"
+        ],
+        "summary": "Write a save into an explicit slot",
+        "description": "Creates or overwrites the slot (last write wins). Slots are 1-3; anything else is a 404.",
+        "operationId": "savesPut",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata of one occupied save slot — everything a sync client needs to\n decide which side is newer; the blobs themselves are opaque.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveMeta"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "saves"
+        ],
+        "summary": "Delete a save",
+        "description": "Releases the slot. Idempotent: an empty slot answers 204 as well.",
+        "operationId": "savesDelete",
+        "responses": {
+          "204": {
+            "description": "no content"
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Stream the account's events over SSE",
+        "description": "A server-sent event stream of the account's events; only the authenticated user's events are delivered. Today the only event is `quills` — the balance changed — with the new balance as the `data` payload (rounded to 2 decimals, like every other balance response). Delivery is best-effort: reconnecting clients should re-fetch the balance, and since every event carries full state, a missed event self-heals on the next one.",
+        "operationId": "eventsStream",
+        "responses": {
+          "200": {
+            "description": "The event stream — see the operation description.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "401": {
+            "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Access token from /auth/register or /auth/login"
+      }
+    },
+    "schemas": {
+      "Accepted": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "properties": {
+          "quills": {
+            "description": "Current balance, rounded to 2 decimals.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "quills"
+        ]
+      },
+      "ChatCompletionRequest": {
+        "description": "The curated subset of the OpenAI chat request we accept. Unknown fields\n are ignored (serde default) — compatibility stays loose on read, tight\n on forward.",
+        "type": "object",
+        "properties": {
+          "max_completion_tokens": {
+            "description": "Upper limit on generated output + reasoning tokens. Support depends on\n model & host.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "max_tokens": {
+            "description": "@deprecated in favor of `max_completion_tokens`",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          },
+          "model": {
+            "type": "string"
+          },
+          "stream": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "top_p": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "required": [
+          "model",
+          "messages"
+        ]
+      },
+      "ChatFunctionCall": {
+        "type": "object",
+        "properties": {
+          "arguments": {
+            "description": "JSON-encoded arguments to this function call",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name of the called function",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "arguments"
+        ]
+      },
+      "ChatMessage": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "description": "Only ever present on \"assistant\" roles. The tool calls the assistant made in this choice.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ChatToolCall"
+            }
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ]
+      },
+      "ChatToolCall": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "Type of tool call. Really only ever `function`.",
+            "type": "string"
+          },
+          "function": {
+            "$ref": "#/components/schemas/ChatFunctionCall"
+          },
+          "id": {
+            "description": "ID of this tool call, for serving tool call results back to the agent.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "function"
+        ]
+      },
+      "ErrorBody": {
+        "description": "The uniform error shape of every non-2xx response:\n `{\"error\": \"<safe public message>\"}`.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ForgotPasswordRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "HistoryQuery": {
+        "type": "object",
+        "properties": {
+          "from_id": {
+            "description": "First row of the page (keyset anchor): the returned entries start at\n exactly this id and walk backwards. Absent = newest entries first.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "properties": {
+          "has_more": {
+            "description": "Older entries exist beyond the page; its anchor is the last id in\n `result`.",
+            "type": "boolean"
+          },
+          "result": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuillHistoryResponse"
+            }
+          }
+        },
+        "required": [
+          "result",
+          "has_more"
+        ]
+      },
+      "Inspiration": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "premise": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "premise",
+          "tags"
+        ]
+      },
+      "InspirationsQuery": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "description": "Comma-separated tags; an inspiration must carry **all** of them.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "ModelEntry": {
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "owned_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ]
+      },
+      "ModelsResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelEntry"
+            }
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ]
+      },
+      "OpenAiError": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ]
+      },
+      "OpenAiErrorBody": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpenAiError"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "QuillHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "tag": {
+            "description": "Groups multi-round chat requests into one accumulating record.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "amount",
+          "kind",
+          "created_at"
+        ]
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ]
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "invite_code": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "invite_code"
+        ]
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "properties": {
+          "new_password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "new_password"
+        ]
+      },
+      "SaveMeta": {
+        "description": "Metadata of one occupied save slot — everything a sync client needs to\n decide which side is newer; the blobs themselves are opaque.",
+        "type": "object",
+        "properties": {
+          "size_bytes": {
+            "description": "Blob size in bytes (at most 50 MiB).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "slot": {
+            "description": "The slot number, 1-3.",
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "updated_at": {
+            "description": "When the server last wrote this slot.",
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "slot",
+          "size_bytes",
+          "updated_at"
+        ]
+      },
+      "SavesResponse": {
+        "type": "object",
+        "properties": {
+          "saves": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaveMeta"
+            }
+          }
+        },
+        "required": [
+          "saves"
+        ]
+      },
+      "SetUsernameRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "TokenPair": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token"
+        ]
+      },
+      "UserResponse": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quills": {
+            "description": "Balance in quills, rounded to 2 decimals — internal units come off the row.",
+            "type": "number",
+            "format": "double"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "quills"
+        ]
+      }
+    }
+  }
+}

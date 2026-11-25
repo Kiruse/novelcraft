@@ -12,6 +12,8 @@ default = ["dioxus/desktop"]
 
 [dependencies]
 chrono = "0.4"
+bytes = "1"
+futures-util = "0.3"
 log.workspace = true
 env_logger.workspace = true
 serde.workspace = true
@@ -21,13 +23,18 @@ tokio.workspace = true
 
 dioxus = { version = "0.7", features = ["router"] }
 novelcraft-engine = { path = "../engine" }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+# SSE parsing — the same `sse-core` the engine's agent loop uses (kiruklaw
+# pins it to 0.2 without default features), so the stack shares one build.
+sse-core = { version = "0.2", default-features = false, features = ["std", "stream"] }
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 console_error_panic_hook = "0.1"
 console_log = "1"
 gloo-timers = { version = "0.3", features = ["futures"] }
+uuid = { version = "1", features = ["v4", "js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["fs"] }

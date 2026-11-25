@@ -7,7 +7,12 @@
 // not-yet-called endpoints/methods are intentional.
 #![allow(dead_code)]
 
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
+
+use bytes::Bytes;
+use futures_util::stream::{Stream, StreamExt};
+use sse_core::{MessageEvent, SseEvent, SseStream, SseStreamError};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -103,6 +108,40 @@ pub struct SavesResponse {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Accepted {
   pub status: String,
+}
+
+/// One event of the account event stream (`GET /events`).
+///
+/// Today the only event is [`AccountEvent::Quills`] — the balance changed.
+/// Unrecognized event kinds surface as [`AccountEvent::Unknown`] so a
+/// server-side extension can't wedge the stream.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccountEvent {
+  /// The quill balance changed; the payload is the new balance, rounded
+  /// to 2 decimals like every other balance response.
+  Quills { quills: f64 },
+  /// An unrecognized event kind, preserved as-is.
+  Unknown { event: String, data: String },
+}
+
+impl AccountEvent {
+  /// Parses a raw SSE message: the `quills` kind carries the bare balance
+  /// (or, leniently, the full balance response); anything else stays raw.
+  fn parse(message: MessageEvent) -> Self {
+    if message.event == "quills" {
+      let data = message.data.trim();
+      if let Ok(quills) = data.parse::<f64>() {
+        return Self::Quills { quills };
+      }
+      if let Ok(balance) = serde_json::from_str::<BalanceResponse>(data) {
+        return Self::Quills { quills: balance.quills };
+      }
+    }
+    Self::Unknown {
+      event: message.event.into_owned(),
+      data: message.data,
+    }
+  }
 }
 
 #[derive(Debug, Serialize)]
@@ -379,6 +418,27 @@ impl ApiClient {
   pub async fn delete_save(&self, slot: u8) -> Result<(), GuiError> {
     send_empty(self.authed(reqwest::Method::DELETE, &format!("/saves/{slot}"))?).await
   }
+
+  // ---- events ----
+
+  /// `GET /events` — a server-sent event stream of the account's events.
+  /// Today the only event is [`AccountEvent::Quills`] — the balance
+  /// changed — carrying the new balance as the data payload. Delivery is
+  /// best-effort: reconnecting clients should re-fetch the balance, and
+  /// since every event carries full state, a missed event self-heals on
+  /// the next one.
+  pub async fn events_stream(&self) -> Result<EventStream, GuiError> {
+    let response = self
+      .authed(reqwest::Method::GET, "/events")?
+      .header(reqwest::header::ACCEPT, "text/event-stream")
+      .send()
+      .await
+      .map_err(|e| GuiError::Api(e.to_string()))?;
+    if !response.status().is_success() {
+      return Err(api_error(response).await);
+    }
+    Ok(EventStream::new(response))
+  }
 }
 
 /// Sends the request, mapping non-2xx responses to the API's uniform
@@ -418,7 +478,10 @@ async fn api_error(response: reqwest::Response) -> GuiError {
     .await
     .map(|body| body.error)
     .unwrap_or_else(|_| status.to_string());
-  GuiError::Api(format!("{status}: {message}"))
+  GuiError::ApiStatus {
+    status: status.as_u16(),
+    message,
+  }
 }
 
 /// Attaches an octet-stream body (the save blobs' content type).
@@ -427,3 +490,101 @@ fn octet(request: reqwest::RequestBuilder, blob: Vec<u8>) -> reqwest::RequestBui
     .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
     .body(blob)
 }
+
+// ---- SSE stream plumbing ----
+
+/// A byte stream of the SSE response. Deliberately without `Send` bounds —
+/// the browser fetch streams backing the web target aren't.
+type ByteStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>>>>;
+
+/// The streamed `GET /events` response — a server-sent event stream of
+/// the account's events, parsed by [`SseStream`] (the same `sse-core`
+/// parser the engine's agent loop uses).
+pub struct EventStream {
+  stream: SseStream<ByteStream>,
+}
+
+impl EventStream {
+  fn new(response: reqwest::Response) -> Self {
+    Self {
+      stream: SseStream::new(Box::pin(response.bytes_stream())),
+    }
+  }
+
+  /// The next event of the stream, or `None` once the server closes it.
+  ///
+  /// Under normal operation the stream never ends — treat a `None` as a
+  /// disconnect and reconnect (re-fetching the balance first, per the
+  /// endpoint's best-effort delivery).
+  pub async fn next_event(&mut self) -> Result<Option<AccountEvent>, GuiError> {
+    loop {
+      let Some(event) = self.stream.next().await else {
+        return Ok(None);
+      };
+      match event {
+        Ok(SseEvent::Message(message)) => return Ok(Some(AccountEvent::parse(message))),
+        Ok(SseEvent::Retry(_)) => continue, // server-advised retry delay; nothing to do
+        Err(SseStreamError::Inner(err)) => return Err(GuiError::Api(err.to_string())),
+        Err(SseStreamError::PayloadTooLarge(_)) => {
+          // The decoder dropped the oversized event and resynchronized at
+          // the next boundary; the connection stays open and every event
+          // carries full state, so the loss self-heals on the next one.
+          continue;
+        }
+      }
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Builds a raw SSE message event.
+  fn message(event: &str, data: &str) -> MessageEvent {
+    MessageEvent {
+      event: event.to_owned().into(),
+      data: data.to_owned(),
+      last_event_id: None,
+    }
+  }
+
+  #[test]
+  fn parses_a_quill_event() {
+    assert_eq!(
+      AccountEvent::parse(message("quills", "10.50")),
+      AccountEvent::Quills { quills: 10.5 }
+    );
+  }
+
+  #[test]
+  fn parses_a_quill_event_with_a_json_payload() {
+    assert_eq!(
+      AccountEvent::parse(message("quills", r#"{"quills": 10.50}"#)),
+      AccountEvent::Quills { quills: 10.5 }
+    );
+  }
+
+  #[test]
+  fn keeps_unrecognized_event_kinds_raw() {
+    assert_eq!(
+      AccountEvent::parse(message("future", "…")),
+      AccountEvent::Unknown {
+        event: "future".to_owned(),
+        data: "…".to_owned(),
+      }
+    );
+  }
+
+  #[test]
+  fn keeps_unparseable_quill_payloads_raw() {
+    assert_eq!(
+      AccountEvent::parse(message("quills", "garbage")),
+      AccountEvent::Unknown {
+        event: "quills".to_owned(),
+        data: "garbage".to_owned(),
+      }
+    );
+  }
+}
+
