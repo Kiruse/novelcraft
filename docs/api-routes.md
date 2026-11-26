@@ -11,7 +11,7 @@ The engine crate (`novelcraft-engine`) owns the config, the active session, and 
 - **Session management** — create, list (metadata-only), load, fork memory-managed sessions (`SessionV2`)
 - **Dungeon Master agent loop** — `prompt`/`rewrite` run a kiruklaw `AgentLoop` over the session's gameplay-module toolsets, streaming `AgentMessageChunk`s
 - **Long-term memory** — rolling story summary compression (one-shot Summarizer call) + `StoryState` read model
-- **Config & profiles** — `NovelCraftConfig` incl. all profiles, persisted at `{configDir}/NovelCraft/config.json`
+- **Config & profiles** — `NovelCraftConfig` incl. all profiles, persisted at `{configDir}/NovelCraft/config.json`. The GUI boots with `GuiConfig` (engine config + the GUI-owned `onboarded` flag) and resolves models for the engine via its `ModelProvider` impl — `Login` model variants assemble the hosted-inference endpoint & the signed-in account's token at request time
 - **Filesystem persistence** — JSON files only (see [Data Storage](./database-schema.md))
 
 ### Calling from the GUI
@@ -33,15 +33,16 @@ engine::save_config(config).await;
 
 | Method | Parameters | Returns | Description |
 |--------|-----------|---------|-------------|
-| `new` | `NovelCraftConfig` | `Self` | Construct the engine (once, at boot — the GUI's `App` boot gate) |
-| `set_config` | `NovelCraftConfig` | — | Swap config; re-contributes values into the cached agent loop |
+| `new` | `config: C` | `Self` | Construct the engine (once, at boot — the GUI's `App` boot gate). `C: ConfigProvider + ModelProvider` — the GUI instantiates `C = GuiConfig`; the engine crate provides its own impls for bare `NovelCraftConfig` (used by tests) |
+| `set_config` | `config: C` | — | Swap config; re-contributes values into the cached agent loop |
 | `set_session` | `Option<SessionV2>` | — | Set the active session; rebuilds agent-loop toolsets from its modules |
 | `set_active_profile` | `Option<String>` | — | Update active profile (config + active session) |
-| `config` | — | `&NovelCraftConfig` | Read-only config access |
+| `config` | — | `&C` | Read-only config access |
+| `get_base_config` | — | `&NovelCraftConfig` | Read-only access to the wrapped engine config (through the provider) |
 | `profile` | — | `Option<&ProfileV1>` | Resolve the active profile from `config.active_profile` |
 | `session` | — | `Result<&SessionV2>` | Active session or error |
 | `list_sessions` | — | `Result<Vec<SessionV2>>` | Enumerate saved sessions (metadata only, newest first; skips unreadable/outdated metas with a warning) |
-| `create_session` | `title, exposition` | `Result<SessionV2>` | Create + persist a session: default module set, active profile; the exposition doubles as the story premise |
+| `create_session` | `title, exposition, creative_direction` | `Result<SessionV2>` | Create + persist a session: default module set, active profile; the exposition doubles as the story premise, the creative direction is appended to the persona in the system prompt |
 | `prompt` | `content, Sender<AgentMessageChunk>` | `Result<()>` | Push a new user turn and run the DM agent loop |
 | `rewrite` | `instruct, Sender<AgentMessageChunk>` | `Result<()>` | Regenerate the last turn under extra steering instructions |
 | `fork` | `turn_index` | `Result<()>` | Fork at a retained turn, deleting all later turns |

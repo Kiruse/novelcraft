@@ -7,6 +7,7 @@
 // not-yet-called endpoints/methods are intentional.
 #![allow(dead_code)]
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -299,23 +300,32 @@ impl ApiClient {
 
   /// `GET /auth/me`.
   pub async fn me(&self) -> Result<UserResponse, GuiError> {
-    send(self.authed(reqwest::Method::GET, "/auth/me")?).await
+    auth_refresh(|| async move {
+      send(self.authed(reqwest::Method::GET, "/auth/me")?).await
+    })
+    .await
   }
 
   /// `PUT /auth/username` — 1-30 chars of [A-Za-z0-9._-], stored
   /// case-sensitive, unique case-insensitively.
   pub async fn set_username(&self, body: &SetUsernameRequest) -> Result<UserResponse, GuiError> {
-    send(
-      self
-        .authed(reqwest::Method::PUT, "/auth/username")?
-        .json(body),
-    )
+    auth_refresh(|| async move {
+      send(
+        self
+          .authed(reqwest::Method::PUT, "/auth/username")?
+          .json(body),
+      )
+      .await
+    })
     .await
   }
 
   /// `DELETE /auth/username` — clears the username, releasing it.
   pub async fn clear_username(&self) -> Result<(), GuiError> {
-    send_empty(self.authed(reqwest::Method::DELETE, "/auth/username")?).await
+    auth_refresh(|| async move {
+      send_empty(self.authed(reqwest::Method::DELETE, "/auth/username")?).await
+    })
+    .await
   }
 
   /// `POST /auth/forgot-password` — always answers 202, never reveals
@@ -344,12 +354,18 @@ impl ApiClient {
 
   /// `GET /quills` — the current quill balance.
   pub async fn quills_balance(&self) -> Result<BalanceResponse, GuiError> {
-    send(self.authed(reqwest::Method::GET, "/quills")?).await
+    auth_refresh(|| async move {
+      send(self.authed(reqwest::Method::GET, "/quills")?).await
+    })
+    .await
   }
 
   /// `POST /quills/claim` — grants 10.00 quills once per UTC calendar day.
   pub async fn claim_quills(&self) -> Result<BalanceResponse, GuiError> {
-    send(self.authed(reqwest::Method::POST, "/quills/claim")?).await
+    auth_refresh(|| async move {
+      send(self.authed(reqwest::Method::POST, "/quills/claim")?).await
+    })
+    .await
   }
 
   /// `GET /quills/history` — the earn/spend ledger, newest first. Keyset
@@ -360,63 +376,87 @@ impl ApiClient {
     from_id: Option<i64>,
     limit: Option<i64>,
   ) -> Result<HistoryResponse, GuiError> {
-    let mut request = self.authed(reqwest::Method::GET, "/quills/history")?;
-    if let Some(from_id) = from_id {
-      request = request.query(&[("from_id", from_id)]);
-    }
-    if let Some(limit) = limit {
-      request = request.query(&[("limit", limit)]);
-    }
-    send(request).await
+    auth_refresh(|| async move {
+      let mut request = self.authed(reqwest::Method::GET, "/quills/history")?;
+      if let Some(from_id) = from_id {
+        request = request.query(&[("from_id", from_id)]);
+      }
+      if let Some(limit) = limit {
+        request = request.query(&[("limit", limit)]);
+      }
+      send(request).await
+    })
+    .await
   }
 
   // ---- saves ----
 
   /// `GET /saves` — the occupied save slots, ascending by slot number.
   pub async fn list_saves(&self) -> Result<SavesResponse, GuiError> {
-    send(self.authed(reqwest::Method::GET, "/saves")?).await
+    auth_refresh(|| async move {
+      send(self.authed(reqwest::Method::GET, "/saves")?).await
+    })
+    .await
   }
 
   /// `POST /saves` — stores the (opaque, end-to-end encrypted) blob in the
   /// lowest free slot; rejected with 409 when all three are occupied —
   /// overwrite a slot explicitly with [`ApiClient::write_save`] instead.
   pub async fn push_save(&self, blob: Vec<u8>) -> Result<SaveMeta, GuiError> {
-    send(octet(self.authed(reqwest::Method::POST, "/saves")?, blob)).await
+    auth_refresh(move || {
+      let blob = blob.clone();
+      async move {
+        send(octet(self.authed(reqwest::Method::POST, "/saves")?, blob)).await
+      }
+    })
+    .await
   }
 
   /// `GET /saves/{slot}` — the raw end-to-end-encrypted blob.
   pub async fn save_blob(&self, slot: u8) -> Result<Vec<u8>, GuiError> {
-    let response = self
-      .authed(reqwest::Method::GET, &format!("/saves/{slot}"))?
-      .send()
-      .await
-      .map_err(|e| GuiError::Api(e.to_string()))?;
-    if !response.status().is_success() {
-      return Err(api_error(response).await);
-    }
-    Ok(
-      response
-        .bytes()
+    auth_refresh(|| async move {
+      let response = self
+        .authed(reqwest::Method::GET, &format!("/saves/{slot}"))?
+        .send()
         .await
-        .map_err(|e| GuiError::Api(e.to_string()))?
-        .to_vec(),
-    )
+        .map_err(|e| GuiError::Api(e.to_string()))?;
+      if !response.status().is_success() {
+        return Err(api_error(response).await);
+      }
+      Ok(
+        response
+          .bytes()
+          .await
+          .map_err(|e| GuiError::Api(e.to_string()))?
+          .to_vec(),
+      )
+    })
+    .await
   }
 
   /// `PUT /saves/{slot}` — creates or overwrites the slot (last write
   /// wins). Slots are 1-3.
   pub async fn write_save(&self, slot: u8, blob: Vec<u8>) -> Result<SaveMeta, GuiError> {
-    send(octet(
-      self.authed(reqwest::Method::PUT, &format!("/saves/{slot}"))?,
-      blob,
-    ))
+    auth_refresh(move || {
+      let blob = blob.clone();
+      async move {
+        send(octet(
+          self.authed(reqwest::Method::PUT, &format!("/saves/{slot}"))?,
+          blob,
+        ))
+        .await
+      }
+    })
     .await
   }
 
   /// `DELETE /saves/{slot}` — releases the slot; idempotent, an empty slot
   /// answers 204 as well.
   pub async fn delete_save(&self, slot: u8) -> Result<(), GuiError> {
-    send_empty(self.authed(reqwest::Method::DELETE, &format!("/saves/{slot}"))?).await
+    auth_refresh(|| async move {
+      send_empty(self.authed(reqwest::Method::DELETE, &format!("/saves/{slot}"))?).await
+    })
+    .await
   }
 
   // ---- events ----
@@ -428,16 +468,19 @@ impl ApiClient {
   /// since every event carries full state, a missed event self-heals on
   /// the next one.
   pub async fn events_stream(&self) -> Result<EventStream, GuiError> {
-    let response = self
-      .authed(reqwest::Method::GET, "/events")?
-      .header(reqwest::header::ACCEPT, "text/event-stream")
-      .send()
-      .await
-      .map_err(|e| GuiError::Api(e.to_string()))?;
-    if !response.status().is_success() {
-      return Err(api_error(response).await);
-    }
-    Ok(EventStream::new(response))
+    auth_refresh(|| async move {
+      let response = self
+        .authed(reqwest::Method::GET, "/events")?
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .send()
+        .await
+        .map_err(|e| GuiError::Api(e.to_string()))?;
+      if !response.status().is_success() {
+        return Err(api_error(response).await);
+      }
+      Ok(EventStream::new(response))
+    })
+    .await
   }
 }
 
@@ -467,6 +510,25 @@ async fn send_empty(request: reqwest::RequestBuilder) -> Result<(), GuiError> {
     return Err(api_error(response).await);
   }
   Ok(())
+}
+
+/// Runs an authed request with a single automatic recovery: a 401 means
+/// the short-lived access token expired — rotate the token pair once
+/// ([`crate::auth::refresh_session`]) and re-invoke `request`, which must
+/// rebuild the request so the retried call carries the fresh token. Only a
+/// second failure surfaces. Signed-out calls (`authed` errs before
+/// sending) fail fast without touching the refresh flow.
+pub(crate) async fn auth_refresh<T, F, Fut>(mut request: F) -> Result<T, GuiError>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = Result<T, GuiError>>,
+{
+  match request().await {
+    Err(GuiError::ApiStatus { status: 401, .. }) => {}
+    other => return other,
+  }
+  crate::auth::refresh_session().await?;
+  request().await
 }
 
 /// Builds the error from a non-2xx response: the server message from the

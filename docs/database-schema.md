@@ -110,16 +110,17 @@ The last `2 × summary_threshold` turns of the conversation (default threshold 5
 - `system`, `prompt`, `content` are omitted when `None` (`skip_serializing_if`); `responses`/`tool_calls`/`tool_responses` are `#[serde(default)]` so older files without them deserialize
 - One `TurnV2` per user interaction; `AgentResponse` folds an assistant message with its subsequent tool calls & tool responses (`TurnV2::assimilate`)
 
-### config.json — Engine Config (`NovelCraftConfig`)
+### config.json — Engine Config (`NovelCraftConfig` + GUI's `GuiConfig`)
 
 ```json
 {
+  "version": 1,
   "max_agent_steps": 10,
   "system_prompt": "You are a Dungeon Master ...",
   "models": {
-    "dungeon_master": { "type": "open_ai", "base_url": "http://localhost:8888/v1", "api_key": "", "model": "..." },
-    "suggestions": { "type": "open_ai", "base_url": "http://localhost:8888/v1", "api_key": "", "model": "..." },
-    "summarizer": { "type": "open_ai", "base_url": "http://localhost:8888/v1", "api_key": "", "model": "..." }
+    "dungeon_master": { "type": "Login", "model": "google/gemma-4-26b-a4b-it:free" },
+    "suggestions": { "type": "Login", "model": "google/gemma-4-26b-a4b-it:free" },
+    "summarizer": { "type": "OpenAiCompatible", "base_url": "http://localhost:8888/v1", "api_key": "", "model": "..." }
   },
   "summary_threshold": 50,
   "context_length": 8192,
@@ -131,9 +132,10 @@ The last `2 × summary_threshold` turns of the conversation (default threshold 5
 }
 ```
 
-- `models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — **all three keys are required**; a missing `summarizer` key makes the whole file fail to deserialize (existing users migrate manually). `ModelConfig` is internally tagged (`"type": "open_ai"`)
-- `summary_threshold` is `#[serde(default)]` (`DEFAULT_SUMMARY_THRESHOLD` = 50), and `context_length` defaults to 8192 (`DEFAULT_CONTEXT_LENGTH`), so configs predating the memory rewrite still deserialize
-- `onboarded` defaults to `true` when absent (config files predating onboarding never see the first-boot flow); fresh `NovelCraftConfig::default()` starts `false` so new installs onboard
+- `models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — **all three keys are required**; a missing `summarizer` key makes the whole file fail to deserialize (existing users migrate manually). `ModelConfig` is **internally tagged** (`#[serde(tag = "type")]`, raw variant names): `{"type": "Login", "model"}` — hosted inference through the NovelCraft API, whose host & credentials are assembled per request by the GUI's `ModelProvider` impl (engine-side it resolves to the default host without credentials) — or `{"type": "OpenAiCompatible", "base_url", "api_key", "model"}` — a user endpoint whose (possibly empty) `api_key` is its bearer
+- `summary_threshold` is `#[serde(default)]` (`DEFAULT_SUMMARY_THRESHOLD` = 50), `context_length` defaults to 8192 (`DEFAULT_CONTEXT_LENGTH`), `version` defaults to `1`, and `profiles`/`active_profile` default to empty — configs predating those fields still deserialize
+- **Migration** — `NovelCraftConfig::load_json` runs a version-gated migration on the raw file first (`migrate` → `migrate_step`): v0 configs (no `version` field) get their legacy kiruklaw model entries (`{"type": "open_ai", ...}`) rewritten into internally-tagged `{"type": "OpenAiCompatible", ...}` — or seeded with `Models::default()` when `models` is absent — and the `version` field is written; future versions are rejected outright. Configs already at the current version pass through untouched
+- `onboarded` is a **GUI-owned** flag (`GuiConfig`, `#[serde(flatten)]`-ed around the engine config) the engine config knows nothing about; it defaults to `true` when absent (config files predating onboarding never see the first-boot flow). The GUI writes the flag through `GuiConfig::save`
 - Profiles live **inside** config.json — there is no separate profiles store
 
 ---

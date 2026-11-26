@@ -103,13 +103,17 @@ impl GameState {
             continue;
           }
 
-          if tc.name.find("::").is_none() {
+          if tc.name.find("::").is_none() && tc.name.find("--").is_none() {
             return Err(EngineError::input(format!("invalid tool name {}", tc.name)));
           }
 
-          let mut parts = tc.name.splitn(2, "::");
-          let module_name = parts.next().ok_or(EngineError::input("expected module name"))?;
-          let tool_name = parts.next().ok_or(EngineError::input("expected tool name"))?;
+          // Sessions recorded before the kiruklaw namespace change used
+          // `<module>::<tool>`; the current loop records `<module>--<tool>`.
+          let (module_name, tool_name) = tc
+            .name
+            .split_once("--")
+            .or_else(|| tc.name.split_once("::"))
+            .ok_or_else(|| EngineError::input(format!("invalid tool name {}", tc.name)))?;
 
           let module = modules.get(module_name).ok_or_else(|| {
             EngineError::input(format!("unknown module {module_name} in recorded tool call {}", tc.name))

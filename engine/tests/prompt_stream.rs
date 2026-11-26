@@ -49,10 +49,10 @@ async fn prompt_commits_streamed_content() {
     "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
     "data: [DONE]\n\n",
   );
-  let (base_url, server) = serve_sse(vec![body.to_string()]).await;
+  let (base_url, _server) = serve_sse(vec![body.to_string()]).await;
 
   let mut config = NovelCraftConfig::default();
-  config.models[ModelPurpose::DungeonMaster] = ModelConfig::OpenAi {
+  config.models[ModelPurpose::DungeonMaster] = ModelConfig::OpenAiCompatible {
     base_url,
     api_key: String::new(),
     model: "test-model".to_string(),
@@ -82,16 +82,16 @@ async fn prompt_commits_streamed_content() {
   assert_eq!(turn.responses[0].content.as_deref(), Some("Hello world"));
 }
 
-/// Regression: `AgentLoop::run` dispatched full namespaced tool names into
-/// toolsets whose `handle` matches bare names only, so every tool call
-/// failed with "unknown tool" and the gamestate was never updated.
+/// Regression: the agent loop dispatches namespaced tool names
+/// (`<toolset>--<tool>`; legacy sessions recorded `<module>::<tool>`) into
+/// toolsets whose `handle` matches bare names only.
 #[tokio::test]
 async fn prompt_executes_namespaced_tool_calls() {
   let _ = env_logger::try_init();
   let tool_call = concat!(
     "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null,",
     "\"tool_calls\":[{\"index\":0,\"id\":\"t1\",\"type\":\"function\",\"function\":",
-    "{\"name\":\"npcs::update_apparel\",\"arguments\":\"{\\\"name\\\":\\\"Mira\\\",\\\"apparel\\\":\\\"red scarf\\\"}\"}}]},",
+    "{\"name\":\"npcs--update_apparel\",\"arguments\":\"{\\\"name\\\":\\\"Mira\\\",\\\"apparel\\\":\\\"red scarf\\\"}\"}}]},",
     "\"finish_reason\":null}]}\n\n",
     "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
     "data: [DONE]\n\n",
@@ -101,10 +101,10 @@ async fn prompt_executes_namespaced_tool_calls() {
     "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
     "data: [DONE]\n\n",
   );
-  let (base_url, server) = serve_sse(vec![tool_call.to_string(), final_body.to_string()]).await;
+  let (base_url, _server) = serve_sse(vec![tool_call.to_string(), final_body.to_string()]).await;
 
   let mut config = NovelCraftConfig::default();
-  config.models[ModelPurpose::DungeonMaster] = ModelConfig::OpenAi {
+  config.models[ModelPurpose::DungeonMaster] = ModelConfig::OpenAiCompatible {
     base_url,
     api_key: String::new(),
     model: "test".to_string(),
@@ -130,7 +130,7 @@ async fn prompt_executes_namespaced_tool_calls() {
   assert_eq!(npcs_state, serde_json::json!({"Mira": {"apparel": "red scarf"}}));
 
   let turn = engine.turn(0).unwrap();
-  assert_eq!(turn.responses[0].tool_calls[0].name, "npcs::update_apparel");
+  assert_eq!(turn.responses[0].tool_calls[0].name, "npcs--update_apparel");
   assert_eq!(
     turn.responses[0].tool_responses[0].1,
     "Apparel of Mira successfully updated."

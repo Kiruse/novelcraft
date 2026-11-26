@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kiruklaw_agent_loop::{AgentToolset, ModelConfig, Toolset};
+use kiruklaw_agent_loop::{AgentToolset, OpenAiCompatible, Toolset};
 use serde::{Deserialize, Serialize};
 
 use crate::error::EngineError;
@@ -62,9 +62,13 @@ impl GameplayModule {
     }
   }
 
-  pub async fn init(&self, ctx: &mut GameplayModuleInitContext<'_>) -> Result<(), EngineError> {
+  pub async fn init(
+    &self,
+    ctx: &mut GameplayModuleInitContext<'_>,
+    model: &impl OpenAiCompatible,
+  ) -> Result<(), EngineError> {
     match self {
-      Self::Player(module) => module.init(ctx).await,
+      Self::Player(module) => module.init(ctx, model).await,
       _ => Ok(()),
     }
   }
@@ -96,6 +100,5 @@ impl GameplayModule {
 #[derive(Debug)]
 pub struct GameplayModuleInitContext<'a> {
   pub state: GameStateView,
-  pub model_cfg: &'a ModelConfig,
   pub profile: Option<&'a ProfileV1>,
 }

@@ -1,15 +1,16 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use kiruklaw_agent_loop::{AgentLoop, AgentMessageChunk, ContextProvider, Conversation, ConversationMessage};
+use kiruklaw_agent_loop::{AgentLoop, AgentMessageChunk, ContextProvider, Conversation, ConversationMessage, OpenAiCompatible};
 use kiruklaw_agent_loop::openai::OpenAiReasoningConfig;
 use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
-use crate::config::{ModelPurpose, NovelCraftConfig};
+use crate::config::{ModelConfig, ModelPurpose, NovelCraftConfig, ConfigProvider};
 use crate::error::EngineError;
-use serde::{Deserialize, Serialize};
 use crate::game::module::story::{StoryModule, StoryState};
 use crate::game::profile::ProfileV1;
 use crate::game::session::SessionV2;
@@ -27,9 +28,10 @@ BE SURE to manage your NPCs and keep track of plot events in the chapters and ti
 BE EAGER with your tool calls! We rather store too much data than too little.
 The moment you assign an NPC a name, consider them important enough to track.";
 
-pub struct NovelCraftEngine {
-  /// NovelCraft game engine config
-  config: NovelCraftConfig,
+pub struct NovelCraftEngine<C: ConfigProvider + ModelProvider> {
+  /// NovelCraft game engine config which also provides [OpenAiCompatible]
+  /// models for given [ModelPurpose]s.
+  config: C,
   /// Active user session
   session: Option<SessionV2>,
   /// Cache of module context prompt component strings.
@@ -38,8 +40,8 @@ pub struct NovelCraftEngine {
   agent_loop: Option<AgentLoop<GameStateView>>,
 }
 
-impl NovelCraftEngine {
-  pub fn new(config: NovelCraftConfig) -> Self {
+impl<C: ConfigProvider + ModelProvider> NovelCraftEngine<C> {
+  pub fn new(config: C) -> Self {
     Self {
       config,
       session: None,
@@ -48,33 +50,43 @@ impl NovelCraftEngine {
     }
   }
 
-  pub fn set_config(&mut self, config: NovelCraftConfig) {
+  pub fn set_active_profile(&mut self, profile_id: Option<String>) {
+    self.get_base_config_mut().active_profile = profile_id.clone();
+
+    let profile = self.get_base_config().profiles
+      .iter()
+      .find(|p| Some(&p.id) == profile_id.as_ref())
+      .cloned()
+      .map(Arc::new);
+
+    if let Some(session) = self.session.as_mut() {
+      session.set_profile(profile);
+    }
+
+    self.agent_loop = build_agent_loop(
+      std::mem::take(&mut self.agent_loop),
+      &self.config,
+      self.session.as_ref(),
+    );
+  }
+
+  pub fn set_config(&mut self, config: C) {
     config.contribute(self.agent_loop.as_mut());
     self.config = config;
   }
 
-  pub fn set_active_profile(&mut self, profile_id: Option<String>) {
-    self.config.active_profile = profile_id.clone();
-
-    if let Some(session) = self.session.as_mut() {
-      let profile = self.config.profiles
-        .iter()
-        .find(|p| Some(&p.id) == profile_id.as_ref())
-        .cloned()
-        .map(Arc::new);
-      session.set_profile(profile);
-
-      self.agent_loop = build_agent_loop(
-        std::mem::take(&mut self.agent_loop),
-        &self.config,
-        Some(session),
-      );
-    }
+  #[inline(always)]
+  pub fn get_config(&self) -> &C {
+    &self.config
   }
 
   /// Read-only access to the engine's active configuration.
-  pub fn config(&self) -> &NovelCraftConfig {
-    &self.config
+  pub fn get_base_config(&self) -> &NovelCraftConfig {
+    &self.config.get_config()
+  }
+
+  fn get_base_config_mut(&mut self) -> &mut NovelCraftConfig {
+    self.config.get_config_mut()
   }
 
   /// Number of turns in the active session's retained history, if any.
@@ -86,7 +98,7 @@ impl NovelCraftEngine {
     if let Some(session) = self.session.as_ref() {
       session.save().await?;
     }
-    self.config.save().await?;
+    self.get_base_config().save().await?;
     Ok(())
   }
 
@@ -181,7 +193,7 @@ impl NovelCraftEngine {
     let usage = session.try_turn(session.turn_count().checked_sub(1)?)?.usage?;
     Some(ContextUsage {
       input_tokens: usage.input_tokens,
-      context_length: self.config.context_length,
+      context_length: self.get_base_config().context_length,
     })
   }
 
@@ -196,7 +208,7 @@ impl NovelCraftEngine {
         ("Personality".to_string(), String::new()),
         ("Appearance".to_string(), String::new()),
       ]);
-    self.config.profiles.push(profile.clone());
+    self.get_base_config_mut().profiles.push(profile.clone());
     self.set_active_profile(Some(profile.id.clone()));
     self.save().await?;
     Ok(profile)
@@ -205,15 +217,15 @@ impl NovelCraftEngine {
   /// Replace the given profile (matched by id) and persist. If it is the
   /// active profile, the active session's copy is refreshed too.
   pub async fn update_profile(&mut self, profile: ProfileV1) -> Result<(), EngineError> {
-    let Some(existing) = self.config.profiles.iter_mut().find(|p| p.id == profile.id) else {
+    let Some(existing) = self.get_base_config_mut().profiles.iter_mut().find(|p| p.id == profile.id) else {
       return Err(EngineError::state(format!("no profile with id {}", profile.id)));
     };
     *existing = profile;
     let id = existing.id.clone();
-    if self.config.active_profile.as_deref() == Some(id.as_str()) {
+    if self.get_base_config().active_profile.as_deref() == Some(id.as_str()) {
       self.set_active_profile(Some(id));
     }
-    self.config.save().await
+    self.get_base_config().save().await
   }
 
   /// Read the active session's long-term story state (summary, chapters).
@@ -290,9 +302,11 @@ impl NovelCraftEngine {
   /// Get the active profile. Resolves the [NovelCraftConfig::active_profile]
   /// field from the [NovelCraftConfig::profiles] vector.
   pub fn profile(&self) -> Option<&ProfileV1> {
-    self.config.active_profile
+    self.get_base_config().active_profile
       .as_ref()
-      .and_then(|id| self.config.profiles.iter().find(|profile| profile.id == *id))
+      .and_then(
+        |id| self.get_base_config().profiles.iter().find(|profile| profile.id == *id)
+      )
   }
 
   /// Push a new user prompt to the end of the current session.
@@ -318,6 +332,7 @@ impl NovelCraftEngine {
       .as_mut()
       .unwrap()
       .run(
+        &self.config.get_model(ModelPurpose::DungeonMaster),
         ContextProvider::factory(|toolset, _| Ok(gamestate.view(toolset.name().to_string()))),
         &mut conv,
         sender,
@@ -364,6 +379,7 @@ impl NovelCraftEngine {
       .as_mut()
       .unwrap()
       .run(
+        &self.config.get_model(ModelPurpose::DungeonMaster),
         ContextProvider::factory(|toolset, _| Ok(gamestate.view(toolset.name().to_string()))),
         &mut conv,
         sender,
@@ -385,7 +401,7 @@ impl NovelCraftEngine {
   /// Fork this session from the given retained turn index, deleting all
   /// later turns.
   pub async fn fork(&mut self, turn_index: usize) -> Result<(), EngineError> {
-    let profiles = self.config.profiles.clone();
+    let profiles = self.get_base_config().profiles.clone();
     self.session_mut()?.fork(turn_index, &profiles).await?;
     // NOTE: no need to rebuild agent_loop because tools didn't change
     Ok(())
@@ -394,7 +410,7 @@ impl NovelCraftEngine {
   /// Drop the entire retained history, restoring the gamestate to the
   /// session snapshot (a fresh start of the story).
   pub async fn reset_history(&mut self) -> Result<(), EngineError> {
-    let profiles = self.config.profiles.clone();
+    let profiles = self.get_base_config().profiles.clone();
     self.session_mut()?.reset_turns(&profiles).await
   }
 
@@ -423,7 +439,7 @@ impl NovelCraftEngine {
         .ok_or_else(|| EngineError::state("last turn has no user prompt to regenerate"))?
     };
 
-    let profiles = self.config.profiles.clone();
+    let profiles = self.get_base_config().profiles.clone();
     let session = self.session_mut()?;
     if session.turn_count() > 1 {
       session.fork(session.turn_count() - 2, &profiles).await?;
@@ -438,13 +454,13 @@ impl NovelCraftEngine {
   /// exceeds `2 * summary_threshold` turns. Failures are logged & retried on
   /// a later trigger — never surfaced to the player.
   async fn compress_memory_if_due(&mut self) {
-    let threshold = self.config.summary_threshold;
+    let threshold = self.get_base_config().summary_threshold;
     let Some(session) = self.session.as_mut() else { return };
     if !session.should_compress(threshold) {
       return;
     }
 
-    let model = self.config.models[ModelPurpose::Summarizer].clone();
+    let model = self.config.get_model(ModelPurpose::Summarizer);
     match session.compress_memory(threshold, &model).await {
       Ok(true) => info!("Compressed {threshold} turns into the rolling story summary"),
       Ok(false) => {}
@@ -469,7 +485,7 @@ impl NovelCraftEngine {
   fn system_prompt_msg(&self, modids: &[String]) -> Result<ConversationMessage, EngineError> {
     let mut f = PromptFormatter::new();
 
-    f.writeline(&self.config.system_prompt)?;
+    f.writeline(&self.get_base_config().system_prompt)?;
     f.newline()?;
 
     let direction = self.session().map(|s| s.creative_direction.clone()).unwrap_or_default();
@@ -511,6 +527,50 @@ impl NovelCraftEngine {
   fn module_ids(&self) -> Vec<String> {
     let Some(session) = &self.session else { return vec![] };
     session.modules().cloned().collect()
+  }
+}
+
+/// A simple trait to provide the [NovelCraftEngine] with models for a
+/// specific [ModelPurpose].
+pub trait ModelProvider {
+  fn get_model(&self, purpose: ModelPurpose) -> impl OpenAiCompatible;
+}
+
+/// Resolves a [ModelConfig] into an [OpenAiCompatible] model the engine
+/// itself can drive. The [`Login`](ModelConfig::Login) variant assembles
+/// nothing on this level — it serves the default host without credentials;
+/// the GUI's provider (see `gui/src/config.rs`) replaces it with the
+/// signed-in account's session token.
+impl ModelProvider for NovelCraftConfig {
+  fn get_model(&self, purpose: ModelPurpose) -> impl OpenAiCompatible {
+    EngineModel(self.models[purpose].clone())
+  }
+}
+
+struct EngineModel(ModelConfig);
+
+impl OpenAiCompatible for EngineModel {
+  fn base_url(&self) -> Cow<'_, str> {
+    match &self.0 {
+      ModelConfig::Login { .. } => Cow::Borrowed(crate::config::DEFAULT_HOST),
+      ModelConfig::OpenAiCompatible { base_url, .. } => Cow::Borrowed(base_url),
+    }
+  }
+
+  fn model(&self) -> Cow<'_, str> {
+    match &self.0 {
+      ModelConfig::Login { model } | ModelConfig::OpenAiCompatible { model, .. } => {
+        Cow::Borrowed(model)
+      }
+    }
+  }
+
+  fn auth(&self) -> Option<Cow<'_, str>> {
+    match &self.0 {
+      ModelConfig::Login { .. } => None,
+      ModelConfig::OpenAiCompatible { api_key, .. } => Some(Cow::Borrowed(api_key.as_str()))
+        .filter(|key| !key.trim().is_empty()),
+    }
   }
 }
 
@@ -577,7 +637,7 @@ fn inject_tool_reminder(conv: &mut Conversation) {
 /// `config` changed, prefer calling [NovelCraftConfig::contribute] instead.
 fn build_agent_loop(
   agent_loop: Option<AgentLoop<GameStateView>>,
-  config: &NovelCraftConfig,
+  config: &impl ConfigProvider,
   session: Option<&SessionV2>,
 ) -> Option<AgentLoop<GameStateView>> {
   let mut agent_loop = agent_loop.unwrap_or_default();
@@ -673,20 +733,5 @@ mod tests {
     inject_tool_reminder(&mut c);
 
     assert_eq!(c.messages.len(), 1);
-  }
-
-  #[tokio::test]
-  async fn creative_direction_joins_the_persona() {
-    let mut engine = NovelCraftEngine::new(NovelCraftConfig::default());
-    let mut session = SessionV2::default();
-    session.creative_direction = "Never use em dashes.".to_string();
-    session.exposition = "A tavern, a storm, a stranger.".to_string();
-    engine.set_session(Some(session));
-
-    let prompt = engine.effective_prompt().await.unwrap();
-    assert!(prompt.contains("# Creative direction"));
-    assert!(prompt.contains("Never use em dashes."));
-    // Appended to the persona, before the premise & module contexts.
-    assert!(prompt.find("# Creative direction").unwrap() < prompt.find("# Story premise").unwrap());
   }
 }

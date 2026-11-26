@@ -18,8 +18,8 @@ pub fn Onboarding() -> Element {
   let mut summarizer = use_signal(ModelFields::default);
 
   // Follow the config query as it publishes — fresh installs arrive with
-  // the recommended defaults (OpenRouter + Gemma), existing configs keep
-  // whatever the user had already set up.
+  // the recommended defaults, existing configs keep whatever the user had
+  // already set up.
   use_effect(move || {
     let Query::Recent(config) = &*CONFIG.read() else { return };
     dm.set(ModelFields::from_config(&config.models[ModelPurpose::DungeonMaster]));
@@ -29,9 +29,9 @@ pub fn Onboarding() -> Element {
 
   let finish = move |_| {
     let mut config = CONFIG.read().value().cloned().unwrap_or_default();
-    config.models[ModelPurpose::DungeonMaster] = dm.read().clone().into_config();
-    config.models[ModelPurpose::Suggestions] = suggestions.read().clone().into_config();
-    config.models[ModelPurpose::Summarizer] = summarizer.read().clone().into_config();
+    dm.read().clone().write_to(ModelPurpose::DungeonMaster, &mut config);
+    suggestions.read().clone().write_to(ModelPurpose::Suggestions, &mut config);
+    summarizer.read().clone().write_to(ModelPurpose::Summarizer, &mut config);
     config.onboarded = true;
 
     spawn(async move {
@@ -82,27 +82,35 @@ pub fn Onboarding() -> Element {
               }
               div { class: "flex flex-col gap-1",
                 div { class: "text-lg", "Online features are opt-in" }
-                div { class: "text-nc-text/80", "The app never calls out on its own — the only network use is the AI endpoint you connect in the next step." }
+                div { class: "text-nc-text/80", "Apart from the AI endpoint you configure in the next step — and the optional community features — no network calls are made on their own." }
               }
             }
             Button { label: "Next", variant: BtnVariant::Primary, on_click: move |_| step += 1 }
           },
           _ => rsx! {
             div { class: "flex flex-col gap-1 w-full",
-              div { class: "text-xl", "Bring your own model" }
+              div { class: "text-xl", "Configure your models" }
               div { class: "text-nc-text/80",
-                "NovelCraft talks to any OpenAI-compatible API. We recommend "
+                "NovelCraft talks to OpenAI-compatible APIs. By default all three agents run on "
+                a {
+                  class: LINK_CLASS,
+                  href: "https://docs.novelcraft.quest/inference#quills",
+                  target: "_blank",
+                  rel: "noopener noreferrer",
+                  "NovelCraft's hosted inference"
+                }
+                ", authenticated with your NovelCraft account — log in from the title bar any time."
+              }
+              div { class: "text-nc-text/80",
+                "Prefer your own infrastructure? Switch a model to API Key mode and point it at any "
                 a {
                   class: LINK_CLASS,
                   href: "https://openrouter.ai/google/gemma-4-26b-a4b-it",
                   target: "_blank",
                   rel: "noopener noreferrer",
-                  "google/gemma-4-26b-a4b-it on OpenRouter"
+                  "OpenAI-compatible endpoint"
                 }
-                " — create an API key at openrouter.ai/keys and paste it below."
-              }
-              div { class: "text-nc-text/80",
-                "Free models are also available "
+                " — OpenRouter, a local llama.cpp server, you name it. Free models are available "
                 a {
                   class: LINK_CLASS,
                   href: "https://openrouter.ai/free",
@@ -113,7 +121,7 @@ pub fn Onboarding() -> Element {
                 ", which of course come with rather low rate limits. The same connection serves all three agents; you can fine-tune them any time in Settings."
               }
               div { class: "text-nc-text/80",
-                "Your API key is stored only on this device and is sent exclusively to the endpoint you configure."
+                "API keys are stored only on this device and are sent exclusively to the endpoint you configure."
               }
             }
             ModelGroup { purpose: ModelPurpose::DungeonMaster, models: [dm, suggestions, summarizer] }

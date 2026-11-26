@@ -86,6 +86,13 @@ const RANDOM_USERNAME_ANIMALS: &[&str] = &[
   "wren", "yak", "zebra",
 ];
 
+/// Serializes token rotations: the refresh endpoint burns the presented
+/// token (single-use), so concurrent 401 handlers queue here and re-read
+/// the latest token instead of re-presenting a burned one.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub static AUTH: GlobalSignal<AuthState> = GlobalSignal::new(AuthState::default);
+
 /// The signed-in account, as rendered by the title bar's `UserBox`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AuthState {
@@ -97,8 +104,6 @@ pub struct AuthState {
   /// persisted to disk. Consumed by logout to revoke the session.
   pub refresh_token: Option<String>,
 }
-
-pub static AUTH: GlobalSignal<AuthState> = GlobalSignal::new(AuthState::default);
 
 /// The persisted refresh token. `None` clears the stored session.
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -145,6 +150,22 @@ async fn apply_tokens(tokens: &TokenPair) {
 async fn clear_tokens() {
   client().set_access_token(None);
   store_token(None).await;
+}
+
+/// Rotate the stored refresh token into a fresh pair and apply it to the
+/// API client, the `AUTH` signal and the persisted session. Called by the
+/// API client's `auth_refresh` wrapper when an authed request answers 401,
+/// and by the GUI `ModelProvider`'s `Login` model when the LLM endpoint
+/// does.
+pub(crate) async fn refresh_session() -> Result<(), GuiError> {
+  let _guard = REFRESH_LOCK.lock().await;
+  // Re-read under the lock — a queued sibling may have rotated already.
+  let Some(refresh_token) = AUTH.read().refresh_token.clone() else {
+    return Err(GuiError::Api("Not signed in".to_string()));
+  };
+  let tokens = client().refresh(&RefreshRequest { refresh_token }).await?;
+  apply_tokens(&tokens).await;
+  Ok(())
 }
 
 /// Restore a persisted session at boot: rotate the stored refresh token

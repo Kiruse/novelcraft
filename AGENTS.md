@@ -32,7 +32,7 @@ novelcraft/
 │   ├── Cargo.toml              # Engine dependencies
 │   └── src/
 │       ├── lib.rs              # Crate root — re-exports modules + kiruklaw AgentMessageChunk
-│       ├── config.rs           # NovelCraftConfig, ModelPurpose, Models, DEFAULT_HOST / DEFAULT_SYSTEM_PROMPT / DEFAULT_SUMMARY_THRESHOLD
+│       ├── config.rs           # NovelCraftConfig, ModelConfig (Login | OpenAiCompatible), ModelPurpose, Models, ConfigProvider, DEFAULT_HOST / DEFAULT_SYSTEM_PROMPT / DEFAULT_SUMMARY_THRESHOLD
 │       ├── error.rs            # EngineError (thiserror)
 │       ├── paths.rs            # data_dir(), config_dir(), sessions_dir() — centralized path resolution
 │       ├── util/               # Engine utilities
@@ -64,7 +64,8 @@ novelcraft/
 │   ├── assets/tailwind.css     # Compiled stylesheet (build artifact, do not edit)
 │   └── src/
 │       ├── main.rs             # Entry point — config load, engine construction, BOOT_CONFIG stash, launch, App (stylesheet, toasts, router; boots auth::restore + events::spawn_supervisor)
-│       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded query refreshes, turn navigation
+│       ├── engine.rs           # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine<GuiConfig>>>>, async engine ops, generation-guarded query refreshes, turn navigation
+│       ├── config.rs           # GuiConfig — the engine config plus the GUI-owned `onboarded` flag; implements the engine's ConfigProvider + ModelProvider (Login variants assemble the hosted-inference endpoint & account token)
 │       ├── auth.rs             # Social-API auth — AUTH signal, boot-time session restore, login/register/logout, random usernames
 │       ├── events.rs           # Shared account-event stream (GET /events) — supervisor task + QUILLS signal (live balance)
 │       ├── state.rs            # Global reactive state — Query<T> (Empty/Error/Stale/Recent), GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
@@ -104,7 +105,7 @@ novelcraft/
 | Game state | `engine/src/game/state.rs` | `GameState`/`ModuleState`/`GameStateView` — per-module `RwLock`ed JSON state, replay, snapshots |
 | Gameplay modules | `engine/src/game/module/` | `GameplayModule` enum (`module/mod.rs`) + one file per module; each module's `ID` const **must** equal its `#[toolset(strip_suffix = "module")]` namespace |
 | Profiles | `engine/src/game/profile.rs` | `ProfileV1` — lives inside `config.json`, not a separate store |
-| Engine config | `engine/src/config.rs` | `NovelCraftConfig`, `ModelPurpose`, `Models`, `DEFAULT_HOST`, `DEFAULT_SYSTEM_PROMPT`, `DEFAULT_SUMMARY_THRESHOLD` |
+| Engine config | `engine/src/config.rs` | `NovelCraftConfig`, `ModelPurpose`, `ModelConfig` (`Login` \| `OpenAiCompatible`), `Models`, `ConfigProvider`, `DEFAULT_HOST`, `DEFAULT_SYSTEM_PROMPT`, `DEFAULT_SUMMARY_THRESHOLD` |
 | Path Resolution | `engine/src/paths.rs` | `data_dir()`, `config_dir()`, `sessions_dir()` — single source of truth for filesystem paths |
 | Engine Utilities | `engine/src/util/` | `mod.rs` (RFC3339 timestamp serde, `discard_channel`), `fs.rs` (cfg-split file I/O — native `tokio::fs` vs web OPFS), `fs/opfs.rs` (web-only OPFS primitives), `prompting.rs` (`PromptFormatter`, `Promptify`) |
 | Markdown Utilities | `engine/src/markdown/` | `todo.rs` (`TodoItem`, `TodoList`, `TodoListDiff`), `bullets.rs` (`BulletList` — chapter-notes validation) |
@@ -131,12 +132,12 @@ There is no action system. Navigation goes through the Dioxus Router: `navigator
 
 Models are configured in Rust, persisted to disk as JSON, and held in the engine config.
 
-- **Engine side**: `NovelCraftConfig` (defined in `engine/src/config.rs`, persisted at `{configDir}/NovelCraft/config.json`) holds `max_agent_steps`, `system_prompt`, `models: Models` — an `exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>` keyed by **all three** `ModelPurpose` variants (`DungeonMaster`, `Suggestions`, `Summarizer`) — plus `summary_threshold`, `context_length`, `profiles`, `active_profile`, and `onboarded` (first-boot onboarding done; `#[serde(default = true)]` so pre-existing config files skip onboarding, fresh `Default` configs start `false`).
-- Each `ModelConfig` (re-exported from `kiruklaw-agent-loop`, internally tagged) is `ModelConfig::OpenAi { base_url, api_key, model }`, where `model` is the actual LLM API model identifier.
-- **Because `Models` is exhaustive, `config.json` must contain a `summarizer` key.** The `Summarizer` purpose was added in the memory rewrite — existing users migrate their local config manually. `summary_threshold` is `#[serde(default)]` (defaults to `DEFAULT_SUMMARY_THRESHOLD` = 50), and `context_length` defaults to `DEFAULT_CONTEXT_LENGTH` = 8192 (the assumed DM context window, rendered by the GUI's sidebar context meter), so older configs still deserialize.
-- `NovelCraftConfig::contribute()` pushes `max_agent_steps`, `system_prompt` (the DM persona), and the Dungeon Master model into the `AgentLoop`. The loop is also built with `hide_tool_history` enabled: tool calls & results from earlier rounds are stripped from each request (module contexts and the rolling summary re-inject the relevant state; the narrative text reflects their outcomes) — a token-usage optimization. It also requests reasoning (`reasoning: { effort: "medium" }`, the OpenRouter-unified parameter; models without reasoning support ignore it) so the DM plans its tool calls before narrating. The Summarizer model is used only by the one-shot memory-compression call, without reasoning.
-- Default host is `http://localhost:8888/v1` (`DEFAULT_HOST` — local llama.cpp/LM Studio server); the default system prompt is the Dungeon Master persona in `config.rs` (it instructs the DM to maintain chapter notes with the memory tools).
-- The GUI's Settings screen edits this config (three model groups + "Summary Threshold (turns)" and "Context Window (tokens)" fields) and persists it via `engine::save_config` (`config.save()` + `NovelCraftEngine::set_config`).
+- **Engine side**: `NovelCraftConfig` (defined in `engine/src/config.rs`, persisted at `{configDir}/NovelCraft/config.json`) holds `version`, `max_agent_steps`, `system_prompt`, `models: Models` — an `exhaustive_map::ExhaustiveMap<ModelPurpose, ModelConfig>` keyed by **all three** `ModelPurpose` variants (`DungeonMaster`, `Suggestions`, `Summarizer`) — plus `summary_threshold`, `context_length`, `profiles`, and `active_profile`. It does **not** know about onboarding — that flag lives in the GUI's `GuiConfig`.
+- Each `ModelConfig` (defined in `engine/src/config.rs`, **internally tagged** `#[serde(tag = "type")]` — on disk as `{"type": "Login", ...}`) is either `ModelConfig::Login { model }` — hosted inference through the NovelCraft API, whose endpoint & credentials are **assembled by the GUI provider** — or `ModelConfig::OpenAiCompatible { base_url, api_key, model }` — a user-configured endpoint with a manual bearer key (an empty key sends no `Authorization` header). Models are resolved per call via the `ModelProvider` trait (`engine/src/game/engine.rs`): the engine's own impl (`NovelCraftConfig`) maps `Login` to the default host **without credentials**; the GUI's `GuiConfig` impl (`gui/src/config.rs`) replaces it with the signed-in account's access token.
+- **Because `Models` is exhaustive, `config.json` must contain a `summarizer` key.** The `Summarizer` purpose was added in the memory rewrite — existing users migrate their local config manually. `summary_threshold` defaults to `DEFAULT_SUMMARY_THRESHOLD` = 50, `context_length` to `DEFAULT_CONTEXT_LENGTH` = 8192 (the assumed DM context window, rendered by the GUI's sidebar context meter), and `version` to `1` — configs predating those fields still deserialize.
+- `NovelCraftConfig::contribute()` pushes `max_agent_steps` and `system_prompt` (the DM persona) into the `AgentLoop`; the model is handed to each `AgentLoop::run` / one-shot `prompt` call as `&impl OpenAiCompatible` (kiruklaw's trait: `base_url`/`model`/`auth` → `Option<&str>` + a `refresh_auth` re-run once on a mid-run 401 — the GUI's `Model` impl rotates the account session via `auth::refresh_session`). The loop is also built with `hide_tool_history` enabled: tool calls & results from earlier rounds are stripped from each request (module contexts and the rolling summary re-inject the relevant state; the narrative text reflects their outcomes) — a token-usage optimization. It also requests reasoning (`reasoning: { effort: "medium" }`, the OpenRouter-unified parameter; models without reasoning support ignore it) so the DM plans its tool calls before narrating. The Summarizer model is used only by the one-shot memory-compression call, without reasoning.
+- Default host is `https://api.novelcraft.quest` (`DEFAULT_HOST` — the NovelCraft hosted-inference API); the default system prompt is the Dungeon Master persona in `config.rs` (it instructs the DM to maintain chapter notes with the memory tools).
+- The GUI's Settings screen edits this config (three model groups + "Summary Threshold (turns)" and "Context Window (tokens)" fields) and persists it via `engine::save_config` (`GuiConfig::save()` + `NovelCraftEngine::set_config`).
 
 ### Agent / LLM Integration
 
@@ -387,7 +388,7 @@ All build and development commands are in the root `justfile`.
 
 | Crate | Purpose |
 |-------|---------|
-| `kiruklaw-agent-loop` | Agent loop, toolsets (`#[toolset]`), LLM HTTP streaming + SSE parsing, `ModelConfig` (git dependency) |
+| `kiruklaw-agent-loop` | Agent loop, toolsets (`#[toolset]`), LLM HTTP streaming + SSE parsing, `OpenAiCompatible` trait (git dependency) |
 | `tokio` (full) | Async runtime |
 | `serde` / `serde_json` | Serialization — gamestate is stored as JSON values |
 | `exhaustive-map` | `Models` as `ExhaustiveMap<ModelPurpose, ModelConfig>` |

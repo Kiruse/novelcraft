@@ -3,7 +3,6 @@ use std::sync::{Arc, OnceLock};
 
 use dioxus::prelude::*;
 use log::error;
-use novelcraft_engine::config::NovelCraftConfig;
 use novelcraft_engine::error::EngineError;
 use novelcraft_engine::game::engine::NovelCraftEngine;
 use novelcraft_engine::game::profile::ProfileV1;
@@ -11,21 +10,23 @@ use novelcraft_engine::game::session::SessionV2;
 use novelcraft_engine::AgentMessageChunk;
 use tokio::sync::Mutex;
 
+use crate::config::GuiConfig;
+use crate::error::GuiError;
 use crate::state::{Profiles, Query, CONFIG, CONTEXT_USAGE, PREMISE_PAGE, PROFILES, REASONING, SESSION, SESSIONS, STREAM, TURN, TURN_INDEX};
 use crate::toast::{push_toast, Toast};
 
-static ENGINE: OnceLock<Arc<Mutex<NovelCraftEngine>>> = OnceLock::new();
+static ENGINE: OnceLock<Arc<Mutex<NovelCraftEngine<GuiConfig>>>> = OnceLock::new();
 static SESSIONS_GEN: AtomicUsize = AtomicUsize::new(0);
 static TURN_GEN: AtomicUsize = AtomicUsize::new(0);
 
 /// Construct the process-wide engine. Must be called exactly once, before
 /// any engine operation (done by the `App` boot gate).
-pub fn init_engine(config: NovelCraftConfig) {
+pub fn init_engine(config: GuiConfig) {
   let _ = ENGINE.set(Arc::new(Mutex::new(NovelCraftEngine::new(config))));
 }
 
 #[inline]
-fn engine() -> Arc<Mutex<NovelCraftEngine>> {
+fn engine() -> Arc<Mutex<NovelCraftEngine<GuiConfig>>> {
   ENGINE.get().expect("engine not initialized").clone()
 }
 
@@ -34,7 +35,7 @@ fn engine() -> Arc<Mutex<NovelCraftEngine>> {
 pub fn refresh_sessions() {
   let round = SESSIONS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
   spawn(async move {
-    let res = NovelCraftEngine::list_sessions()
+    let res = NovelCraftEngine::<GuiConfig>::list_sessions()
       .await
       .map_err(|e| e.to_string());
     if SESSIONS_GEN.load(Ordering::Relaxed) == round {
@@ -45,7 +46,7 @@ pub fn refresh_sessions() {
 
 #[allow(dead_code)]
 pub async fn refresh_config_async() {
-  let value = engine().lock().await.config().clone();
+  let value = engine().lock().await.get_config().clone();
   CONFIG.write().publish(Ok(value));
 }
 
@@ -55,7 +56,7 @@ pub fn refresh_config() {
 }
 
 pub async fn refresh_profiles_async() {
-  let value = Profiles::from(engine().lock().await.config());
+  let value = Profiles::from(engine().lock().await.get_config());
   PROFILES.write().publish(Ok(value));
 }
 
@@ -196,7 +197,7 @@ pub async fn play_session(id: String) {
   let engine = engine();
   let res: Result<SessionV2, EngineError> = async {
     let mut eng = engine.lock().await;
-    let session = SessionV2::load(id, &eng.config().profiles).await?;
+    let session = SessionV2::load(id, &eng.get_base_config().profiles).await?;
     eng.set_session(Some(session.clone()));
     Ok(session)
   }
@@ -299,7 +300,7 @@ pub async fn switch_profile(id: String) {
 
 /// Persist the config to disk, sync it with the engine, and publish it to
 /// the config & profiles queries.
-pub async fn save_config(config: NovelCraftConfig) -> Result<(), EngineError> {
+pub async fn save_config(config: GuiConfig) -> Result<(), GuiError> {
   config.save().await?;
   engine().lock().await.set_config(config.clone());
   *CONFIG.write() = Query::Recent(config.clone());
@@ -393,7 +394,11 @@ pub fn regenerate() {
     // finishes, closing this loop.
     spawn(drain_chunks(rx));
 
-    let res = engine.lock().await.regenerate(tx).await;
+    let res: Result<(), EngineError> = async {
+      let mut eng = engine.lock().await;
+      eng.regenerate(tx).await
+    }
+    .await;
 
     *STREAM.write() = None;
     if let Err(err) = res {

@@ -47,9 +47,9 @@ pub fn Settings() -> Element {
       .parse()
       .unwrap_or(config.context_length);
     config.system_prompt = system_prompt.read().clone();
-    config.models[ModelPurpose::DungeonMaster] = dm.read().clone().into_config();
-    config.models[ModelPurpose::Suggestions] = suggestions.read().clone().into_config();
-    config.models[ModelPurpose::Summarizer] = summarizer.read().clone().into_config();
+    dm.read().clone().write_to(ModelPurpose::DungeonMaster, &mut config);
+    suggestions.read().clone().write_to(ModelPurpose::Suggestions, &mut config);
+    summarizer.read().clone().write_to(ModelPurpose::Summarizer, &mut config);
 
     spawn(async move {
       match engine::save_config(config).await {

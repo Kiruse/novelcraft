@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use kiruklaw_agent_loop::{Conversation, ConversationMessage, ModelConfig, prompt as llm_prompt};
+use kiruklaw_agent_loop::{
+  Conversation, ConversationMessage, OpenAiCompatible, prompt as llm_prompt,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
@@ -262,7 +264,11 @@ impl SessionV2 {
   /// Returns whether a compression happened. If the summarizer model fails,
   /// nothing is mutated and the compression is simply retried on a later
   /// trigger.
-  pub async fn compress_memory(&mut self, threshold: usize, model: &ModelConfig) -> Result<bool, EngineError> {
+  pub async fn compress_memory(
+    &mut self,
+    threshold: usize,
+    model: &impl OpenAiCompatible
+  ) -> Result<bool, EngineError> {
     if !self.should_compress(threshold) {
       return Ok(false);
     }
@@ -337,7 +343,10 @@ fn render_transcript(f: &mut PromptFormatter, turns: &[TurnV2], prev: &str) -> P
 
 /// One-shot summarizer call merging a turn transcript (including the
 /// previous rolling summary) into the new rolling story summary.
-async fn summarize(model: &ModelConfig, transcript: &str) -> Result<String, EngineError> {
+async fn summarize(
+  model: &impl OpenAiCompatible,
+  transcript: &str,
+) -> Result<String, EngineError> {
   let (msg, _) = llm_prompt(
     model,
     &[],

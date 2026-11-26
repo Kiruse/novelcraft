@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
-use novelcraft_engine::config::{DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose};
+use novelcraft_engine::config::{
+  DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose, NovelCraftConfig,
+};
 
 use crate::api;
 use crate::auth::{self, AUTH};
@@ -182,10 +184,25 @@ pub fn FieldGroup(props: FieldGroupProps) -> Element {
   }
 }
 
+/// Credential source of a model — the two [`ModelConfig`] variants:
+/// requests flow through the NovelCraft hosted API authenticated with the
+/// signed-in account, or to a user-configured OpenAI-compatible endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModelSource {
+  Login,
+  Custom,
+}
+
 /// Editable fields of a single model config — shared by the Settings and
-/// Onboarding screens.
+/// Onboarding screens. `source` picks the [`ModelConfig`] variant written
+/// back: [`ModelSource::Login`] assembles its endpoint & credentials from
+/// across the app (hosted inference host + the signed-in account's session
+/// token), so only the model identifier is persisted; [`ModelSource::Custom`]
+/// points at a manually configured OpenAI-compatible endpoint with its API
+/// key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelFields {
+  pub source: ModelSource,
   pub base_url: String,
   pub api_key: String,
   pub model: String,
@@ -194,6 +211,7 @@ pub struct ModelFields {
 impl Default for ModelFields {
   fn default() -> Self {
     Self {
+      source: ModelSource::Login,
       base_url: DEFAULT_HOST.to_string(),
       api_key: String::new(),
       model: DEFAULT_MODEL.to_string(),
@@ -202,25 +220,36 @@ impl Default for ModelFields {
 }
 
 impl ModelFields {
-  pub fn from_config(config: &ModelConfig) -> Self {
-    let ModelConfig::OpenAi {
-      base_url,
-      api_key,
-      model,
-    } = config;
-    Self {
-      base_url: base_url.clone(),
-      api_key: api_key.clone(),
-      model: model.clone(),
+  pub fn from_config(model_cfg: &ModelConfig) -> Self {
+    match model_cfg {
+      ModelConfig::Login { model } => Self {
+        source: ModelSource::Login,
+        base_url: DEFAULT_HOST.to_string(),
+        api_key: String::new(),
+        model: model.clone(),
+      },
+      ModelConfig::OpenAiCompatible { base_url, api_key, model } => Self {
+        source: ModelSource::Custom,
+        base_url: base_url.clone(),
+        api_key: api_key.clone(),
+        model: model.clone(),
+      },
     }
   }
 
-  pub fn into_config(self) -> ModelConfig {
-    ModelConfig::OpenAi {
-      base_url: self.base_url.trim().to_string(),
-      api_key: self.api_key.clone(),
-      model: self.model.trim().to_string(),
-    }
+  /// Write the fields into the model config under `purpose`.
+  pub fn write_to(self, purpose: ModelPurpose, config: &mut NovelCraftConfig) {
+    let ModelFields { source, base_url, api_key, model } = self;
+    config.models[purpose] = match source {
+      ModelSource::Login => ModelConfig::Login {
+        model: model.trim().to_string(),
+      },
+      ModelSource::Custom => ModelConfig::OpenAiCompatible {
+        base_url: base_url.trim().to_string(),
+        api_key: api_key.trim().to_string(),
+        model: model.trim().to_string(),
+      },
+    };
   }
 }
 
@@ -258,6 +287,7 @@ pub fn ModelGroup(props: ModelGroupProps) -> Element {
   let set_model = move |ev: FormEvent| {
     fields.write().model = ev.value();
   };
+  let set_source = move |source| fields.write().source = source;
 
   let spread_base_url = move |_| {
     let value = fields.read().base_url.clone();
@@ -278,30 +308,41 @@ pub fn ModelGroup(props: ModelGroupProps) -> Element {
     }
   };
 
+  let login = fields.read().source == ModelSource::Login;
+
   rsx! {
     FieldGroup { label: props.purpose.as_str(),
-      Field { label: "Base URL",
-        div { class: "flex flex-row items-center gap-1 w-full",
-          input {
-            class: INPUT_CLASS,
-            placeholder: DEFAULT_HOST,
-            value: "{fields.read().base_url}",
-            oninput: set_base_url,
-          }
-          ApplyEverywhere { on_click: spread_base_url }
-        }
+      Field {
+        label: "Source",
+        hint: "Where the requests go: Login runs the model on NovelCraft's hosted inference, authenticated with the signed-in account. API Key sends requests to any OpenAI-compatible endpoint with a manually configured key.",
+        SourceToggle { value: fields.read().source, on_change: set_source }
       }
-      Field { label: "API Key",
-        div { class: "flex flex-row items-center gap-1 w-full",
-          input {
-            class: INPUT_CLASS,
-            r#type: "password",
-            value: "{fields.read().api_key}",
-            oninput: set_api_key,
+      { if login { rsx! {} } else {
+          rsx! {
+            Field { label: "Base URL",
+              div { class: "flex flex-row items-center gap-1 w-full",
+                input {
+                  class: INPUT_CLASS,
+                  placeholder: DEFAULT_HOST,
+                  value: "{fields.read().base_url}",
+                  oninput: set_base_url,
+                }
+                ApplyEverywhere { on_click: spread_base_url }
+              }
+            }
+            Field { label: "API Key",
+              div { class: "flex flex-row items-center gap-1 w-full",
+                input {
+                  class: INPUT_CLASS,
+                  r#type: "password",
+                  value: "{fields.read().api_key}",
+                  oninput: set_api_key,
+                }
+                ApplyEverywhere { on_click: spread_api_key }
+              }
+            }
           }
-          ApplyEverywhere { on_click: spread_api_key }
-        }
-      }
+        } }
       Field { label: "Model",
         div { class: "flex flex-row items-center gap-1 w-full",
           input {
@@ -310,6 +351,48 @@ pub fn ModelGroup(props: ModelGroupProps) -> Element {
             oninput: set_model,
           }
           ApplyEverywhere { on_click: spread_model }
+        }
+      }
+    }
+  }
+}
+
+/// Options of the [`SourceToggle`]: credential sources with their labels.
+const MODEL_SOURCES: [(ModelSource, &str); 2] = [
+  (ModelSource::Login, "Login"),
+  (ModelSource::Custom, "API Key"),
+];
+
+/// Conjoined radio buttons for the model credential source — exactly one
+/// of the two segments is active at a time.
+#[derive(Props, Clone, PartialEq)]
+pub struct SourceToggleProps {
+  value: ModelSource,
+  on_change: EventHandler<ModelSource>,
+}
+
+/// Segment styling of the [`SourceToggle`]: state classes (unselected /
+/// selected), corner rounding and shared-border trims. Statically
+/// spelled-out literals — the Tailwind scanner compiles the utilities.
+const TOGGLE_STATE: [&str; 2] = [
+  "bg-transparent text-nc-text border-nc-border hover:bg-nc-text/10 hover:border-nc-label",
+  "bg-nc-text text-nc-bg border-nc-text hover:bg-nc-text/85",
+];
+const TOGGLE_CORNERS: [&str; 2] = ["rounded-l-sm rounded-r-none", "rounded-r-sm rounded-l-none"];
+const TOGGLE_EDGES: [&str; 2] = ["border-r-0", ""];
+
+#[component]
+pub fn SourceToggle(props: SourceToggleProps) -> Element {
+  rsx! {
+    div { class: "flex w-full",
+      for (idx, (source, label)) in MODEL_SOURCES.iter().enumerate() {
+        button {
+          key: "{idx}",
+          class: "flex-1 py-1.5 text-sm border cursor-pointer \
+                  {TOGGLE_STATE[(*source == props.value) as usize]} \
+                  {TOGGLE_CORNERS[idx]} {TOGGLE_EDGES[idx]}",
+          onclick: move |_| props.on_change.call(*source),
+          { *label }
         }
       }
     }

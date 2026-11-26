@@ -1,4 +1,4 @@
-use kiruklaw_agent_loop::{AgentToolset, ConversationMessage, prompt, toolset};
+use kiruklaw_agent_loop::{AgentToolset, ConversationMessage, OpenAiCompatible, prompt, toolset};
 use serde::{Deserialize, Serialize};
 
 use crate::error::EngineError;
@@ -14,12 +14,16 @@ pub struct PlayerModule {
 }
 
 impl PlayerModule {
-  pub async fn init(&self, ctx: &mut GameplayModuleInitContext<'_>) -> Result<(), EngineError> {
+  pub async fn init(
+    &self,
+    ctx: &mut GameplayModuleInitContext<'_>,
+    model: &impl OpenAiCompatible,
+  ) -> Result<(), EngineError> {
     if let Some(profile) = ctx.profile {
       let mut fields = profile.fields.clone();
       fields.insert("Name".to_string(), profile.name.clone());
       let (msg, _) = prompt(
-        &ctx.model_cfg,
+        model,
         &[],
         vec![
           ConversationMessage::system("Following is the user's RPG character profile. Please extract the player character's apparel as a short, comma-separated list.".to_string()).into(),

@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod comps;
+mod config;
 mod engine;
 mod error;
 mod events;
@@ -14,8 +15,8 @@ mod toast;
 
 use dioxus::prelude::*;
 use log::warn;
-use novelcraft_engine::config::NovelCraftConfig;
 
+use crate::config::GuiConfig;
 use crate::screens::onboarding::Onboarding;
 use crate::screens::Route;
 use crate::state::{Query, CONFIG};
@@ -57,11 +58,11 @@ fn App() -> Element {
 
   use_effect(move || {
     spawn(async move {
-      let config = match NovelCraftConfig::load().await {
+      let config = match GuiConfig::load().await {
         Ok(config) => config,
         Err(err) => {
           warn!("Failed to load engine config, using defaults: {err}");
-          NovelCraftConfig::default()
+          GuiConfig::default()
         }
       };
       engine::init_engine(config.clone());

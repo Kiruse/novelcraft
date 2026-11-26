@@ -4,6 +4,7 @@ use tokio::sync::mpsc::Sender;
 
 pub mod fs;
 pub mod prompting;
+pub mod json;
 
 pub(crate) fn serialize_timestamp<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
 where S: Serializer

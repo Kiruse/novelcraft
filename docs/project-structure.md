@@ -50,7 +50,8 @@ novelcraft/
 │   ├── assets/tailwind.css           # Compiled stylesheet (build artifact, do not edit)
 │   └── src/
 │       ├── main.rs                   # Entry point — config load, engine construction, BOOT_CONFIG stash, launch, App
-│       ├── engine.rs                 # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine>>>, async engine ops, generation-guarded refreshes, window-relative turn navigation
+│       ├── engine.rs                 # Engine bridge — OnceLock<Arc<Mutex<NovelCraftEngine<GuiConfig>>>>, async engine ops, generation-guarded refreshes, window-relative turn navigation
+│       ├── config.rs                 # GuiConfig — the engine config plus the GUI-owned `onboarded` flag; implements the engine's ConfigProvider + ModelProvider (Login variants assemble the hosted-inference endpoint & account token)
 │       ├── auth.rs                   # Social-API auth — AUTH signal, boot-time session restore, login/register/logout, random usernames
 │       ├── state.rs                  # Global reactive state — Query<T>, GlobalSignals (CONFIG, PROFILES, SESSIONS, SESSION, TURN/TURN_INDEX, STREAM)
 │       ├── toast.rs                  # Toast notifications (global signal + overlay component)
@@ -83,7 +84,7 @@ Pure Rust library with all business logic. No UI framework coupling.
 
 **`engine/src/`**
 - `lib.rs` — Crate root; declares the modules and re-exports `kiruklaw_agent_loop` as `agent_loop` plus `AgentMessageChunk`
-- `config.rs` — `NovelCraftConfig` (`max_agent_steps`, `system_prompt`, `models`, `summary_threshold`, `profiles`, `active_profile`). `ModelPurpose` enum (`DungeonMaster`/`Suggestions`/`Summarizer`); `Models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — config.json must contain all three keys. Persisted at `{configDir}/NovelCraft/config.json`. `contribute()` pushes max steps, persona & DM model into the agent loop
+- `config.rs` — `NovelCraftConfig` (`version`, `max_agent_steps`, `system_prompt`, `models`, `summary_threshold`, `context_length`, `profiles`, `active_profile`). `ModelPurpose` enum (`DungeonMaster`/`Suggestions`/`Summarizer`); `Models` is an `ExhaustiveMap<ModelPurpose, ModelConfig>` — config.json must contain all three keys. `ModelConfig` (`Login { model }` hosted through the NovelCraft API | `OpenAiCompatible { base_url, api_key, model }` user endpoint) — the `Login` variant's endpoint & credentials are assembled by the GUI's `ModelProvider` impl; the engine's own impl serves it without credentials. `load_json` runs a version-gated migration: v0 (legacy kiruklaw `"type": "open_ai"` entries, no `version` field) is rewritten into the current internally-tagged (`"type": "Login"`/`"OpenAiCompatible"`) shape; future versions are rejected. Persisted at `{configDir}/NovelCraft/config.json`. `contribute()` pushes max steps & persona into the agent loop
 - `error.rs` — `EngineError` (thiserror) with constructors like `EngineError::state`, `EngineError::validation`, `EngineError::module_not_found`
 - `paths.rs` — `data_dir()`, `config_dir()`, `sessions_dir()` — append `NovelCraft` to the platform directories (`dirs` crate); single source of truth for filesystem paths
 - `util/` — `mod.rs`: RFC3339 timestamp serde, `discard_channel`. `fs.rs`: cfg-split file I/O (`serialize`, `deserialize`, `ensure_dir`, `remove_file`, `list_dir` — native `tokio::fs` vs web OPFS), `fs/opfs.rs`: web-only OPFS primitives. `prompting.rs`: `PromptFormatter`/`Promptify` for building indented prompt text (used for module contexts, transcripts, summaries)

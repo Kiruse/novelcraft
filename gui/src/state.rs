@@ -1,12 +1,13 @@
 use std::sync::OnceLock;
 
 use dioxus::prelude::*;
-use novelcraft_engine::config::NovelCraftConfig;
 use novelcraft_engine::game::engine::ContextUsage;
 use novelcraft_engine::game::turns::TurnV2;
 use novelcraft_engine::game::profile::ProfileV1;
 use novelcraft_engine::game::session::SessionV2;
 use novelcraft_engine::AgentMessageChunk;
+
+use crate::config::GuiConfig;
 
 /// Result of an engine query, mirroring the semantics of the previous
 /// gpui `EngineQuery`: a fresh value, an error without value, or a stale
@@ -67,11 +68,11 @@ impl Profiles {
   }
 }
 
-impl From<&NovelCraftConfig> for Profiles {
-  fn from(config: &NovelCraftConfig) -> Self {
+impl From<&GuiConfig> for Profiles {
+  fn from(config: &GuiConfig) -> Self {
     Self {
-      profiles: config.profiles.clone(),
-      active_profile: config.active_profile.clone(),
+      profiles: config.base.profiles.clone(),
+      active_profile: config.base.active_profile.clone(),
     }
   }
 }
@@ -137,9 +138,9 @@ mod tests {
 /// The config the engine booted with. Set during the `App` boot gate —
 /// the config & profiles queries lazily seed themselves from it on first
 /// read inside the Dioxus runtime.
-pub static BOOT_CONFIG: OnceLock<NovelCraftConfig> = OnceLock::new();
+pub static BOOT_CONFIG: OnceLock<GuiConfig> = OnceLock::new();
 
-pub static CONFIG: GlobalSignal<Query<NovelCraftConfig>> = GlobalSignal::new(|| {
+pub static CONFIG: GlobalSignal<Query<GuiConfig>> = GlobalSignal::new(|| {
   BOOT_CONFIG
     .get()
     .map(|config| Query::Recent(config.clone()))

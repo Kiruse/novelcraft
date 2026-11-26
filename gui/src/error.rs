@@ -4,6 +4,7 @@ use novelcraft_engine::error::EngineError;
 pub enum GuiError {
   #[error(transparent)]
   Engine(#[from] EngineError),
+
   /// An error response from the social API: the HTTP status and the
   /// server's safe public message.
   #[error("{status}: {message}")]
@@ -11,6 +12,10 @@ pub enum GuiError {
     status: u16,
     message: String,
   },
+
   #[error("{0}")]
   Api(String),
+
+  #[error("{0}")]
+  Config(String),
 }
