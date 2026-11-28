@@ -646,7 +646,7 @@
         ]
       }
     },
-    "/chat/models": {
+    "/models": {
       "get": {
         "tags": [
           "chat"

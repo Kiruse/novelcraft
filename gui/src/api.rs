@@ -108,6 +108,29 @@ pub struct SavesResponse {
   pub saves: Vec<SaveMeta>,
 }
 
+/// One entry of the supported-models list (`GET /models`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ModelEntry {
+  /// The model identifier handed to the completions endpoint.
+  pub id: String,
+}
+
+/// The supported inference models (`GET /models`) — the OpenAI-shaped
+/// `/chat/models` list behind a friendlier alias.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ModelsResponse {
+  pub data: Vec<ModelEntry>,
+}
+
+impl ModelsResponse {
+  /// The model identifiers, sorted alphabetically.
+  pub fn ids(&self) -> Vec<String> {
+    let mut ids: Vec<String> = self.data.iter().map(|model| model.id.clone()).collect();
+    ids.sort();
+    ids
+  }
+}
+
 /// `POST /auth/forgot-password` — always answers 202.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Accepted {
@@ -254,6 +277,16 @@ impl ApiClient {
   /// `GET /inspirations/tags` — every tag in use (flat, sorted, deduped).
   pub async fn list_inspiration_tags(&self) -> Result<Vec<String>, GuiError> {
     send(self.request(reqwest::Method::GET, "/inspirations/tags")).await
+  }
+
+  // ---- models (public) ----
+
+  /// `GET /models` — the supported inference models: the OpenAI-shaped
+  /// `/chat/models` list behind a friendlier alias, public so anonymous
+  /// clients (e.g. onboarding, signed-out settings) can render model
+  /// pickers.
+  pub async fn list_models(&self) -> Result<ModelsResponse, GuiError> {
+    send(self.request(reqwest::Method::GET, "/models")).await
   }
 
   // ---- auth ----
@@ -501,6 +534,21 @@ async fn send<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T
     .json::<T>()
     .await
     .map_err(|e| GuiError::Api(e.to_string()))
+}
+
+/// `GET {base_url}/models` — the model list of a user-configured
+/// OpenAI-compatible endpoint, the model-picker counterpart of the custom
+/// inference config. `api_key` is attached as the bearer when given.
+pub async fn list_models_at(
+  base_url: &str,
+  api_key: Option<&str>,
+) -> Result<ModelsResponse, GuiError> {
+  let mut request = reqwest::Client::new()
+    .get(format!("{}/models", base_url.trim_end_matches('/')));
+  if let Some(api_key) = api_key {
+    request = request.bearer_auth(api_key);
+  }
+  send(request).await
 }
 
 /// Like [`send`] for endpoints without a response body (204).

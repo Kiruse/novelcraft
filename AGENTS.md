@@ -74,7 +74,7 @@ novelcraft/
 │       ├── markdown.rs         # Markdown-like parser for streamed agent output (subset, unit tested)
 │       ├── modules.rs          # ModuleContext trait — per-module sidebar rendering & state edits (default tree editor + memory impl)
 │       ├── titlebar.rs         # Window chrome — custom title bar (drag/minimize/maximize/close) + resize handles
-│       ├── api.rs              # NovelCraft API client (docs/api.json — inspirations, auth, quills, saves, events; /chat/* excluded)
+│       ├── api.rs              # NovelCraft API client (docs/api.json — inspirations, models, auth, quills, saves, events; /chat/* excluded)
 │       ├── error.rs            # GuiError (thiserror): Engine/Api/ApiStatus variants
 │       └── screens/            # Route enum (Routable, mod.rs) + one component module per screen
 │           ├── mod.rs          # Route enum + go_back()

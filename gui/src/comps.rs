@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use dioxus::prelude::*;
 use novelcraft_engine::config::{
   DEFAULT_HOST, DEFAULT_MODEL, ModelConfig, ModelPurpose, NovelCraftConfig,
@@ -274,6 +276,15 @@ fn purpose_index(purpose: ModelPurpose) -> usize {
   }
 }
 
+/// Grace period after the last endpoint-relevant edit before the model
+/// suggestions are refetched, so bursts of keystrokes coalesce into a
+/// single request.
+const MODELS_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// Fetch state of a model suggestion list: in flight (`None`), failed, or
+/// the sorted model identifiers of the configured endpoint.
+type ModelsState = Option<Result<Vec<String>, String>>;
+
 #[component]
 pub fn ModelGroup(props: ModelGroupProps) -> Element {
   let mut fields = props.models[purpose_index(props.purpose)];
@@ -310,6 +321,63 @@ pub fn ModelGroup(props: ModelGroupProps) -> Element {
 
   let login = fields.read().source == ModelSource::Login;
 
+  // Model suggestions of the endpoint this group's requests go to: the
+  // hosted inference API for Login sources, the configured endpoint itself
+  // for custom ones. Fetched on mount and whenever the refetch trigger
+  // (see `endpoint`) settles, debounced, with stale responses discarded
+  // via the generation counter.
+  let mut models: Signal<ModelsState> = use_signal(|| None);
+  let mut models_gen = use_signal(|| 0usize);
+  let mut models_open = use_signal(|| false);
+
+  // The refetch trigger: the credential source plus, for custom endpoints,
+  // the target URL & key — exactly the fields that decide where the
+  // suggestion request goes (typing the model name itself must not
+  // refetch; the memo's equality gate skips those runs).
+  let endpoint = use_memo(move || {
+    let fields = fields.read();
+    match fields.source {
+      ModelSource::Login => (fields.source, String::new(), String::new()),
+      ModelSource::Custom => (
+        fields.source,
+        fields.base_url.trim().to_string(),
+        fields.api_key.trim().to_string(),
+      ),
+    }
+  });
+
+  use_effect(move || {
+    let (source, base_url, api_key) = endpoint.read().clone();
+    // Bump the generation counter through its write guard — reading it
+    // here would subscribe this effect to its own writes and re-run it
+    // forever.
+    let generation = {
+      let mut counter = models_gen.write();
+      *counter += 1;
+      *counter
+    };
+    spawn(async move {
+      crate::time::sleep(MODELS_DEBOUNCE).await;
+      if *models_gen.read() != generation {
+        return;
+      }
+      let result = match source {
+        ModelSource::Login => api::client().list_models().await,
+        ModelSource::Custom if !base_url.is_empty() => {
+          let key = (!api_key.is_empty()).then_some(api_key.as_str());
+          api::list_models_at(&base_url, key).await
+        }
+        ModelSource::Custom => Err(GuiError::Api("No endpoint configured".to_string())),
+      };
+      if *models_gen.read() == generation {
+        let result = result
+          .map(|response| response.ids())
+          .map_err(|err| err.to_string());
+        models.set(Some(result));
+      }
+    });
+  });
+
   rsx! {
     FieldGroup { label: props.purpose.as_str(),
       Field {
@@ -345,14 +413,94 @@ pub fn ModelGroup(props: ModelGroupProps) -> Element {
         } }
       Field { label: "Model",
         div { class: "flex flex-row items-center gap-1 w-full",
-          input {
-            class: INPUT_CLASS,
-            value: "{fields.read().model}",
-            oninput: set_model,
+          div { class: "relative flex-1 min-w-0",
+            input {
+              class: INPUT_CLASS,
+              value: "{fields.read().model}",
+              oninput: set_model,
+              onfocus: move |_| models_open.set(true),
+              onclick: move |_| models_open.set(true),
+              onkeydown: move |ev: KeyboardEvent| {
+                if ev.key() == Key::Escape {
+                  models_open.set(false);
+                }
+              },
+            }
+            { if *models_open.read() {
+                rsx! {
+                  // Click-away catcher behind the floating list.
+                  div {
+                    class: "fixed inset-0 z-40 cursor-default",
+                    onclick: move |_| models_open.set(false),
+                  }
+                  ModelOptions {
+                    state: models.read().clone(),
+                    filter: fields.read().model.clone(),
+                    on_select: move |id: String| {
+                      fields.write().model = id;
+                      models_open.set(false);
+                    },
+                  }
+                }
+              } else { rsx! {} } }
           }
           ApplyEverywhere { on_click: spread_model }
         }
       }
+    }
+  }
+}
+
+/// Floating suggestion list under the model input: the configured
+/// endpoint's models, locally filtered by the current input value
+/// (case-insensitive substring match; an empty input lists everything).
+/// Purely assistive — picking an option overrides the input, but the
+/// input stays a free-text field: custom model identifiers typed by hand
+/// are kept as-is and the list never validates them.
+#[derive(Props, Clone, PartialEq)]
+struct ModelOptionsProps {
+  state: ModelsState,
+  filter: String,
+  on_select: EventHandler<String>,
+}
+
+#[component]
+fn ModelOptions(props: ModelOptionsProps) -> Element {
+  let filter = props.filter.trim().to_lowercase();
+  rsx! {
+    div { class: "absolute left-0 right-0 top-full mt-1 z-50 flex flex-col max-h-64 overflow-y-auto \
+                  rounded-sm border border-nc-border bg-nc-bg shadow-lg",
+      { match &props.state {
+          None => rsx! {
+            div { class: "px-3 py-1.5", Loading { text: "Loading models ..." } }
+          },
+          Some(Err(_)) => rsx! {
+            div { class: "px-3 py-1.5 text-sm text-nc-label", "Failed to load models" }
+          },
+          Some(Ok(list)) => {
+            let matches: Vec<String> = list
+              .iter()
+              .filter(|id| id.to_lowercase().contains(&filter))
+              .cloned()
+              .collect();
+            if matches.is_empty() {
+              rsx! {
+                div { class: "px-3 py-1.5 text-sm text-nc-label", "No matching models" }
+              }
+            } else {
+              rsx! {
+                for id in matches {
+                  button {
+                    key: "{id}",
+                    class: "px-3 py-1.5 text-sm text-left cursor-pointer hover:bg-nc-text/10 truncate",
+                    onclick: move |_| props.on_select.call(id.clone()),
+                    { id.clone() }
+                  }
+                }
+              }
+            }
+          }
+      } }
     }
   }
 }
