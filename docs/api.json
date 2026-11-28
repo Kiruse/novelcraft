@@ -1277,6 +1277,12 @@
           "title": {
             "type": "string"
           },
+          "creative_direction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "premise": {
             "type": "string"
           },

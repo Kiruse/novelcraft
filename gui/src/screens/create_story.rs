@@ -119,10 +119,16 @@ pub fn CreateStory() -> Element {
           Some(Ok(list)) =>
             rsx! {
               div { class: "flex flex-col gap-2 w-full",
-                for inspiration in list.iter() {
+                for inspiration in list.iter().cloned() {
                   InspirationCard {
                     key: "{inspiration.title}",
                     inspiration: inspiration.clone(),
+                    on_click: move |_| {
+                      // Picking an inspiration overrides the current draft.
+                      title.set(inspiration.title.clone());
+                      premise.set(inspiration.premise.clone());
+                      direction.set(inspiration.creative_direction.clone().unwrap_or_default());
+                    },
                   }
                 }
               }
@@ -166,9 +172,11 @@ async fn fetch_tags() -> Result<Vec<String>, String> {
 }
 
 #[component]
-fn InspirationCard(inspiration: Inspiration) -> Element {
+fn InspirationCard(inspiration: Inspiration, on_click: EventHandler) -> Element {
   rsx! {
-    div { class: "w-full p-3 flex flex-col gap-1 border rounded-sm border-nc-border",
+    div {
+      class: "w-full p-3 flex flex-col gap-1 border rounded-sm border-nc-border cursor-pointer hover:border-nc-label text-left",
+      onclick: move |_| on_click.call(()),
       div { class: "text-lg", { inspiration.title.clone() } }
       Markdown { text: inspiration.premise.clone(), class: "text-sm/relaxed" }
       div { class: "flex flex-wrap gap-1",

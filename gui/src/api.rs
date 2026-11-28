@@ -38,6 +38,9 @@ pub struct Inspiration {
   pub title: String,
   /// Story premise (markdown, rendered with the shared `Markdown` component).
   pub premise: String,
+  /// Optional author-authored style & behavior guidance.
+  #[serde(default)]
+  pub creative_direction: Option<String>,
   /// Tags this inspiration is filed under.
   pub tags: Vec<String>,
 }
@@ -649,4 +652,3 @@ mod tests {
     );
   }
 }
-

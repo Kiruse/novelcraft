@@ -109,6 +109,7 @@ The Create Story screen's "Get Inspired" data is fetched from the Novelcraft soc
   - Every non-2xx response carries the uniform error body `{"error": "<safe public message>"}` — the client surfaces it as `GuiError::Api(format!("{status}: {message}"))`; every failure maps to `GuiError::Api(String)`. Must be called from within an async context — the Dioxus runtime provides one
 - `gui/src/screens/create_story.rs`:
   - Imports `Inspiration` from `api.rs` (no screen-local serde type); `premise` is markdown, rendered with the shared `Markdown` component
+  - Clicking an inspiration card overrides the current draft's title, premise and creative direction (the optional `creative_direction` field falls back to an empty string)
   - `fetch_tags()` / `fetch_inspirations_api(selected)` — thin wrappers over `api::client()`; the selected tags are passed as a slice and joined into the `tags` query param — the service AND-filters server-side (an inspiration must carry all selected tags; an empty selection omits the param, matching everything)
 
 `reqwest = { version = "0.12", features = ["json", "stream"] }` is a GUI dependency for this client; SSE parsing uses `sse-core` — the same crate (and feature set: `default-features = false, features = ["std", "stream"]`) the engine's agent loop parses LLM streams with, so the stack shares one build.
