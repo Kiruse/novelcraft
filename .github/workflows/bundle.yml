@@ -48,7 +48,9 @@ jobs:
             libxdo-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libssl-dev
+            libssl-dev \
+            # .cargo/config.toml links with lld; the runner doesn't ship it.
+            lld
 
       # dioxus-cli (dx) is a heavy build from source; prefer a prebuilt
       # binary via cargo-binstall and fall back to a source install.

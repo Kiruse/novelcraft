@@ -57,3 +57,8 @@ fmt:
 
 fmt-check:
   cargo fmt --check
+
+# Reclaim disk after interrupted builds: a Ctrl-C mid-link leaves orphaned
+# linker temporaries (*.tmp*) in target/debug/deps that cargo never cleans.
+clean-tmp:
+    find target -name '*.tmp*' -delete

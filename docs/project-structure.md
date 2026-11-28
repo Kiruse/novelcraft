@@ -145,8 +145,14 @@ The root `justfile` is the single source of truth for all build commands.
 | `just check` | Cargo check (entire workspace) |
 | `just check-engine` | Cargo check (`novelcraft-engine` only) |
 | `just check-gui` | Cargo check (`novelcraft-gui` only) |
+| `just clean-tmp` | Delete orphaned linker temporaries (`find target -name '*.tmp*' -delete`) — a Ctrl-C mid-link leaves `*.tmp*` files in `target/` that cargo never cleans |
 | `just clippy` | Cargo clippy (entire workspace) |
 | `just fmt` / `just fmt-check` | **Do not use** — rustfmt is unsuited for this codebase's rsx-heavy UI code; formatting is manual |
+
+## Build Configuration
+
+- **Debug info** — the workspace `Cargo.toml` sets `[profile.dev] debug = "line-tables-only"`: full DWARF was ~98% of `target/` artifacts. Backtraces keep line numbers; only gdb type/variable detail is lost.
+- **Linker** — `.cargo/config.toml` links Linux x86_64 builds with `lld` (`-fuse-ld=lld`), which cuts debug link time. This requires the `lld` package wherever cargo runs; `.github/workflows/bundle.yml`'s Linux apt-install step includes it.
 
 ## File Naming Conventions
 

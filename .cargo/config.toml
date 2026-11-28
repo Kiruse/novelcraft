@@ -1,2 +1,8 @@
+# Link with lld through the default gcc driver: cuts link time for the
+# debug binaries. Needs the `lld` package wherever cargo runs —
+# installed by bundle.yml's Linux dependency step.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

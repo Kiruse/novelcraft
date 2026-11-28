@@ -15,3 +15,9 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "sync", "time", "io-util", "rt"] }
 unicode-segmentation = "1"
+
+[profile.dev]
+# Line tables only: full DWARF was ~98% of every artifact under target/
+# (one binary was 227MB, 223MB of it debuginfo). Backtraces keep line
+# numbers; only gdb's type/variable detail is lost.
+debug = "line-tables-only"
